@@ -4,6 +4,7 @@
   "version": "0.1.5-rc.1",
   "private": true,
   "license": "MIT",
+  "author": "Harness-CN",
   "type": "module",
   "main": "lib/main.js",
   "scripts": {

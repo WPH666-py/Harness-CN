@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'self' data:">
+    <title id="page-title"></title>
+    <link rel="stylesheet" href="api-key.css">
+  </head>
+  <body>
+    <main>
+      <h1 id="title"></h1>
+      <p id="description"></p>
+      <form id="form">
+        <label id="key-label" for="key"></label>
+        <input id="key" name="key" type="password" autocomplete="off" spellcheck="false" required>
+        <label class="toggle">
+          <input id="show" type="checkbox">
+          <span id="show-label"></span>
+        </label>
+        <div class="actions">
+          <button id="save" type="submit"></button>
+          <button id="later" class="quiet" type="button"></button>
+          <button id="quit" class="quiet" type="button"></button>
+        </div>
+      </form>
+      <p id="status" role="status" aria-live="polite"></p>
+    </main>
+    <script src="api-key.js"></script>
+  </body>
+</html>

@@ -1,3 +1,11 @@
+> **This repository is [Harness-CN](README.zh-CN.md)** — an unofficial Windows desktop
+> distribution of DeepSeek Harness 0.1.5-rc.1. It ships the whole runtime (bundled Node,
+> pnpm, and the installed plugin tree) as one unsigned `win-x64` installer, so a fresh
+> machine needs no developer toolchain. Download it from this repository's **Releases**;
+> the Chinese guide, the fork's changes, the build steps, and the troubleshooting section
+> live in **[README.zh-CN.md](README.zh-CN.md)**. Upstream's own documentation follows
+> below and still applies to everything this fork did not change.
+
 # DeepSeek Harness
 
 English | [中文](README.zh.md)

@@ -9,6 +9,7 @@ import { Buffer } from 'node:buffer'
 import { posix } from 'node:path'
 import { FileSystem, FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import type {
+  FsByteWriteOutcome,
   FsDirEntry,
   FsEditOutcome,
   FsEditRequest,
@@ -448,6 +449,39 @@ export class E2BFileSystem extends FileSystem {
     })
   }
 
+  /**
+   * {@link FileSystem.writeBytes} over the remote execution world. The staging, guarded
+   * create, mode preservation, and version metadata are the parts `writeText` already
+   * runs; only the text diff basis is absent, which is why the outcome reports a byte
+   * count instead.
+   */
+  override async writeBytes(
+    target: FsTarget,
+    content: Uint8Array,
+    expected?: FsWriteIntent,
+    signal?: AbortSignal,
+  ): Promise<FsByteWriteOutcome> {
+    return this.withLock(String(target.targetKey), async () => {
+      const existing = await this.probe(String(target.targetKey), target.displayPath, signal)
+      if (existing !== undefined && entryType(existing) !== 'file') {
+        throw new FsError(`cannot write "${target.displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
+      }
+      this.checkWriteIntent(existing, expected, target)
+      const version = await this.writeAtomic(
+        target,
+        content,
+        existing,
+        expected?.kind === 'createIfAbsent',
+        signal,
+      )
+      return {
+        operation: existing === undefined ? 'create' : 'update',
+        version,
+        bytes: content.byteLength,
+      }
+    })
+  }
+
   override async editText(
     target: FsTarget,
     edit: FsEditRequest,
@@ -555,7 +589,7 @@ export class E2BFileSystem extends FileSystem {
 
   private async writeAtomic(
     target: FsTarget,
-    content: string,
+    content: string | Uint8Array,
     existing: EntryInfo | undefined,
     createIfAbsent: boolean,
     signal?: AbortSignal,
@@ -573,7 +607,14 @@ export class E2BFileSystem extends FileSystem {
       stagingDirectoryCreated = true
       await sandbox.commands.run(`chmod 700 -- ${quoteE2BShellArg(stagingDirectory)}`, commandOpts(signal))
       assertNotAborted(signal, 'write')
-      await sandbox.files.write(temporary, content, {
+      // The SDK transports bytes as an ArrayBuffer, and a Uint8Array view may cover only
+      // part of its backing buffer, so the exact window is copied out rather than passing
+      // the whole backing store. The cast is the library's declared narrower parameter
+      // type; `slice` on a view always yields a non-shared ArrayBuffer.
+      const payload = typeof content === 'string'
+        ? content
+        : content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer
+      await sandbox.files.write(temporary, payload, {
         metadata: { [VERSION_METADATA_KEY]: versionId },
         ...signalOpts(signal),
       })

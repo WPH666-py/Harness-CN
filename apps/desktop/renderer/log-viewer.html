@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'self' data:">
+    <title id="page-title"></title>
+    <link rel="stylesheet" href="log-viewer.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1 id="title"></h1>
+          <p id="description"></p>
+        </div>
+      </header>
+      <div class="toolbar">
+        <label id="source-label" for="source"></label>
+        <select id="source">
+          <option value="all"></option>
+          <option value="shell"></option>
+          <option value="host-out"></option>
+          <option value="host-err"></option>
+        </select>
+        <button id="toggle" type="button"></button>
+        <label class="toggle">
+          <input id="follow" type="checkbox" checked>
+          <span id="follow-label"></span>
+        </label>
+        <span class="spacer"></span>
+        <button id="reveal" class="quiet" type="button"></button>
+        <button id="clear" class="quiet" type="button"></button>
+      </div>
+      <p id="status" role="status" aria-live="polite"></p>
+      <ol id="entries"></ol>
+      <p id="empty"></p>
+    </main>
+    <script src="log-viewer.js"></script>
+  </body>
+</html>

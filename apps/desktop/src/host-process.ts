@@ -18,6 +18,7 @@ import {
   type DesktopHostEvent,
   type DesktopHostResponseFrame,
 } from './host-protocol.ts'
+import type { DesktopLogBuffer } from './log-buffer.ts'
 
 interface PendingResponse {
   readonly resolve: (response: Response) => void
@@ -88,11 +89,13 @@ export class DesktopHostProcess {
    * @param node - absolute bundled upstream Node.js executable.
    * @param projectDir - active or staged desktop npm project.
    * @param inspectPort - optional loopback inspector port for workspace development.
+   * @param logs - run log that mirrors this child's stdout and stderr; absent keeps output unretained.
    */
   constructor(
     private readonly node: string,
     private readonly projectDir: string,
     private readonly inspectPort?: number,
+    private readonly logs?: DesktopLogBuffer,
   ) {}
 
   /** Start the child once and resolve only after its complete composition is active. */
@@ -121,7 +124,14 @@ export class DesktopHostProcess {
     this.requestPipe = requestPipe
     this.responsePipe = responsePipe
     child.stderr?.setEncoding('utf8')
-    child.stderr?.on('data', (chunk: string) => { this.stderr += chunk })
+    child.stderr?.on('data', (chunk: string) => {
+      this.stderr += chunk
+      this.logs?.append('host-err', chunk)
+    })
+    // stdout stays piped to the shell's own stdout; decoding it as text is safe because
+    // the request and response carriers use dedicated descriptor pipes, not descriptor 1.
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => { this.logs?.append('host-out', chunk) })
     child.stdout?.pipe(process.stdout)
     responsePipe.on('data', (chunk: Buffer) => { this.acceptResponseBytes(chunk) })
     responsePipe.once('end', () => {

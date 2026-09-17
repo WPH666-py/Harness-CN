@@ -1,7 +1,14 @@
 /** Context-isolated renderer bridge for desktop package and update operations. */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { DESKTOP_IPC, type DshDesktopApi, type DesktopUpdateState } from './ipc.ts'
+import {
+  DESKTOP_IPC,
+  type DesktopApiKeyStatus,
+  type DshDesktopApi,
+  type DesktopStartupState,
+  type DesktopUpdateState,
+} from './ipc.ts'
+import type { DesktopLogSnapshot, DesktopLogUpdate } from './log-buffer.ts'
 
 const api: DshDesktopApi = {
   protocolVersion: 1,
@@ -20,6 +27,29 @@ const api: DshDesktopApi = {
       ipcRenderer.on(DESKTOP_IPC.updatesState, handle)
       return () => { ipcRenderer.off(DESKTOP_IPC.updatesState, handle) }
     },
+  },
+  logs: {
+    get: () => ipcRenderer.invoke(DESKTOP_IPC.logsGet) as Promise<DesktopLogSnapshot>,
+    clear: () => ipcRenderer.invoke(DESKTOP_IPC.logsClear) as Promise<DesktopLogSnapshot>,
+    reveal: () => ipcRenderer.invoke(DESKTOP_IPC.logsReveal) as Promise<void>,
+    subscribe(listener) {
+      const handle = (_event: Electron.IpcRendererEvent, update: DesktopLogUpdate): void => { listener(update) }
+      ipcRenderer.on(DESKTOP_IPC.logsState, handle)
+      return () => { ipcRenderer.off(DESKTOP_IPC.logsState, handle) }
+    },
+  },
+  startup: {
+    subscribe(listener) {
+      const handle = (_event: Electron.IpcRendererEvent, state: DesktopStartupState): void => { listener(state) }
+      ipcRenderer.on(DESKTOP_IPC.startupState, handle)
+      return () => { ipcRenderer.off(DESKTOP_IPC.startupState, handle) }
+    },
+  },
+  apiKey: {
+    status: () => ipcRenderer.invoke(DESKTOP_IPC.apiKeyStatus) as Promise<DesktopApiKeyStatus>,
+    save: key => ipcRenderer.invoke(DESKTOP_IPC.apiKeySave, key) as Promise<DesktopApiKeyStatus>,
+    defer: () => ipcRenderer.invoke(DESKTOP_IPC.apiKeyDefer) as Promise<void>,
+    quit: () => ipcRenderer.invoke(DESKTOP_IPC.apiKeyQuit) as Promise<void>,
   },
 }
 

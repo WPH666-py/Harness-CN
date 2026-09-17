@@ -17,8 +17,10 @@ import {
   verifyDesktopCoreLockfile,
 } from '../src/core-package-set.ts'
 import {
+  archiveLinkedProfile,
   archivePnpmStore,
   extractPnpmStoreArchives,
+  materializeLinkedProfile,
   removePnpmProjectRegistrations,
 } from '../src/seed-store.ts'
 import {
@@ -126,17 +128,20 @@ function inventory(root: string): readonly { path: string; bytes: number; sha256
 }
 
 async function verifyOfflineInstallation(release: DesktopRelease): Promise<void> {
-  const installedModules = join(SEED_ROOT, 'node_modules')
+  // The first launch rebuilds the profile from the seed's link manifest instead of running
+  // pnpm, so that is what this proves: the recorded links resolve against the archived store
+  // and produce a tree that can boot the packaged Host.
+  const materialized = mkdtempSync(join(tmpdir(), 'dsh-desktop-seed-profile-'))
   try {
-    await runPnpm(['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
-    const hostRoot = join(installedModules, ...DESKTOP_HOST_PACKAGE.split('/'))
+    await materializeLinkedProfile(SEED_ROOT, materialized, STORE_ROOT, materialized)
+    const hostRoot = join(materialized, 'node_modules', ...DESKTOP_HOST_PACKAGE.split('/'))
     for (const file of DESKTOP_HOST_RUNTIME_FILES) {
       if (!existsSync(join(hostRoot, file))) {
         throw new Error(`desktop seed: local ${DESKTOP_HOST_PACKAGE}@${release.version} does not contain ${file}`)
       }
     }
   } finally {
-    rmSync(installedModules, { recursive: true, force: true })
+    rmSync(materialized, { recursive: true, force: true })
   }
 }
 
@@ -155,10 +160,12 @@ async function main(): Promise<void> {
       readDesktopCorePackageSet(SEED_ROOT, release.version),
     )
     const installedModules = join(SEED_ROOT, 'node_modules')
-    await runPnpm(['install', '--prod', '--frozen-lockfile', '--trust-lockfile', '--ignore-scripts'])
-    rmSync(installedModules, { recursive: true, force: true })
+    // The seed now ships the installed tree itself, so it has to be the tree the runtime
+    // expects: package lifecycle scripts provision node-pty's conpty pair and the spawn
+    // helper, and an install that skipped them would ship a profile those packages cannot
+    // load from.
+    await runPnpm(['install', '--prod', '--frozen-lockfile', '--trust-lockfile'])
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
-    await verifyOfflineInstallation(release)
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
     let signedMachOFiles: number | undefined
     let macOSSigning: ReturnType<typeof resolveMacOSSigningEnvironment> | undefined
@@ -173,14 +180,22 @@ async function main(): Promise<void> {
       process.stdout.write(
         `desktop seed: signed ${signing.signedFiles} Mach-O files, updated ${signing.updatedIndexRows} pnpm index records, and pruned ${signing.prunedOrphans} native orphans\n`,
       )
-      await verifyOfflineInstallation(release)
     }
+    // Signing and registration cleanup both rewrite the store, so the profile is described
+    // against the store only once it is final; a link recorded earlier could dangle.
     removePnpmProjectRegistrations(STORE_ROOT)
+    const archived = archiveLinkedProfile(SEED_ROOT, STORE_ROOT, SEED_ROOT)
+    process.stdout.write(
+      `desktop seed: recorded ${archived.linkedFiles} profile files as store links,`
+      + ` archived ${archived.archivedFiles} files and ${archived.archivedDirectories} directories\n`,
+    )
+    rmSync(installedModules, { recursive: true, force: true })
+    await verifyOfflineInstallation(release)
     archivePnpmStore(SEED_ROOT, STORE_ROOT)
     if (macOSSigning !== undefined && signedMachOFiles !== undefined) {
       const extractedStore = mkdtempSync(join(tmpdir(), 'dsh-desktop-seed-verification-'))
       try {
-        extractPnpmStoreArchives(SEED_ROOT, extractedStore)
+        await extractPnpmStoreArchives(SEED_ROOT, extractedStore)
         const verified = verifyMacOSSeedStore(extractedStore, macOSSigning)
         if (verified !== signedMachOFiles) {
           throw new Error(`desktop seed: archived store contains ${verified} signed Mach-O files; expected ${signedMachOFiles}`)

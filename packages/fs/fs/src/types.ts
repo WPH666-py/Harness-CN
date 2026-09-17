@@ -143,6 +143,23 @@ export interface FsWriteOutcome {
   after: string
 }
 
+/**
+ * Outcome of a full-file byte write.
+ *
+ * It reports the same `operation` and `version` {@link FsWriteOutcome} does, but not a
+ * `before`/`after` pair: those are a text diff basis, and a caller writing bytes has no
+ * text to offer for either side. Reporting an empty string there would assert the file is
+ * empty, so the byte count published takes their place.
+ */
+export interface FsByteWriteOutcome {
+  /** Whether the write created a new file or replaced an existing one. */
+  operation: 'create' | 'update'
+  /** Opaque version of the file after the write. */
+  version: FsVersion
+  /** Bytes published, which is the written content's byte length. */
+  bytes: number
+}
+
 /** A literal-replacement edit request. */
 export interface FsEditRequest {
   /** Literal non-empty text to replace. Must match exactly (after line-ending normalization). */

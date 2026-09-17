@@ -11,6 +11,7 @@ import { FileSystem, FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs
 import type {
   FsDirEntry,
   FsEditOutcome,
+  FsByteWriteOutcome,
   FsEditRequest,
   FsInfo,
   FsPathInfo,
@@ -22,6 +23,8 @@ import type {
 /** A minimal in-memory fake implementing the provider primitives. */
 class FakeFileSystem extends FileSystem {
   files = new Map<string, string>()
+  /** Byte writes keep their own storage so a non-UTF-8 payload is not forced through text. */
+  byteFiles = new Map<string, Uint8Array>()
 
   override async resolve(path: string): Promise<FsTarget> {
     return { targetKey: FsTargetKey(path), displayPath: path }
@@ -76,6 +79,11 @@ class FakeFileSystem extends FileSystem {
     const before = this.files.get(target.targetKey) ?? null
     this.files.set(target.targetKey, content)
     return { operation: before !== null ? 'update' : 'create', version: FsVersion('v2'), before, after: content }
+  }
+  override async writeBytes(target: FsTarget, content: Uint8Array, _expected?: FsWriteIntent): Promise<FsByteWriteOutcome> {
+    const existed = this.files.has(target.targetKey)
+    this.byteFiles.set(target.targetKey, content)
+    return { operation: existed ? 'update' : 'create', version: FsVersion('v2'), bytes: content.byteLength }
   }
   override async editText(target: FsTarget, edit: FsEditRequest): Promise<FsEditOutcome> {
     const content = this.files.get(target.targetKey) ?? ''

@@ -643,6 +643,79 @@ describe('writeText', () => {
   })
 })
 
+describe('writeBytes', () => {
+  it('publishes bytes verbatim and reports how many', async () => {
+    const payload = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01])
+    const target = await fs.resolve('a.bin')
+    const outcome = await fs.writeBytes(target, payload)
+    expect(outcome.operation).toBe('create')
+    expect(outcome.bytes).toBe(payload.byteLength)
+    expect(await readFile(join(dir, 'a.bin'))).toEqual(Buffer.from(payload))
+  })
+
+  it('round-trips a payload that is not valid UTF-8', async () => {
+    // The reason this method exists: the text path would replace every one of these
+    // bytes with U+FFFD, so only the byte path can carry them.
+    const payload = Uint8Array.from([0xff, 0xfe, 0x00, 0x80, 0xc3, 0x28])
+    const target = await fs.resolve('a.bin')
+    await fs.writeBytes(target, payload)
+    expect(await readFile(join(dir, 'a.bin'))).toEqual(Buffer.from(payload))
+  })
+
+  it('creates missing parent directories', async () => {
+    const target = await fs.resolve(join('nested', 'deep', 'a.bin'))
+    await fs.writeBytes(target, Uint8Array.from([5]))
+    expect(await readFile(join(dir, 'nested', 'deep', 'a.bin'))).toEqual(Buffer.from([5]))
+  })
+
+  it('reports update and replaces an existing file', async () => {
+    await writeFile(join(dir, 'a.bin'), Buffer.from([1, 2, 3]))
+    const target = await fs.resolve('a.bin')
+    const outcome = await fs.writeBytes(target, Uint8Array.from([9]))
+    expect(outcome.operation).toBe('update')
+    expect(outcome.bytes).toBe(1)
+    expect(await readFile(join(dir, 'a.bin'))).toEqual(Buffer.from([9]))
+  })
+
+  it('rejects createIfAbsent onto an existing file without replacing it', async () => {
+    await writeFile(join(dir, 'a.bin'), Buffer.from([1]))
+    const target = await fs.resolve('a.bin')
+    await expect(fs.writeBytes(target, Uint8Array.from([2]), { kind: 'createIfAbsent' }))
+      .rejects.toMatchObject({ code: 'FS_NOT_OBSERVED' })
+    expect(await readFile(join(dir, 'a.bin'))).toEqual(Buffer.from([1]))
+  })
+
+  it('rejects a replaceIfVersion whose version is no longer current', async () => {
+    const target = await fs.resolve('a.bin')
+    const created = await fs.writeBytes(target, Uint8Array.from([1]))
+    // An external writer moves the file past the version the caller holds.
+    await writeFile(join(dir, 'a.bin'), Buffer.from([7, 7, 7]))
+    await expect(fs.writeBytes(target, Uint8Array.from([2]), { kind: 'replaceIfVersion', version: created.version }))
+      .rejects.toMatchObject({ code: 'FS_STALE_VERSION' })
+    expect(await readFile(join(dir, 'a.bin'))).toEqual(Buffer.from([7, 7, 7]))
+  })
+
+  it('rejects a replaceIfVersion whose file was removed', async () => {
+    const target = await fs.resolve('a.bin')
+    const created = await fs.writeBytes(target, Uint8Array.from([1]))
+    await rm(join(dir, 'a.bin'))
+    await expect(fs.writeBytes(target, Uint8Array.from([2]), { kind: 'replaceIfVersion', version: created.version }))
+      .rejects.toMatchObject({ code: 'FS_STALE_VERSION' })
+  })
+
+  it('rejects writing onto a directory even with no expectation', async () => {
+    const target = await fs.resolve('.')
+    await expect(fs.writeBytes(target, Uint8Array.from([1])))
+      .rejects.toMatchObject({ code: 'FS_NOT_REGULAR_FILE' })
+  })
+
+  it('releases the per-target mutation lock after a byte write', async () => {
+    const target = await fs.resolve('a.bin')
+    await fs.writeBytes(target, Uint8Array.from([1]))
+    expect(lockCount(fs)).toBe(0)
+  })
+})
+
 describe('editText', () => {
   it('applies a literal edit at the matching version', async () => {
     await writeFile(join(dir, 'a.txt'), 'hello world')

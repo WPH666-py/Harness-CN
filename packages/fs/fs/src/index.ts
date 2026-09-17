@@ -1,7 +1,8 @@
 /**
  * Filesystem Service Definition for one execution world. Backends own stable target
  * identity, process paths and file URIs, containment, text reads, decoding,
- * binary rejection, and atomic mutations. Read windows and
+ * binary rejection on the text read path, and atomic mutations of either
+ * encoded text or verbatim bytes. Read windows and
  * observed-state policy stay in consumer and policy plugins; `editText`
  * remains here so version check, literal match, and rewrite share one critical
  * section.
@@ -11,6 +12,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type {
+  FsByteWriteOutcome,
   FsDirEntry,
   FsEditOutcome,
   FsEditRequest,
@@ -29,6 +31,7 @@ export {
   FsVersion,
 } from './types.ts'
 export type {
+  FsByteWriteOutcome,
   FsEditOutcome,
   FsEditRequest,
   FsDirEntry,
@@ -254,6 +257,30 @@ export abstract class FileSystem extends Service {
     signal?: AbortSignal,
     sandboxPolicy?: SandboxExecutionPolicy,
   ): Promise<FsWriteOutcome>
+
+  /**
+   * Atomically create or replace raw bytes. Identical to {@link FileSystem.writeText}
+   * in intent guarding, staleness checking, atomic publication, and the version it
+   * reports; the only difference is that no encoding step runs, so the caller's bytes
+   * reach the file unchanged. Use it for binary payloads, which `writeText` would
+   * corrupt, and for text whose encoding the caller has already decided.
+   * @param target - the resolved target to write.
+   * @param content - the full new file content, written verbatim.
+   * @param expected - the write intent guarding the write; omit for unconditional.
+   * @param signal - aborts before atomic publication takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root this write
+   *   runs under; a sandboxing backend fences the write by it, the bare backend
+   *   ignores it. Omit to leave the backend its own default.
+   * @returns the outcome, including the version the write produced and the byte count,
+   *   but no text diff basis, which bytes cannot supply.
+   */
+  abstract writeBytes(
+    target: FsTarget,
+    content: Uint8Array,
+    expected?: FsWriteIntent,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<FsByteWriteOutcome>
 
   /**
    * Atomically edit literal text. When supplied, the version guard is checked

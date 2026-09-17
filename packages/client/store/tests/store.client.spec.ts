@@ -150,6 +150,18 @@ describe('createSnapshotStore', () => {
     expect(revived.getSnapshot().a.n).toBe(42)
   })
 
+  it('keeps a member the stored payload predates, instead of handing it to consumers absent', () => {
+    // A payload written before this store declared `b` is exactly what rehydration meets
+    // after an upgrade; adopting it wholesale is what makes the next action read undefined.
+    vi.stubGlobal('localStorage', {
+      getItem: () => JSON.stringify({ a: { n: 7 } }),
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    })
+    const store = createSnapshotStore(init(), { persist: { name: 'spec-older-payload' } })
+    expect(store.getSnapshot()).toEqual({ a: { n: 7 }, b: { list: ['x'] } })
+  })
+
   it('reports rehydration failures without preventing store creation', () => {
     const failure = new Error('storage read failed')
     vi.stubGlobal('localStorage', {

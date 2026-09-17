@@ -19,6 +19,7 @@ import type {
   FsPathInfo,
   FsTarget,
   FsWriteIntent,
+  FsByteWriteOutcome,
   FsWriteOutcome,
 } from '@deepseek-ai/dsh-fs'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
@@ -168,6 +169,10 @@ class RecordingFileSystem extends FileSystem {
 
   override async writeText(_target: FsTarget, _content: string, _expected?: FsWriteIntent): Promise<FsWriteOutcome> {
     return { operation: 'update', version: FsVersion('unused'), before: '', after: _content }
+  }
+
+  override async writeBytes(_target: FsTarget, content: Uint8Array, _expected?: FsWriteIntent): Promise<FsByteWriteOutcome> {
+    return { operation: 'update', version: FsVersion('unused'), bytes: content.byteLength }
   }
 
   override async editText(_target: FsTarget, _edit: FsEditRequest): Promise<FsEditOutcome> {

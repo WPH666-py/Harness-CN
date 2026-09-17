@@ -23,6 +23,7 @@ import type {
   FsPathInfo,
   FsTarget,
   FsWriteIntent,
+  FsByteWriteOutcome,
   FsWriteOutcome,
 } from '@deepseek-ai/dsh-fs'
 import * as FsPolicy from '@deepseek-ai/dsh-fs-observation-policy'
@@ -42,6 +43,8 @@ const testToolSignal = new AbortController().signal
 /** An in-memory fake provider; a test can arm a rejection on any primitive. */
 class FakeFs extends FileSystem {
   files = new Map<string, string>()
+  /** Byte writes live apart from the text map so a non-UTF-8 payload round-trips exactly. */
+  byteFiles = new Map<string, Uint8Array>()
   rejectWith?: FsError
   writeIntents: (FsWriteIntent | undefined)[] = []
   editIntents: ({ version: FsVersion } | undefined)[] = []
@@ -77,7 +80,8 @@ class FakeFs extends FileSystem {
     return (async function* () { yield content })()
   }
   override async readBytes(target: FsTarget, _signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array> {
-    const bytes = new TextEncoder().encode(this.files.get(target.targetKey) ?? '')
+    const bytes = this.byteFiles.get(target.targetKey)
+      ?? new TextEncoder().encode(this.files.get(target.targetKey) ?? '')
     if (bytes.length > maxBytes) {
       throw new FsError(`too large: ${target.displayPath}`, 'FS_TOO_LARGE')
     }
@@ -95,6 +99,13 @@ class FakeFs extends FileSystem {
     const before = this.files.get(target.targetKey) ?? null
     this.files.set(target.targetKey, content)
     return { operation: before !== null ? 'update' : 'create', version: FsVersion('v2'), before, after: content }
+  }
+  override async writeBytes(target: FsTarget, content: Uint8Array, expected?: FsWriteIntent): Promise<FsByteWriteOutcome> {
+    this.throwIfArmed()
+    this.writeIntents.push(expected)
+    const existed = this.byteFiles.has(target.targetKey) || this.files.has(target.targetKey)
+    this.byteFiles.set(target.targetKey, content)
+    return { operation: existed ? 'update' : 'create', version: FsVersion('v2'), bytes: content.byteLength }
   }
   override async editText(target: FsTarget, edit: FsEditRequest, expected?: { version: FsVersion }): Promise<FsEditOutcome> {
     this.throwIfArmed()
@@ -783,6 +794,16 @@ describe('sandbox escalation API (write/edit)', () => {
     ): Promise<FsWriteOutcome> {
       this.stamped.push(sandboxPolicy)
       return super.writeText(target, content, expected)
+    }
+    override async writeBytes(
+      target: FsTarget,
+      content: Uint8Array,
+      expected?: FsWriteIntent,
+      _signal?: AbortSignal,
+      sandboxPolicy?: SandboxExecutionPolicy,
+    ): Promise<FsByteWriteOutcome> {
+      this.stamped.push(sandboxPolicy)
+      return super.writeBytes(target, content, expected)
     }
     override async editText(
       target: FsTarget,

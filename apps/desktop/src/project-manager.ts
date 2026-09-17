@@ -15,13 +15,12 @@ import {
   closeSync,
   readdirSync,
   readFileSync,
-  renameSync,
-  rmSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs'
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { bundledPluginDependencies, bundledPluginNames } from './bundled-plugins.ts'
 import {
   DESKTOP_PACKAGES_DIR,
   DESKTOP_PACKAGE_SET_FILE,
@@ -31,9 +30,52 @@ import {
   readDesktopCorePackageSet,
   verifyDesktopCorePackageSet,
 } from './core-package-set.ts'
+import { yieldToEventLoop } from './event-loop.ts'
+import { removeOwnedDirectory, renameOwnedDirectory } from './owned-directory.ts'
 import type { DesktopPaths } from './paths.ts'
 import { parseDesktopRelease, type DesktopRelease } from './release.ts'
-import { extractPnpmStoreArchives, mergePnpmStore } from './seed-store.ts'
+import {
+  SEED_STORE_ARCHIVE_DIR,
+  extractPnpmStoreArchives,
+  materializeLinkedProfile,
+  mergePnpmStore,
+} from './seed-store.ts'
+
+/**
+ * Profile record of the seed this profile was installed from.
+ *
+ * A release version does not identify a build: two seeds of the same version can carry
+ * different packaged packages, which is exactly what a rebuilt installer has. The seed's own
+ * integrity inventory changes whenever any seed file does, so its digest names one exact seed
+ * and a profile that records a different one is not current.
+ */
+export const DESKTOP_SEED_IDENTITY_FILE = 'desktop-seed.json'
+
+/** Installed profile's record of the seed it was built from. */
+interface DesktopSeedIdentity {
+  readonly schemaVersion: 1
+  /** Hex SHA-256 of the seed's `integrity.json`. */
+  readonly integrity: string
+}
+
+/**
+ * Record, beside the persistent store, which store archives it was last merged from.
+ *
+ * Unpacking the seed's archives costs far more than any other step of a refresh, and the
+ * result is identical whenever the archives are: this marker lets a launch that only needs the
+ * profile rebuilt skip the store work entirely. It is keyed on the archives rather than on the
+ * whole seed because a rebuilt installer usually ships the same packages and differs only in
+ * the application code around them. A marker that does not match is not an error, it just
+ * means the store has to be merged again.
+ */
+const STORE_SEED_FILE = 'store-seed.json'
+
+/** Store's record of the seed archives it was merged from. */
+interface DesktopStoreSeedRecord {
+  readonly schemaVersion: 1
+  /** Hex SHA-256 of the seed's store archive records. */
+  readonly archives: string
+}
 
 /** Files the package transaction copies between active and staging projects. */
 const DESKTOP_PROJECT_FILES = [
@@ -41,6 +83,7 @@ const DESKTOP_PROJECT_FILES = [
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
   'desktop-release.json',
+  DESKTOP_SEED_IDENTITY_FILE,
   DESKTOP_PACKAGE_SET_FILE,
 ] as const
 
@@ -85,6 +128,19 @@ export interface DesktopProjectHooks {
   beforeActivate(): Promise<void>
   /** Start the selected active project after commit or rollback. */
   afterActivate(): Promise<void>
+  /**
+   * Report one phase of a long transaction for the run log.
+   *
+   * A first launch spends minutes unpacking and installing the seed, and the shell has no
+   * other progress to show for that time.
+   * @param message - one line naming the phase that just finished or is about to start.
+   */
+  note?(message: string): void
+  /**
+   * Report how far the transaction has come, for the window the shell shows while it runs.
+   * @param progress - completed fraction of the transaction, from 0 through 1.
+   */
+  progress?(progress: number): void
 }
 
 /** Supported dependency mutation. */
@@ -179,17 +235,6 @@ export function packageNameFromSpec(spec: string): string | undefined {
   return name
 }
 
-function removeOwnedDirectory(path: string): void {
-  if (!existsSync(path)) return
-  const stat = lstatSync(path)
-  if (stat.isSymbolicLink()) {
-    unlinkSync(path)
-    return
-  }
-  if (!stat.isDirectory()) throw new Error(`desktop project: owned directory path is not a directory: ${path}`)
-  rmSync(path, { recursive: true })
-}
-
 function copyMetadata(source: string, target: string): void {
   mkdirSync(target, { recursive: true, mode: 0o700 })
   for (const filename of DESKTOP_PROJECT_FILES) {
@@ -203,39 +248,60 @@ function copyMetadata(source: string, target: string): void {
   })
 }
 
-function seedFiles(root: string): readonly DesktopSeedIntegrityRecord[] {
-  const files: DesktopSeedIntegrityRecord[] = []
-  const visit = (directory: string): void => {
+/**
+ * Inventory one seed tree, hashing every file it ships.
+ *
+ * The walk yields between files: the shell serves its own windows, and a launch that never
+ * yields also stops the startup window from loading.
+ * @param root - seed directory to inventory, excluding its own integrity inventory.
+ * @returns one record per file, in path order.
+ */
+async function seedFiles(root: string): Promise<readonly DesktopSeedIntegrityRecord[]> {
+  const paths: string[] = []
+  const collect = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name)
       const relativePath = path.slice(root.length + 1).split(sep).join('/')
       if (relativePath === 'integrity.json') continue
       if (entry.isSymbolicLink()) throw new Error(`desktop seed: symbolic link is not allowed: ${relativePath}`)
       if (entry.isDirectory()) {
-        visit(path)
+        collect(path)
         continue
       }
       if (!entry.isFile()) throw new Error(`desktop seed: unsupported file type: ${relativePath}`)
-      const body = readFileSync(path)
-      files.push({
-        path: relativePath,
-        bytes: body.byteLength,
-        sha256: createHash('sha256').update(body).digest('hex'),
-      })
+      paths.push(relativePath)
     }
   }
-  visit(root)
-  return files.sort((left, right) => left.path.localeCompare(right.path))
+  collect(root)
+  paths.sort((left, right) => left.localeCompare(right))
+  const files: DesktopSeedIntegrityRecord[] = []
+  for (const relativePath of paths) {
+    const body = readFileSync(join(root, ...relativePath.split('/')))
+    files.push({
+      path: relativePath,
+      bytes: body.byteLength,
+      sha256: createHash('sha256').update(body).digest('hex'),
+    })
+    await yieldToEventLoop()
+  }
+  return files
 }
 
-/** Verify the packaged offline seed before any content enters writable desktop state. */
-export function verifySeedIntegrity(seedDir: string): void {
+/**
+ * Read one seed's integrity inventory, rejecting a record the caller cannot act on.
+ *
+ * Both the verification walk and the digests taken from the same inventory read it here, so a
+ * malformed record is refused once, in the place that owns the file's format.
+ * @param seedDir - seed directory that carries `integrity.json`.
+ * @returns one record per shipped file, in path order.
+ */
+function readSeedIntegrity(seedDir: string): readonly DesktopSeedIntegrityRecord[] {
   const integrityPath = join(seedDir, 'integrity.json')
   const integrity = readJson(integrityPath)
   if (!isRecord(integrity) || integrity.schemaVersion !== 2 || !Array.isArray(integrity.files)) {
     throw new Error(`desktop seed: invalid integrity inventory ${integrityPath}`)
   }
-  const expected: DesktopSeedIntegrityRecord[] = integrity.files.map((record) => {
+  return integrity.files.map((record): DesktopSeedIntegrityRecord => {
     if (!isRecord(record) || typeof record.path !== 'string' || record.path === '' || record.path.startsWith('/')
       || record.path.split('/').includes('..') || typeof record.bytes !== 'number'
       || !Number.isSafeInteger(record.bytes) || record.bytes < 0
@@ -244,10 +310,81 @@ export function verifySeedIntegrity(seedDir: string): void {
     }
     return { path: record.path, bytes: record.bytes, sha256: record.sha256 }
   }).sort((left, right) => left.path.localeCompare(right.path))
-  const actual = seedFiles(seedDir)
+}
+
+/**
+ * Verify the packaged offline seed before any content enters writable desktop state.
+ * @param seedDir - packaged seed directory described by its own integrity inventory.
+ * @returns resolves once every shipped seed file matches the inventory.
+ */
+export async function verifySeedIntegrity(seedDir: string): Promise<void> {
+  const expected = readSeedIntegrity(seedDir)
+  const actual = await seedFiles(seedDir)
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error('desktop seed: integrity verification failed')
   }
+}
+
+/**
+ * Digest one seed's content inventory.
+ *
+ * The inventory lists a hash per seed file, so hashing the inventory itself identifies the
+ * whole seed without re-reading its archives on every launch.
+ * @param seedDir - seed directory that carries `integrity.json`.
+ * @returns hex SHA-256 of the inventory.
+ */
+function seedIdentity(seedDir: string): string {
+  return createHash('sha256').update(readFileSync(join(seedDir, 'integrity.json'))).digest('hex')
+}
+
+/**
+ * Digest the part of one seed's inventory the persistent package store is built from.
+ *
+ * A rebuilt installer usually ships the same packages and differs only in the application code
+ * around them, so this digest is what decides whether the archives have to be unpacked again.
+ * Every profile link the seed records resolves against a file these archives publish, so a
+ * store that carries them carries every target the rebuilt tree links to.
+ * @param seedDir - seed directory that carries `integrity.json`.
+ * @returns hex SHA-256 over the seed's store archive records.
+ */
+function storeIdentity(seedDir: string): string {
+  const archives = readSeedIntegrity(seedDir)
+    .filter(record => record.path.startsWith(`${SEED_STORE_ARCHIVE_DIR}/`))
+  if (archives.length === 0) throw new Error(`desktop seed: ${seedDir} ships no pnpm store archives`)
+  return createHash('sha256').update(JSON.stringify(archives)).digest('hex')
+}
+
+/**
+ * Read the seed a profile was installed from.
+ * @param projectDir - active desktop profile.
+ * @returns recorded inventory digest, or undefined when the profile predates the record.
+ */
+function profileSeedIdentity(projectDir: string): string | undefined {
+  const path = join(projectDir, DESKTOP_SEED_IDENTITY_FILE)
+  if (!existsSync(path)) return undefined
+  const value = readJson(path)
+  if (!isRecord(value) || value.schemaVersion !== 1
+    || typeof value.integrity !== 'string' || !/^[a-f0-9]{64}$/u.test(value.integrity)) {
+    throw new Error(`desktop project: invalid seed identity ${path}`)
+  }
+  return value.integrity
+}
+
+/**
+ * Report whether one workspace file still carries the core package mapping.
+ *
+ * pnpm appends its own sections to this file as it installs — `minimumReleaseAgeExclude`
+ * records dependencies it accepted past the release-age policy — so the file is checked for
+ * the mapping it has to keep rather than for whole-file equality with what the desktop wrote.
+ * An appended section is pnpm's own record; a changed or missing override is not.
+ * @param content - current `pnpm-workspace.yaml` body.
+ * @param overrides - core package overrides the profile must still map to local tarballs.
+ * @returns whether every override survives in the file.
+ */
+function workspaceMappingIsIntact(content: string, overrides: Readonly<Record<string, string>>): boolean {
+  if (!content.includes('nodeLinker: hoisted')) return false
+  return Object.entries(overrides).every(([name, spec]) =>
+    content.includes(`  ${JSON.stringify(name)}: ${JSON.stringify(spec)}`))
 }
 
 function projectManifest(projectDir: string): DesktopProjectManifest {
@@ -265,7 +402,7 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
   const expectedOverrides = desktopCorePackageOverrides(packageSet)
   if (manifest.dependencies[DSH_PACKAGE] !== desktopDshPackageSpec(packageSet)
     || Object.entries(expectedOverrides).some(([name, spec]) => manifest.dependencies[name] !== spec)
-    || readFileSync(join(projectDir, 'pnpm-workspace.yaml'), 'utf8') !== workspaceFile(expectedOverrides)) {
+    || !workspaceMappingIsIntact(readFileSync(join(projectDir, 'pnpm-workspace.yaml'), 'utf8'), expectedOverrides)) {
     throw new Error(`desktop project: core package mapping does not match ${DESKTOP_PACKAGE_SET_FILE}`)
   }
   return manifest
@@ -356,7 +493,7 @@ export class DesktopProjectManager {
     }
     if (!existsSync(this.paths.profile) && existsSync(this.paths.rollback)) {
       mkdirSync(dirname(this.paths.profile), { recursive: true })
-      renameSync(this.paths.rollback, this.paths.profile)
+      renameOwnedDirectory(this.paths.rollback, this.paths.profile)
     }
     removeOwnedDirectory(pending.stagingProfile)
     unlinkSync(this.paths.pending)
@@ -390,50 +527,167 @@ export class DesktopProjectManager {
     return releaseFile(this.paths.profile).version
   }
 
+  /**
+   * Report whether the installed profile is already this exact release and seed.
+   *
+   * A profile directory can exist without being usable: a first launch that was killed
+   * mid-install, or a terminated package transaction, leaves a partial tree holding some
+   * metadata and no installed packages. Every fact this asks for is then absent, so a
+   * missing manifest answers "no" and lets the caller rebuild the profile instead of
+   * failing the launch with an unactionable ENOENT. Any other read failure still throws:
+   * a profile that is present but broken is a fault the caller must see rather than a
+   * profile to silently discard.
+   * @param expectedVersion - version the bundled seed requires.
+   * @param expectedIdentity - inventory digest of the seed that will be installed.
+   * @returns whether the active project is installed and matches that version and seed.
+   */
+  private profileMatchesRelease(expectedVersion: string, expectedIdentity: string): boolean {
+    if (!existsSync(this.paths.profile)) return false
+    try {
+      return this.releaseVersion() === expectedVersion
+        && this.dshVersion() === expectedVersion
+        && this.installedPackageVersion(DESKTOP_HOST_PACKAGE) === expectedVersion
+        && profileSeedIdentity(this.paths.profile) === expectedIdentity
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error
+      return false
+    }
+  }
+
+  /**
+   * Report whether the active profile directory holds a usable installed project.
+   *
+   * The profile is read as a project only when its own manifest can be read: a tree that lost
+   * its manifest — the residue of an interrupted install, or of a removal that could not
+   * finish — has no release to reuse and no plugin list to carry forward, and reading it as an
+   * installed project is what aborts the launch with a missing file instead of rebuilding it.
+   * `activate` still moves the residue aside before publishing the new profile.
+   * @returns whether the active profile's project manifest is readable.
+   */
+  private hasInstalledProfile(): boolean {
+    if (!existsSync(join(this.paths.profile, 'node_modules'))) return false
+    try {
+      projectManifest(this.paths.profile)
+      return true
+    } catch {
+      // Every way `projectManifest` refuses a directory means the same thing here: this tree
+      // states no project the rebuild cannot recreate from the seed archives.
+      return false
+    }
+  }
+
   /** Install or reconcile the active project to the Electron package's exact release. */
   async applyRelease(seedDir: string, electronVersion: string, hooks: DesktopProjectHooks): Promise<boolean> {
+    const note = (message: string): void => { hooks.note?.(message) }
+    const progress = (fraction: number): void => { hooks.progress?.(fraction) }
     return this.withLock(async () => {
       this.recover()
-      verifySeedIntegrity(seedDir)
+      // The release identity is read before the seed is verified so an installed profile can
+      // answer first. A launch that reuses its profile never reads seed content, and hashing
+      // the seed's store archives to decide that would charge every launch for the work of
+      // the first one. The inventory digest is the exception: it is one small file, and it is
+      // what makes a rebuilt installer of the same version replace a stale profile.
       const target = releaseFile(seedDir)
-      verifyDesktopCorePackageSet(seedDir, target.version)
+      const identity = seedIdentity(seedDir)
       if (target.version !== electronVersion) {
         throw new Error(`desktop project: seed ${target.version} does not match Electron ${electronVersion}`)
       }
-      if (existsSync(this.paths.profile) && this.releaseVersion() === target.version
-        && this.dshVersion() === target.version
-        && this.installedPackageVersion(DESKTOP_HOST_PACKAGE) === target.version) {
+      if (this.profileMatchesRelease(target.version, identity)) {
         verifyDesktopCorePackageSet(this.paths.profile, target.version)
+        note(`desktop runtime ${target.version} is already installed`)
         return false
       }
-      this.mergeSeedPnpmState(seedDir)
+      // Everything below consumes seed content, so the seed is verified before any of it
+      // reaches writable desktop state.
+      await verifySeedIntegrity(seedDir)
+      note('bundled seed verified')
+      progress(0.15)
+      verifyDesktopCorePackageSet(seedDir, target.version)
+      // The store is keyed on the archives it was built from, not on the whole inventory: a
+      // rebuild that changes only the application code publishes the same archives, and
+      // unpacking them again would recreate entries the store already holds.
+      const archives = storeIdentity(seedDir)
+      if (this.storeMatchesSeed(archives)) {
+        note('package store already carries this seed')
+      } else {
+        note('unpacking the bundled package store')
+        progress(0.3)
+        await this.mergeSeedPnpmState(seedDir)
+        this.recordStoreSeed(archives)
+        note('package store ready; rebuilding the desktop runtime')
+        progress(0.45)
+      }
       const stagingProfile = this.newStagingProfile()
       try {
-        if (existsSync(this.paths.profile)) {
-          const plugins = pluginRecords(this.paths.profile)
-          copyMetadata(seedDir, stagingProfile)
-          await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
-          if (plugins.length > 0) {
-            await this.runPnpm(stagingProfile, [
-              'add',
-              ...plugins.map(plugin => `${plugin.name}@${plugin.version}`),
-              '--save-exact',
-              '--offline',
-            ])
-            writeProfilePlugins(stagingProfile, plugins)
-          }
-        } else {
-          copyMetadata(seedDir, stagingProfile)
-          await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
+        // The seed carries the installed tree as links into the store it just published, so
+        // the runtime is rebuilt here instead of installed: pnpm would recreate exactly these
+        // files, at several times the cost of one link each.
+        // The seed's tree already carries every bundled plugin at its pinned version, so a
+        // profile that only names those needs no pnpm run at all. A plugin the user added, or
+        // one they moved to another version, is the only thing restored from the store.
+        const bundled = bundledPluginDependencies()
+        const plugins = (this.hasInstalledProfile() ? pluginRecords(this.paths.profile) : [])
+          .filter(plugin => bundled[plugin.name] !== plugin.version)
+        copyMetadata(seedDir, stagingProfile)
+        await materializeLinkedProfile(seedDir, stagingProfile, this.paths.pnpm.store, this.paths.profile)
+        writeJson(join(stagingProfile, DESKTOP_SEED_IDENTITY_FILE), {
+          schemaVersion: 1,
+          integrity: identity,
+        } satisfies DesktopSeedIdentity)
+        note('desktop runtime linked from the package store')
+        progress(0.75)
+        if (plugins.length > 0) {
+          note(`restoring ${String(plugins.length)} desktop plugin(s)`)
+          await this.runPnpm(stagingProfile, [
+            'add',
+            ...plugins.map(plugin => `${plugin.name}@${plugin.version}`),
+            '--save-exact',
+            '--offline',
+          ])
+          writeProfilePlugins(stagingProfile, plugins)
         }
+        note('verifying the staged runtime')
+        progress(0.85)
         await hooks.healthCheck(stagingProfile)
+        note('staged runtime boots; activating it')
+        progress(0.9)
         await this.activate(stagingProfile, hooks)
+        note('desktop runtime activated')
+        progress(0.94)
         return true
       } catch (error) {
-        removeOwnedDirectory(stagingProfile)
-        throw error
+        this.discardStaging(stagingProfile, error)
       }
     })
+  }
+
+  /**
+   * Remove a failed staging profile without discarding the failure that created it.
+   *
+   * The staging tree was just used by the Host, so removing it can report its own EPERM
+   * while the real reason the transaction failed is something else entirely. Letting that
+   * cleanup error replace the original leaves the user with an unactionable permission
+   * failure on first launch, so the original stays primary and the cleanup failure is
+   * attached to it.
+   * @param stagingProfile - staging tree the failed transaction left behind.
+   * @param error - failure that aborted the transaction.
+   */
+  private discardStaging(stagingProfile: string, error: unknown): never {
+    let cleanupFailure: unknown
+    try {
+      removeOwnedDirectory(stagingProfile)
+    } catch (failure) {
+      cleanupFailure = failure
+    }
+    if (cleanupFailure !== undefined) {
+      throw new AggregateError(
+        [error, cleanupFailure],
+        `${errorOf(error, 'desktop project: profile activation failed').message}`
+        + ' (staging cleanup also failed)',
+      )
+    }
+    throw error
   }
 
   /** Apply one exact dependency mutation through a staging project. */
@@ -449,8 +703,7 @@ export class DesktopProjectManager {
         await hooks.healthCheck(stagingProfile)
         await this.activate(stagingProfile, hooks)
       } catch (error) {
-        removeOwnedDirectory(stagingProfile)
-        throw error
+        this.discardStaging(stagingProfile, error)
       }
     })
   }
@@ -505,12 +758,37 @@ export class DesktopProjectManager {
     }
   }
 
-  private mergeSeedPnpmState(seedDir: string): void {
+  /**
+   * Report whether the persistent store already carries this seed's archives.
+   * @param archives - store archive digest of the seed about to be installed.
+   * @returns whether the store needs no further merging for those archives.
+   */
+  private storeMatchesSeed(archives: string): boolean {
+    if (!existsSync(this.paths.pnpm.store)) return false
+    const path = join(this.paths.pnpm.root, STORE_SEED_FILE)
+    if (!existsSync(path)) return false
+    try {
+      const value = readJson(path)
+      return isRecord(value) && value.schemaVersion === 1 && value.archives === archives
+    } catch {
+      // An unreadable marker costs one merge and is then rewritten, so it is never a fault.
+      return false
+    }
+  }
+
+  private recordStoreSeed(archives: string): void {
+    writeJson(join(this.paths.pnpm.root, STORE_SEED_FILE), {
+      schemaVersion: 1,
+      archives,
+    } satisfies DesktopStoreSeedRecord)
+  }
+
+  private async mergeSeedPnpmState(seedDir: string): Promise<void> {
     const transactionRoot = join(this.paths.staging, randomUUID())
     const extractedStore = join(transactionRoot, 'store')
     try {
-      extractPnpmStoreArchives(seedDir, extractedStore)
-      mergePnpmStore(extractedStore, this.paths.pnpm.store)
+      await extractPnpmStoreArchives(seedDir, extractedStore)
+      await mergePnpmStore(extractedStore, this.paths.pnpm.store)
     } finally {
       removeOwnedDirectory(transactionRoot)
     }
@@ -531,17 +809,17 @@ export class DesktopProjectManager {
       mkdirSync(dirname(this.paths.rollback), { recursive: true, mode: 0o700 })
       writeJson(this.paths.pending, { ...pending, step: 'active-moved' } satisfies DesktopPendingTransaction)
       if (existsSync(this.paths.profile)) {
-        renameSync(this.paths.profile, this.paths.rollback)
+        renameOwnedDirectory(this.paths.profile, this.paths.rollback)
         activeMoved = true
       }
       mkdirSync(dirname(this.paths.profile), { recursive: true, mode: 0o700 })
       writeJson(this.paths.pending, { ...pending, step: 'staging-activated' } satisfies DesktopPendingTransaction)
-      renameSync(stagingProfile, this.paths.profile)
+      renameOwnedDirectory(stagingProfile, this.paths.profile)
       await hooks.afterActivate()
       unlinkSync(this.paths.pending)
     } catch (error) {
       if (existsSync(this.paths.profile)) removeOwnedDirectory(this.paths.profile)
-      if (activeMoved && existsSync(this.paths.rollback)) renameSync(this.paths.rollback, this.paths.profile)
+      if (activeMoved && existsSync(this.paths.rollback)) renameOwnedDirectory(this.paths.rollback, this.paths.profile)
       if (existsSync(this.paths.pending)) unlinkSync(this.paths.pending)
       await hooks.afterActivate().catch(() => undefined)
       throw error
@@ -682,7 +960,14 @@ export class DesktopProjectManager {
   }
 }
 
-/** Create seed metadata for one exact Electron and dsh release. */
+/**
+ * Create seed metadata for one exact Electron and dsh release.
+ *
+ * The bundled third-party plugins are declared here rather than only in the profile because
+ * the seed manifest is what `applyRelease` copies into a fresh profile, and because
+ * `prepare-seed` installs this exact dependency set to warm the archived pnpm store. Both
+ * the dependencies and the bundle list are therefore inherited by the first launch.
+ */
 export function createSeedMetadata(seedDir: string, release: DesktopRelease): void {
   mkdirSync(seedDir, { recursive: true, mode: 0o700 })
   const packageSet = verifyDesktopCorePackageSet(seedDir, release.version)
@@ -690,8 +975,8 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
     name: PROJECT_NAME,
     private: true,
     version: '0.0.0',
-    dependencies: desktopCorePackageOverrides(packageSet),
-    dsh: { profile: { bundles: [...DESKTOP_PROFILE_BUNDLES] } },
+    dependencies: { ...desktopCorePackageOverrides(packageSet), ...bundledPluginDependencies() },
+    dsh: { profile: { bundles: [...DESKTOP_PROFILE_BUNDLES, ...bundledPluginNames()] } },
   }
   writeJson(join(seedDir, 'package.json'), manifest)
   writeFileSync(

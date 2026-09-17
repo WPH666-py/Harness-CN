@@ -106,7 +106,7 @@ export function createSnapshotStore<T>(
   // the immer middleware without its setState-signature mutator generics).
   const withSelector = subscribeWithSelector(() => init)
   const api: StoreApi<T> = createStore<T>()(withSelector)
-  if (opts?.persist) attachPersistence(api, opts.persist.name)
+  if (opts?.persist) attachPersistence(api, init, opts.persist.name)
 
   let subscribe = (fn: () => void) => api.subscribe(() => {
     notifySubscribers([fn], '[client-store]')
@@ -136,6 +136,24 @@ export function createSnapshotStore<T>(
 }
 
 /**
+ * Restore one persisted payload over the state its store declares.
+ *
+ * A payload was written by whichever build ran before, so it can predate a member this store
+ * now declares. Adopting it wholesale would hand every consumer a state that is missing that
+ * member, and a view store iterating its own maps then fails on the first action; merging the
+ * payload over the declared state keeps the new member at its initial value. Non-object state
+ * — a primitive or an array root — is adopted whole, which is what its own write path stored.
+ * @param init - state the store declares.
+ * @param stored - parsed payload.
+ * @returns the state to adopt.
+ */
+function rehydrated<T>(init: T, stored: unknown): T {
+  if (typeof init !== 'object' || init === null || Array.isArray(init)) return stored as T
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return stored as T
+  return { ...init, ...stored as T }
+}
+
+/**
  * Whole-value JSON persistence to localStorage. Hand-rolled instead of the
  * zustand persist middleware: its write path spreads state into an object
  * (`partialize({ ...get() })`), exploding primitive state (a persisted string
@@ -143,7 +161,7 @@ export function createSnapshotStore<T>(
  * because the corruption happens before serialization. Storage failures
  * (quota, private mode) only disable persistence, never break the store.
  */
-function attachPersistence<T>(api: StoreApi<T>, name: string): void {
+function attachPersistence<T>(api: StoreApi<T>, init: T, name: string): void {
   // Non-browser runs (node e2e booting the client tree) have no localStorage:
   // persistence silently disables — same contract as a storage failure, minus
   // the per-store console noise a ReferenceError would produce.
@@ -151,7 +169,7 @@ function attachPersistence<T>(api: StoreApi<T>, name: string): void {
   try {
     const raw = localStorage.getItem(name)
     if (raw !== null) {
-      api.setState(devFreeze(JSON.parse(raw) as T), true)
+      api.setState(devFreeze(rehydrated(init, JSON.parse(raw) as unknown)), true)
     }
   } catch (error) {
     console.error(`snapshot store '${name}' rehydration failed:`, error)

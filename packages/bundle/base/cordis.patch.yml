@@ -265,6 +265,9 @@
       config:
         sampleOverCapGlobResults: false
 
+    - id: node-vision
+      name: '@deepseek-ai/dsh-node-vision'
+
     - id: agent-instructions
       name: '@deepseek-ai/dsh-agent-instructions'
       config:

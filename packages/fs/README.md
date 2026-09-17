@@ -33,6 +33,7 @@ Eight packages plus the remote sibling `fs-e2b` play the filesystem roles; the s
 | [`fs-observation-policy/`](fs-observation-policy/README.md) | Read-before-edit policy: records observed presence or absence and guards write/edit through the `fs/*` events | `fs/*` listeners |
 | [`tool-fs/`](tool-fs/README.md) | Model-facing `read`, `read_image`, `write`, and `edit` tools plus their executor | registers on `ctx.tools` |
 | [`tool-fs-search/`](tool-fs-search/README.md) | Model-facing `glob` and `grep` discovery tools backed by the packaged ripgrep binary | registers on `ctx.tools` |
+| [`node-vision/`](node-vision/README.md) | Model-facing `vision_info`, `vision_crop`, `vision_resize`, `vision_colors`, and `vision_diff` tools over `sharp`; every producing tool returns its result as an image block so the model inspects what it made | registers on `ctx.tools` |
 | [`tool-str-replace-editor/`](tool-str-replace-editor/README.md) | Standalone `str_replace_editor` tool: `view`, `create`, `str_replace`, and `insert` over `ctx.fs` | registers on `ctx.tools` |
 | [`tool-present/`](tool-present/README.md) | Explicit immutable snapshots of delivered files | registers on `ctx.tools` |
 

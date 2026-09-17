@@ -201,6 +201,66 @@ describe('danger-full-access', () => {
   })
 })
 
+describe('writeBytes under the fence', () => {
+  it('denies a byte write in read-only mode, leaving no file on disk', async () => {
+    await boot('read-only')
+    const path = join(workspace, 'denied.bin')
+    await expect(fs.writeBytes(await target(path), Uint8Array.from([1, 2])))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(path)).toBe(false)
+  })
+
+  it('lands a byte write inside the workspace', async () => {
+    await boot('workspace-write')
+    const path = join(workspace, 'inside.bin')
+    const outcome = await fs.writeBytes(await target(path), Uint8Array.from([3, 4, 5]))
+    expect(outcome.bytes).toBe(3)
+    expect(await readFile(path)).toEqual(Buffer.from([3, 4, 5]))
+  })
+
+  it('denies a byte write to an absolute path outside the workspace, creating nothing', async () => {
+    await boot('workspace-write')
+    const path = join(outside, 'escaped.bin')
+    await expect(fs.writeBytes(await target(path), Uint8Array.from([1])))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(path)).toBe(false)
+  })
+
+  it('denies a byte write that traverses out of the workspace with `..`', async () => {
+    await boot('workspace-write')
+    const path = join(workspace, '..', 'out', 'traversed.bin')
+    await expect(fs.writeBytes(await target(path), Uint8Array.from([1])))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(join(outside, 'traversed.bin'))).toBe(false)
+  })
+
+  it('honours a per-call policy that grants a contained byte write', async () => {
+    await boot('read-only')
+    const path = join(workspace, 'granted.bin')
+    await fs.writeBytes(
+      await target(path),
+      Uint8Array.from([9]),
+      undefined,
+      undefined,
+      { mode: 'workspace-write', workspaceRoot: workspace },
+    )
+    expect(await readFile(path)).toEqual(Buffer.from([9]))
+  })
+
+  it('a danger-full-access stamp writes bytes outside the workspace', async () => {
+    await boot('read-only')
+    const path = join(outside, 'granted-full.bin')
+    await fs.writeBytes(
+      await target(path),
+      Uint8Array.from([7]),
+      undefined,
+      undefined,
+      { mode: 'danger-full-access', workspaceRoot: workspace },
+    )
+    expect(await readFile(path)).toEqual(Buffer.from([7]))
+  })
+})
+
 describe('the per-call policy override (escalation)', () => {
   it('a workspace-write stamp on a read-only default lets a contained write land for that call only', async () => {
     await boot('read-only')

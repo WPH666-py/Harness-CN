@@ -1,10 +1,19 @@
-# Electron reuses the browser composition without its network and browser-launch rows.
+# Electron reuses the browser composition without its browser-launch rows.
+#
+# The webserver row stays mounted, bound to an OS-assigned loopback port. A plugin host half
+# registers its own routes through `ctx.inject(['webServer'])`, so with this row disabled
+# those routes never exist: the request falls through to the shell's asset handler, which
+# answers index.html, and a panel that expected JSON reports a parse failure. Only the
+# desktop carrier requests this port, and no row here opens a URL.
 
 - id: web-startup
   disabled: true
 
 - id: webserver
-  disabled: true
+  inject: []
+  config:
+    host: 127.0.0.1
+    port: 0
 
 - id: web-runtime
   disabled: true

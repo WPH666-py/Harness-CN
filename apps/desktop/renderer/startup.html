@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'self' data:; media-src 'self'">
+    <title id="page-title"></title>
+    <link rel="stylesheet" href="startup.css">
+  </head>
+  <body>
+    <main>
+      <video id="clip" src="Harness-loading.mp4" autoplay loop muted playsinline></video>
+      <h1 id="title"></h1>
+      <p id="subtitle"></p>
+      <div id="track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="bar"></div>
+      </div>
+      <p id="elapsed" role="status" aria-live="polite"></p>
+    </main>
+    <script src="startup.js"></script>
+  </body>
+</html>

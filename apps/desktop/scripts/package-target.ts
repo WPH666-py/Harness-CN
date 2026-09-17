@@ -279,7 +279,10 @@ async function main(): Promise<void> {
   await runPnpm(['run', 'prepare:seed'], targetEnv)
   if (invocation.prepareOnly) return
   await runPnpm(desktopElectronBuilderArguments(target, invocation.directory), electronBuilderEnv)
-  if (!invocation.directory) writeReleaseRecord(target, electronBuilderEnv, buildPaths.artifacts)
+  // An unsigned build embeds no updater origin, so it emits no completion record for upload.
+  if (!invocation.directory && process.env.DSH_DESKTOP_UNSIGNED !== '1') {
+    writeReleaseRecord(target, electronBuilderEnv, buildPaths.artifacts)
+  }
 }
 
 if (process.argv[1] !== undefined && import.meta.filename === resolve(process.argv[1])) await main()

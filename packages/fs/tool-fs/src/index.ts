@@ -15,6 +15,16 @@ import { applyReadImageTool } from './read-image.ts'
 import { READ_MAX_BYTES, READ_MAX_LINE_LENGTH } from './read-render.ts'
 import { FsSandboxController } from './sandbox.ts'
 
+// The route gate and the regular-file resolution are the shared contract for any tool
+// that hands an image to the model or reads one from disk. `@deepseek-ai/dsh-node-vision`
+// reuses both rather than restating either rule, which is why they are published here.
+export { assertImageCapableRoute } from './read-image.ts'
+export { resolveRegularReadTarget } from './read-target.ts'
+// Session-relative resolution is the same contract a writer needs, so a package that adds
+// its own file-producing tool resolves paths against the session workspace, not the server's
+// launch directory.
+export { sessionResolveOptions } from './session-cwd.ts'
+
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'tool-fs'
 

@@ -25,6 +25,7 @@ import type {} from '@deepseek-ai/dsh-api-gateway'
 import type { ConnectionFetchHandler } from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-client-modules'
 import { renderIndexInjections, type IndexInjection } from '@deepseek-ai/dsh-host-webserver'
+import { unclaimedRequestOwner } from './request-routing.ts'
 import {
   DESKTOP_HOST_PROTOCOL_VERSION,
   DESKTOP_PIPE_CHUNK_BYTES,
@@ -302,11 +303,45 @@ export async function runDesktopHost(
     await ctx.fiber.dispose()
     throw new Error('dsh desktop: composition did not provide connection, typertGateway, and clientModules')
   }
+  const webServer = ctx.get('webServer')
   const api = connection.createSharedFetchHandler('/api')
   const assets = assetHandler(ctx, absoluteProject)
   const streams = remoteStreamHandler(ctx)
   const requests = new Map<number, AbortController>()
   let disposing: Promise<void> | undefined
+
+  /**
+   * Offer one request to the composed webserver, the only owner of the routes plugin host
+   * halves register with `ctx.inject(['webServer'])`.
+   *
+   * This carrier claims `/.dsh/remote-stream`, `/api`, and `/plugins` itself and hands
+   * everything else here, body included: a panel's JSON write is a POST to a route the
+   * webserver owns, and dropping it into the asset handler is what turned every such write
+   * into a method error. Assets are read-only, so only a read the webserver did not claim is
+   * offered to them afterwards.
+   * @param request - request no in-process handler claimed.
+   * @returns the plugin route's response, or the shell's own asset response.
+   */
+  const pluginRoutes = async (request: Request): Promise<Response> => {
+    const port = webServer?.port
+    if (unclaimedRequestOwner({ method: request.method, port }) === 'assets') return assets.fetch(request)
+    const url = new URL(request.url)
+    const init: NodeRequestInit = {
+      method: request.method,
+      headers: new Headers(request.headers),
+      signal: request.signal,
+      // A request body is a stream that can be read once, so it is forwarded rather than
+      // rebuilt; `duplex: 'half'` is what Node requires to send a streaming body.
+      ...(request.body === null ? {} : { body: request.body, duplex: 'half' }),
+    }
+    const routed = await fetch(new Request(
+      new URL(`${url.pathname}${url.search}`, `http://127.0.0.1:${String(port)}`),
+      init,
+    ))
+    return unclaimedRequestOwner({ method: request.method, port, status: routed.status }) === 'assets'
+      ? assets.fetch(request)
+      : routed
+  }
 
   const dispose = async (): Promise<void> => {
     disposing ??= (async () => {
@@ -340,7 +375,9 @@ export async function runDesktopHost(
           ? await streams.fetch(request)
           : url.pathname.startsWith('/api/')
             ? await api.fetch(request)
-            : await assets.fetch(request)
+            : url.pathname.startsWith('/plugins/')
+              ? await assets.fetch(request)
+              : await pluginRoutes(request)
         await writeResponse(encodeDesktopResponseStart(command.streamId, {
           status: response.status,
           headers: [...response.headers.entries()],
@@ -422,6 +459,23 @@ async function main(): Promise<void> {
     if (blockedRequests.size === 0) requestPipe.resume()
   }
 
+  /**
+   * Close one inherited pipe descriptor, tolerating one Electron has already released.
+   *
+   * Electron owns the other end of both pipes. When it closes first, this process's
+   * descriptor is already gone and `closeSync` reports EBADF. That is the state shutdown
+   * wants, but letting it throw turns an ordinary stop into an uncaught exception inside
+   * the stop path, which the Shell records as a Host crash and a reader has to rule out.
+   * @param fd - inherited descriptor owned by this process until it is closed.
+   */
+  const closePipe = (fd: number): void => {
+    try {
+      closeSync(fd)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EBADF') throw error
+    }
+  }
+
   const stop = (exitCode = 0): Promise<void> => {
     requestedExitCode = Math.max(requestedExitCode, exitCode)
     stopping ??= (async () => {
@@ -433,7 +487,7 @@ async function main(): Promise<void> {
       blockedRequests.clear()
       discardedRequestBodies.clear()
       requestPipe.destroy()
-      closeSync(DESKTOP_REQUEST_PIPE_FD)
+      closePipe(DESKTOP_REQUEST_PIPE_FD)
       await controller.dispose()
       await Promise.allSettled([...runs])
       await responseWriteTail.catch(() => undefined)
@@ -441,7 +495,7 @@ async function main(): Promise<void> {
         await new Promise<void>((resolvePromise) => { responsePipe.end(resolvePromise) })
         responsePipe.destroy()
       }
-      closeSync(DESKTOP_RESPONSE_PIPE_FD)
+      closePipe(DESKTOP_RESPONSE_PIPE_FD)
       if (process.connected) process.disconnect()
       process.exitCode = requestedExitCode
     })()
