@@ -1,3 +1,5 @@
+> **本仓库是 [Harness-CN](README.zh-CN.md)**——DeepSeek Harness 0.1.5-rc.1 的非官方 Windows 桌面发行版。它把整套运行时（内置的 Node、pnpm 与已安装的插件树）打包为一个未签名的 `win-x64` 安装程序，因此全新的机器无需任何开发者工具链。请从本仓库的 **Releases** 下载；中文指南、该 fork 的改动、构建步骤与故障排查章节都位于 **[README.zh-CN.md](README.zh-CN.md)**。上游自带的文档紧随其后，对本 fork 未改动的部分仍然适用。
+
 # DeepSeek Harness
 
 [English](README.md) | 中文
