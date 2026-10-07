@@ -36,6 +36,8 @@ export interface DesktopApiKeyStatus {
 export interface DesktopUpdateState {
   readonly phase: 'idle' | 'checking' | 'available' | 'installing' | 'ready' | 'error'
   readonly version?: string
+  /** Completed fraction of an installer download, reported while `phase` is `installing`. */
+  readonly progress?: number
   readonly message?: string
 }
 

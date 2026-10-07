@@ -83,7 +83,7 @@ The backend and Loader use `.dsh/profiles/desktop/package.json` as their profile
 
 ## Updates and recovery
 
-Electron update uses one `electron-updater` release stream and signed `electron-builder` artifacts. Its version is the Desktop release version; there is no independent dsh manifest, compatibility range, or dsh-only update operation. A foreground install waits for an in-flight background check rather than reusing its result as an install result. The update dialog downloads and installs the Electron artifact, then restarts into the new release.
+Electron update uses one release stream and signed `electron-builder` artifacts, delivered through one of two backends: the `electron-updater` backend when the build carries `app-update.yml`, and the fork's own GitHub Releases channel when it does not ([GitHub release channel](2026-10-07-harness-cn-github-release-channel.md)). Its version is the Desktop release version; there is no independent dsh manifest, compatibility range, or dsh-only update operation. A foreground install waits for an in-flight background check rather than reusing its result as an install result. The update dialog downloads and installs the Electron artifact, then restarts into the new release.
 
 Before the new release opens a window, startup reconciles dsh from its packaged seed while retaining installed desktop plugins. The health check covers dependency resolution, native modules, shell API compatibility, backend startup and shutdown, Web assets, and the client boot graph. An incompatible plugin blocks activation and leaves the previous project available for rollback. Startup fails visibly rather than launching a shell and dsh version that do not match.
 

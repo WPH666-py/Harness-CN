@@ -83,7 +83,7 @@ Electron 拥有保留 profile `.dsh/profiles/desktop`。其中精确的 `@deepse
 
 ## 更新与恢复
 
-Electron 更新只使用一个 `electron-updater` 发布流和签名 `electron-builder` 产物。该版本就是 Desktop 发布版本；不存在独立 dsh manifest、兼容范围或仅更新 dsh 的操作。前台安装会等待正在进行的后台检查，而不会把检查结果复用成安装结果。更新弹窗下载并安装 Electron 产物，然后重启进入新发布。
+Electron 更新只使用一个发布流和签名 `electron-builder` 产物，经由两种后端之一投递：构建带有 `app-update.yml` 时用 `electron-updater` 后端，不带时用本 fork 自己的 GitHub Releases 渠道（见 [GitHub release channel](2026-10-07-harness-cn-github-release-channel.zh.md)）。该版本就是 Desktop 发布版本；不存在独立 dsh manifest、兼容范围或仅更新 dsh 的操作。前台安装会等待正在进行的后台检查，而不会把检查结果复用成安装结果。更新弹窗下载并安装 Electron 产物，然后重启进入新发布。
 
 新发布在打开窗口前从安装包种子校准 dsh，同时保留已安装桌面插件。健康检查覆盖依赖解析、原生模块、壳 API 兼容性、后端启停、Web 资源和客户端启动图。不兼容插件会阻止激活，并保留上一个项目用于回滚。启动过程会明确失败，而不会运行版本不匹配的壳与 dsh。
 

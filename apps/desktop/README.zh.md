@@ -166,6 +166,8 @@ pnpm run prepare:desktop
 
 打包应用会在主窗口打开十秒后检查目标专用的发布流；本地化的 **检查更新…** 菜单项会手动触发同一检查。发现可用版本时，应用打开一个原生确认弹窗。用户确认后，应用等待正在进行的检查完成，下载并验证已签名的 Desktop 发布、停止 dsh 子进程，并把安装与重启交给 electron-updater。下次启动会先校准版本绑定的 seed，再重新打开产品窗口。
 
+不带 `app-update.yml` 的构建——也就是所有未签名的 Harness-CN 构建，因为打包时省略了 publish 段——改用另一个后端：本 fork 自己的 GitHub Releases。它请求 `https://api.github.com/repos/WPH666-py/Harness-CN/releases`，只考虑同时满足三个条件的发布：不是 draft、剥掉前导 `v` 后是合法的语义化版本、并且带有名为 `Harness-CN-<版本>-win-x64-setup.exe` 的资产；只有在该版本严格高于当前运行版本时才会被提示，因此本构建永远装不上的发布不会被播报出去。用户接受后，应用把该资产下载到平台临时目录下的子目录，并在写入的同一次遍历中计算摘要，再把结果与 GitHub 为该资产报告的 `sha256:` 摘要比对，不匹配就拒绝运行；没有摘要的资产会被无校验安装，更新状态会如实说明这一点。安装以静默 `/S` 开关启动 NSIS 安装程序，由它就地升级——旧版本由安装程序自己卸载，因此不会有任何东西抢在它前面卸载，安装失败也不会让机器两头落空——安装程序启动后桌面壳冲刷日志并退出，使正在被替换的文件不再被占用。跳过按钮会记住它被按下时对应的版本，该版本不再由自动检查提示，但手动 **检查更新…** 仍会询问；出现严格更高的版本时会重新提示。
+
 Electron-builder 始终为 `DSH_DESKTOP_AUTO_UPDATE_ENV` 选择的部署生成 generic-provider 频道元数据。NSIS 差分包与 macOS ZIP 目标让 electron-updater 可以复用未变化的数据块；供手动安装的 DMG 经过公证，但不生成 blockmap，因为它不是 macOS updater 的载荷。Seed 与桌面壳仍属于同一个签名 Desktop 发布。macOS 签名与公证凭据使用 electron-builder 的标准环境变量；Windows EV 签名使用上文所述的公开证书、已验证 SignTool、SafeNet 容器和 runner PIN。必填 Desktop 发布环境选择构建所验证的应用身份与平台签名身份。
 
 ## 底层开发覆盖项

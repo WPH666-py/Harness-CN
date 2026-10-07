@@ -31,11 +31,15 @@ import {
 } from './credentials-client.ts'
 import { formatDesktopMessage, resolveDesktopLocale, type DesktopMessages } from './locale.ts'
 import { claimDesktopSingleInstance } from './single-instance.ts'
-import { DesktopUpdateCoordinator } from './update-coordinator.ts'
+import { DesktopUpdateCoordinator, type DesktopUpdateSkipState } from './update-coordinator.ts'
+import { createDesktopUpdateBackend } from './update-backend-factory.ts'
+import { DesktopUpdateSkipStore } from './update-skip-store.ts'
 
 const SCHEME = 'dsh-app'
 /** Delay before the startup window is revealed, so a launch that never needs it does not flash one. */
 const SLOW_START_REVEAL_MS = 1200
+/** Delay after the workspace opens before the launch's automatic update check runs. */
+const AUTOMATIC_UPDATE_CHECK_MS = 10_000
 let focusPrimaryWindow = (): void => {}
 
 function errorOf(reason: unknown, fallback: string): Error {
@@ -299,6 +303,20 @@ async function main(): Promise<void> {
     progress: reportStartupProgress,
   }
 
+  const updateSkips = new DesktopUpdateSkipStore(join(app.getPath('userData'), 'update-skip.json'))
+  logShell(`desktop update skip record: ${await updateSkips.read() ?? 'none'}`)
+  // The store is read per check rather than captured once, so a version skipped during this
+  // session is honored by every later automatic check in the same process.
+  let skippedVersion: string | undefined
+  const skippedUpdate: DesktopUpdateSkipState = {
+    remember: (version) => {
+      skippedVersion = version
+      logShell(`desktop update ${version} skipped by the user`)
+      void updateSkips.remember(version)
+    },
+    suppresses: version => version === skippedVersion,
+  }
+  skippedVersion = await updateSkips.read()
   const updates = new DesktopUpdateCoordinator(
     publishUpdate,
     async () => {
@@ -307,6 +325,14 @@ async function main(): Promise<void> {
       host = undefined
       await active?.stop()
     },
+    createDesktopUpdateBackend({ currentVersion: app.getVersion() }),
+    () => {
+      // Flush the file sink before the process leaves; close is idempotent. The
+      // installer then replaces the application files no running process holds open.
+      void logs.close().finally(() => { app.quit() })
+    },
+    skippedUpdate,
+    logShell,
   )
 
   // Served before the backend exists: the startup window and the management windows are shell
@@ -465,8 +491,18 @@ async function main(): Promise<void> {
   host = await startHost()
   reportStartupProgress(1)
 
+  /**
+   * Check the release channel and, on a manual check, report what it found.
+   *
+   * An automatic check stays silent on every outcome: a launch must not open an
+   * error dialog because the network, DNS, or GitHub's rate limit refused one
+   * background request. Both entries into the install — this dialog and the
+   * `updatesInstall` channel — call the same coordinator, which downloads,
+   * verifies, stops the backend, starts the installer, and ends this process.
+   * @param manual - whether the user asked for this check from the menu.
+   */
   const checkAndPrompt = async (manual: boolean): Promise<void> => {
-    const state = await updates.check()
+    const state = await updates.check(manual)
     logShell(`update check (${manual ? 'manual' : 'automatic'}): ${state.phase}`)
     if (state.phase === 'error') {
       if (manual) {
@@ -488,18 +524,25 @@ async function main(): Promise<void> {
       }
       return
     }
+    const version = state.version ?? ''
     const result = await dialog.showMessageBox({
       type: 'info',
       title: messages.updateTitle,
       message: messages.updateAvailable,
-      detail: formatDesktopMessage(messages.updateDetail, { version: state.version ?? '' }),
-      buttons: [messages.installAndRestart, messages.later],
+      detail: formatDesktopMessage(messages.updateDetail, { version }),
+      buttons: [messages.installAndInstall, messages.skipForNow],
       defaultId: 0,
       cancelId: 1,
     })
-    if (result.response !== 0) return
+    if (result.response !== 0) {
+      skippedUpdate.remember(version)
+      return
+    }
     const installed = await updates.install()
     if (installed.phase === 'error') {
+      // The installer never started, so this process is still the running application
+      // and its normal teardown is intact; a second quit request must run it again.
+      shellInstallerOwnsQuit = false
       await dialog.showMessageBox({
         type: 'error',
         title: messages.updateFailedTitle,
@@ -666,7 +709,7 @@ async function main(): Promise<void> {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
   publishUpdate(updateState)
-  setTimeout(() => { void checkAndPrompt(false) }, 10_000)
+  setTimeout(() => { void checkAndPrompt(false) }, AUTOMATIC_UPDATE_CHECK_MS)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) focusPrimaryWindow()
