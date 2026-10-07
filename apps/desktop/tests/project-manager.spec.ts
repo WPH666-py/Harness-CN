@@ -151,7 +151,11 @@ function createTestSeedMetadata(seed: string, desktopRelease: DesktopRelease): v
   }
   const installed = new Set(bundledPluginPackageNames())
   const activated = new Set(bundledPluginNames())
-  for (const name of installed) delete manifest.dependencies[name]
+  // Rebuilt rather than deleted key by key: the fixture drops every bundled entry, and
+  // rebuilding keeps the object's shape stable instead of walking it into dictionary mode.
+  manifest.dependencies = Object.fromEntries(
+    Object.entries(manifest.dependencies).filter(([name]) => !installed.has(name)),
+  )
   manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(bundle => !activated.has(bundle))
   writeFileSync(manifestPath, `${JSON.stringify(manifest, undefined, 2)}\n`)
 }
@@ -472,6 +476,33 @@ describe('desktop project transactions', () => {
     expect(starts).toBe(2)
   })
 
+  it('refuses every mutation aimed at a plugin the release ships', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    createTestSeedMetadata(seed, release())
+    writeFileSync(join(seed, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    writeLinkedProfileSeed(seed, release())
+    archiveStore(seed)
+    writeIntegrity(seed)
+    const paths = resolveDesktopPaths(join(root, '.dsh'))
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+    await manager.applyRelease(seed, '1.0.0', hooks())
+
+    // Both the activated set and the installed-but-inactive companions are pinned by the
+    // release, and `plugin-add` is the third route to the same version change: pnpm resolves
+    // the spec it is handed, so leaving it open would enforce nothing.
+    for (const name of bundledPluginPackageNames()) {
+      await expect(manager.mutate({ type: 'plugin-add', spec: `${name}@9.9.9` }, hooks()))
+        .rejects.toThrow(/bundled with Harness-CN/u)
+      await expect(manager.mutate({ type: 'plugin-remove', name }, hooks()))
+        .rejects.toThrow(/bundled with Harness-CN/u)
+      await expect(manager.mutate({ type: 'plugin-update', name, version: '9.9.9' }, hooks()))
+        .rejects.toThrow(/bundled with Harness-CN/u)
+    }
+    // Every refusal lands before the staging profile is written, so nothing changed.
+    expect(manager.listPlugins()).toEqual([])
+  })
+
   it('restores rollback when the active move completed before its journal update', async () => {
     const root = temporaryRoot()
     const seed = join(root, 'seed')
@@ -499,7 +530,7 @@ describe('desktop project transactions', () => {
 
     manager.recover()
 
-    expect(manager.listPlugins()).toEqual([{ name: '@scope/plugin', version: '2.0.0' }])
+    expect(manager.listPlugins()).toEqual([{ name: '@scope/plugin', version: '2.0.0', bundled: false }])
     expect(existsSync(stagingProfile)).toBe(false)
     expect(existsSync(paths.pending)).toBe(false)
   })
@@ -611,7 +642,7 @@ describe('desktop project transactions', () => {
     await expect(manager.applyRelease(nextSeed, '1.1.0', hooks())).resolves.toBe(true)
     expect(manager.releaseVersion()).toBe('1.1.0')
     expect(manager.dshVersion()).toBe('1.1.0')
-    expect(manager.listPlugins()).toEqual([{ name: '@scope/plugin', version: '2.0.0' }])
+    expect(manager.listPlugins()).toEqual([{ name: '@scope/plugin', version: '2.0.0', bundled: false }])
     const profile = JSON.parse(readFileSync(join(paths.profile, 'package.json'), 'utf8')) as {
       dsh: { profile: { bundles: string[] } }
     }

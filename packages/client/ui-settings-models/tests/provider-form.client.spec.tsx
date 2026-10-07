@@ -781,6 +781,70 @@ describe('hand-declared providers', () => {
     return { ...scripted, onClose }
   }
 
+  it('fills the route, name, protocol, and endpoint a catalog preset declares', () => {
+    mountCard()
+
+    fireEvent.change(screen.getByLabelText(en.customPreset), { target: { value: 'deepseek' } })
+
+    expect(screen.getByLabelText<HTMLInputElement>(en.customRoute).value).toBe('deepseek')
+    expect(screen.getByLabelText<HTMLInputElement>(en.customDisplayName).value).toBe(en.presetDeepseek)
+    expect(screen.getByLabelText<HTMLInputElement>(en.baseUrl).value).toBe('https://api.deepseek.com')
+    expect(screen.getByLabelText<HTMLSelectElement>(en.customApi).value).toBe('openai-completions')
+    // Nothing is left for the user to supply, so the card says nothing extra.
+    expect(screen.queryByText(en.customPresetManual)).toBeNull()
+  })
+
+  it('moves a preset route id aside when the directory already answers to it', () => {
+    mountCard()
+
+    fireEvent.change(screen.getByLabelText(en.customPreset), { target: { value: 'openai' } })
+
+    expect(screen.getByLabelText<HTMLInputElement>(en.customRoute).value).toBe('openai-custom')
+    expect(screen.queryByText(en.customRouteTaken)).toBeNull()
+    expect(screen.getByLabelText<HTMLInputElement>(en.baseUrl).value).toBe('https://api.openai.com/v1')
+  })
+
+  it('leaves the endpoint and protocol to the user for a provider the catalog cannot describe', () => {
+    mountCard()
+
+    fireEvent.change(screen.getByLabelText(en.customPreset), { target: { value: 'qwen' } })
+
+    expect(screen.getByLabelText<HTMLInputElement>(en.customRoute).value).toBe('dashscope')
+    expect(screen.getByLabelText<HTMLInputElement>(en.customDisplayName).value).toBe(en.presetQwen)
+    expect(screen.getByLabelText<HTMLInputElement>(en.baseUrl).value).toBe('')
+    expect(screen.getByLabelText<HTMLSelectElement>(en.customApi).value).toBe('openai-completions')
+    expect(screen.getByText(en.customPresetManual)).toBeTruthy()
+  })
+
+  it('clears an endpoint the previous preset filled when the next one declares none', () => {
+    mountCard()
+
+    fireEvent.change(screen.getByLabelText(en.customPreset), { target: { value: 'anthropic' } })
+    expect(screen.getByLabelText<HTMLInputElement>(en.baseUrl).value).toBe('https://api.anthropic.com')
+
+    fireEvent.change(screen.getByLabelText(en.customPreset), { target: { value: 'stepfun' } })
+    expect(screen.getByLabelText<HTMLInputElement>(en.baseUrl).value).toBe('')
+  })
+
+  it('keeps the protocol the adapter offers when it does not offer the catalog\u2019s choice', () => {
+    mountCard({ protocols: ['anthropic-messages'] })
+
+    fireEvent.change(screen.getByLabelText(en.customPreset), { target: { value: 'openai' } })
+
+    expect(screen.getByLabelText<HTMLSelectElement>(en.customApi).value).toBe('anthropic-messages')
+    expect(screen.getByLabelText<HTMLInputElement>(en.baseUrl).value).toBe('https://api.openai.com/v1')
+  })
+
+  it('keeps what a preset filled after the selection is cleared', () => {
+    mountCard()
+
+    fireEvent.change(screen.getByLabelText(en.customPreset), { target: { value: 'xai' } })
+    fireEvent.change(screen.getByLabelText(en.customPreset), { target: { value: '' } })
+
+    expect(screen.getByLabelText<HTMLInputElement>(en.customRoute).value).toBe('xai')
+    expect(screen.getByLabelText<HTMLInputElement>(en.baseUrl).value).toBe('https://api.x.ai/v1')
+  })
+
   it('writes the whole profile and the key under the derived reference', async () => {
     const { mutate, set, onClose } = mountCard()
 
@@ -826,7 +890,7 @@ describe('hand-declared providers', () => {
 
     mountCard()
     fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
-    expect(fields()).toEqual([en.customRoute, en.customDisplayName, en.baseUrl, en.customApi, en.keyInput])
+    expect(fields()).toEqual([en.customPreset, en.customRoute, en.customDisplayName, en.baseUrl, en.customApi, en.keyInput])
     cleanup()
 
     // A shipped route's models each carry their own protocol, so its editor

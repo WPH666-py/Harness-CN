@@ -20,7 +20,7 @@ import {
   writeSync,
 } from 'node:fs'
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { bundledPluginDependencies, bundledPluginNames } from './bundled-plugins.ts'
+import { bundledPluginDependencies, bundledPluginNames, bundledPluginPackageNames } from './bundled-plugins.ts'
 import {
   DESKTOP_PACKAGES_DIR,
   DESKTOP_PACKAGE_SET_FILE,
@@ -91,6 +91,12 @@ const DESKTOP_PROJECT_FILES = [
 export interface DesktopPluginRecord {
   readonly name: string
   readonly version: string
+  /**
+   * Whether this release ships the plugin, which fixes both its version and its
+   * presence. The Desktop plugin window reports it so the row can state the
+   * fact instead of offering controls the Host refuses.
+   */
+  readonly bundled: boolean
 }
 
 /** Installed desktop project manifest slice. */
@@ -159,6 +165,25 @@ const PROJECT_NAME = '@deepseek-ai/dsh-desktop-runtime'
 const DSH_PACKAGE = '@deepseek-ai/dsh'
 const CORE_BUILD_PACKAGE = '@deepseek-ai/dsh-subprocess-local'
 const DESKTOP_PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] as const
+
+/** The plugins this release ships, whose versions and presence the release owns. */
+const BUNDLED_PLUGIN_NAMES = new Set(bundledPluginPackageNames())
+
+/**
+ * Refuse a mutation aimed at a plugin this release ships.
+ *
+ * A bundled plugin's version is pinned by three things that must agree — the
+ * offline store warmed at build time, the profile manifest, and the bundle list
+ * — so moving one off its version leaves the next launch unable to install
+ * without a network. The Desktop plugin window states the fact on the row; this
+ * refusal is what enforces it, because the mutation is the operation that would
+ * perform the change.
+ * @param name - plugin package name the mutation names.
+ */
+function assertNotBundled(name: string): void {
+  if (!BUNDLED_PLUGIN_NAMES.has(name)) return
+  throw new Error(`desktop project: ${JSON.stringify(name)} is bundled with Harness-CN and cannot be changed`)
+}
 const WORKSPACE_SETTINGS = 'nodeLinker: hoisted\nautoInstallPeers: false\nstrictDepBuilds: true\n'
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)$/u
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/u
@@ -459,7 +484,7 @@ function inspectPlugin(projectDir: string, requestedName: string): DesktopPlugin
   if ((patchPath !== packageDir && !patchPath.startsWith(packageDir + sep)) || !existsSync(patchPath)) {
     throw new Error(`desktop project: ${requestedName}@${manifest.version} declares an invalid bundle patch`)
   }
-  return { name: requestedName, version: manifest.version }
+  return { name: requestedName, version: manifest.version, bundled: BUNDLED_PLUGIN_NAMES.has(requestedName) }
 }
 
 /** Transactional desktop npm project manager. */
@@ -719,6 +744,7 @@ export class DesktopProjectManager {
       case 'plugin-add': {
         const requestedName = packageNameFromSpec(mutation.spec)
         if (requestedName === undefined) throw new Error('desktop project: plugin package name is required')
+        assertNotBundled(requestedName)
         await this.runPnpm(projectDir, ['add', mutation.spec, '--save-exact'])
         const installed = inspectPlugin(projectDir, requestedName)
         const current = pluginRecords(projectDir).filter(plugin => plugin.name !== installed.name)
@@ -730,6 +756,7 @@ export class DesktopProjectManager {
       }
       case 'plugin-remove': {
         assertPackageName(mutation.name)
+        assertNotBundled(mutation.name)
         if (!profilePluginNames(projectDir).includes(mutation.name)) {
           throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
         }
@@ -740,6 +767,7 @@ export class DesktopProjectManager {
       }
       case 'plugin-update':
         assertPackageName(mutation.name)
+        assertNotBundled(mutation.name)
         assertVersion(mutation.version)
         if (!profilePluginNames(projectDir).includes(mutation.name)) {
           throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)

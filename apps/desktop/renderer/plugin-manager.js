@@ -35,24 +35,35 @@ async function main() {
       version.className = 'package-version'
       version.textContent = plugin.version
       identity.append(document.createTextNode(plugin.name), version)
-      const remove = document.createElement('button')
-      remove.type = 'button'
-      remove.textContent = messages.remove
-      remove.addEventListener('click', () => void run(
-        () => api.plugins.remove(plugin.name),
-        message('removing', { name: plugin.name }),
-      ))
-      const update = document.createElement('button')
-      update.type = 'button'
-      update.textContent = messages.update
-      update.addEventListener('click', () => {
-        const next = window.prompt(message('targetVersion', { name: plugin.name }), plugin.version)?.trim()
-        if (next === undefined || next === '' || next === plugin.version) return
-        void run(() => api.plugins.update(plugin.name, next), message('updating', { name: plugin.name }))
-      })
       const actions = document.createElement('span')
       actions.className = 'package-actions'
-      actions.append(update, remove)
+      if (plugin.bundled) {
+        // This release fixes both the version and the presence of a bundled
+        // plugin, and the Host refuses every mutation that would change either.
+        // The row states the fact rather than offering controls that fail.
+        const badge = document.createElement('span')
+        badge.className = 'package-bundled'
+        badge.textContent = messages.bundled
+        badge.title = messages.bundledHint
+        actions.append(badge)
+      } else {
+        const remove = document.createElement('button')
+        remove.type = 'button'
+        remove.textContent = messages.remove
+        remove.addEventListener('click', () => void run(
+          () => api.plugins.remove(plugin.name),
+          message('removing', { name: plugin.name }),
+        ))
+        const update = document.createElement('button')
+        update.type = 'button'
+        update.textContent = messages.update
+        update.addEventListener('click', () => {
+          const next = window.prompt(message('targetVersion', { name: plugin.name }), plugin.version)?.trim()
+          if (next === undefined || next === '' || next === plugin.version) return
+          void run(() => api.plugins.update(plugin.name, next), message('updating', { name: plugin.name }))
+        })
+        actions.append(update, remove)
+      }
       item.append(identity, actions)
       return item
     }))
