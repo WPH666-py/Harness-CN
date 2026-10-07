@@ -1,0 +1,79 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: Canvas;
+  color: CanvasText;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 44px 28px;
+}
+
+h1,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  font-size: 1.25rem;
+}
+
+.update__body {
+  color: GrayText;
+  line-height: 1.6;
+}
+
+.update__status {
+  min-height: 1.5em;
+  margin-top: 18px;
+  color: GrayText;
+  overflow-wrap: anywhere;
+}
+
+.update__progress {
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, CanvasText 12%, transparent);
+  overflow: hidden;
+}
+
+.update__progress span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: AccentColor;
+  transition: width 160ms linear;
+}
+
+.update__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.update__button {
+  padding: 9px 15px;
+  border: 1px solid ButtonBorder;
+  border-radius: 7px;
+  background: ButtonFace;
+  color: ButtonText;
+  cursor: pointer;
+}
+
+.update__button--primary {
+  background: AccentColor;
+  color: AccentColorText;
+}
+
+.update__button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}

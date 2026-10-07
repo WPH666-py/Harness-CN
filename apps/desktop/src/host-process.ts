@@ -90,12 +90,16 @@ export class DesktopHostProcess {
    * @param projectDir - active or staged desktop npm project.
    * @param inspectPort - optional loopback inspector port for workspace development.
    * @param logs - run log that mirrors this child's stdout and stderr; absent keeps output unretained.
+   * @param mirrorStdout - whether to copy this child's stdout onto the shell's own stdout. A shell
+   * that reserves its stdout for a line protocol of its own turns this off; the run log still
+   * receives every line either way.
    */
   constructor(
     private readonly node: string,
     private readonly projectDir: string,
     private readonly inspectPort?: number,
     private readonly logs?: DesktopLogBuffer,
+    private readonly mirrorStdout = true,
   ) {}
 
   /** Start the child once and resolve only after its complete composition is active. */
@@ -132,7 +136,7 @@ export class DesktopHostProcess {
     // the request and response carriers use dedicated descriptor pipes, not descriptor 1.
     child.stdout?.setEncoding('utf8')
     child.stdout?.on('data', (chunk: string) => { this.logs?.append('host-out', chunk) })
-    child.stdout?.pipe(process.stdout)
+    if (this.mirrorStdout) child.stdout?.pipe(process.stdout)
     responsePipe.on('data', (chunk: Buffer) => { this.acceptResponseBytes(chunk) })
     responsePipe.once('end', () => {
       try {

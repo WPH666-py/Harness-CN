@@ -44,3 +44,13 @@ worktrees/
 .agents/worktrees/
 .typert-*/
 native/system/test/bin/
+
+# The Tauri shell stages the prepared runtime and seed beside its crate so `tauri build`
+# can read them, and `tauri build` writes its own cargo target tree there. Both are build
+# outputs of the shared payload pipeline: the runtime and seed are staged from
+# `apps/desktop/.desktop-build`, the icon is copied from `apps/desktop/build`, and the
+# sidecar bundle is produced by esbuild. None of them is a source file.
+apps/desktop-shell/src-tauri/resources/
+apps/desktop-shell/src-tauri/icons/
+apps/desktop-shell/src-tauri/target/
+apps/desktop-shell/src-tauri/gen/

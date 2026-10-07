@@ -1,0 +1,19 @@
+{
+  "name": "@deepseek-ai/dsh-desktop-shell",
+  "version": "0.1.5-rc.3",
+  "private": true,
+  "license": "MIT",
+  "author": "Harness-CN",
+  "type": "module",
+  "description": "Tauri shell: owns the bundled Node sidecar, the desktop project, and the webview.",
+  "scripts": {
+    "build:sidecar": "node scripts/build-sidecar.mjs",
+    "prepare:shell": "node scripts/prepare-shell.mjs",
+    "build": "node scripts/build-sidecar.mjs && node scripts/prepare-shell.mjs && tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.5",
+    "esbuild": "^0.25.12"
+  }
+}
