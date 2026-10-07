@@ -17,6 +17,7 @@
 // Import the protocol module so the declaration at the end of this file
 // augments its error map rather than defining an unrelated ambient module.
 import type {} from '@deepseek-ai/dsh-typert-protocol'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 
 /** Identity and freshness of one workspace file, without its content. */
 export interface WorkspaceFileStat {
@@ -133,6 +134,41 @@ export type WorkspaceFileChange =
     readonly absent: true
   }
 
+/** Options for the mutating `remove` verb. */
+export interface WorkspaceRemoveOptions {
+  /** Remove a directory and everything beneath it. A file target ignores it. */
+  readonly recursive?: boolean
+  /** Remove what the target *contains* instead of the target itself. */
+  readonly contentsOnly?: boolean
+}
+
+/**
+ * What one mutating verb changed. The path is the workspace path of the entry
+ * the verb created or removed, relative to the workspace root and joined with
+ * `/`, so a caller can address the result without re-deriving it.
+ */
+export interface WorkspaceFileRemoval {
+  /** Session identity the removal ran under, echoed from the request. */
+  readonly sessionId: SessionId
+  /** Workspace path of the removed entry; the target's own path when only its contents were removed. */
+  readonly path: string
+}
+
+/**
+ * The entry one create-like verb produced. The same metadata `stat` reports, so
+ * a caller can address and version the result without a follow-up request.
+ */
+export interface WorkspaceFileMutation {
+  /** Absolute path of the produced entry, in the same form as {@link WorkspaceFileStat.absolutePath}. */
+  readonly absolutePath: string
+  /** Opaque freshness token of the produced entry; never parsed. */
+  readonly version: string
+  /** Byte size, present only for a regular file. */
+  readonly bytes?: number
+  /** Workspace path of the produced entry, relative to the workspace root and joined with `/`. */
+  readonly path: string
+}
+
 /**
  * One frame of a workspace file watch generation. `ready` confirms that the
  * Host is observing filesystem operations and has resolved the workspace
@@ -162,5 +198,9 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
       readonly path: string
       readonly kind: 'file' | 'symlink' | 'other'
     }
+    /** The destination of a create, copy, or move already exists; nothing was replaced. */
+    'workspace-file/exists': { readonly path: string }
+    /** A directory removal without `recursive` found entries beneath the target; nothing was removed. */
+    'workspace-file/not-empty': { readonly path: string }
   }
 }

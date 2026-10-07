@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Use `dsh-fs` when an application needs consistent filesystem operations across host, confined, or remote execution environments. It lets consumers resolve stable file identities, map shared host files where supported, perform bounded text and byte reads, list directories, and apply atomic text writes and literal edits. Version guards are optional, so a backend works without policy enforcement; callers can supply a guard to reject a mutation after the file changes. Choose `fs-local`, `fs-sandbox`, or `fs-e2b` for the required execution environment. Model-facing filesystem tools are provided separately by `dsh-tool-fs`.
+Use `dsh-fs` when an application needs consistent filesystem operations across host, confined, or remote execution environments. It lets consumers resolve stable file identities, map shared host files where supported, perform bounded text and byte reads, list directories, apply atomic text writes and literal edits, and create, remove, copy, and move entries. Version guards are optional, so a backend works without policy enforcement; callers can supply a guard to reject a mutation after the file changes. Choose `fs-local`, `fs-sandbox`, or `fs-e2b` for the required execution environment. Model-facing filesystem tools are provided separately by `dsh-tool-fs`.
 
 ## Table of Contents
 
@@ -33,7 +33,18 @@ Pick [`fs-local`](../fs-local/README.md) for ordinary host files, [`fs-sandbox`]
 
 ### What the service lets you do
 
-Through `ctx.fs` you can resolve any path to a stable target identity, read a whole text file or stream it in chunks, read raw bytes up to an explicit cap, list one directory level, atomically create or replace a file, and apply a literal text edit atomically. The version guard on both mutations is optional: omit it for unconditional create-or-overwrite, or supply it to fail when the file changed since you last observed it. Every operation returns data or a typed `FsError` carrying a stable code such as `FS_NOT_FOUND`, `FS_STALE_VERSION`, or `FS_AMBIGUOUS_EDIT`, so callers branch on the code, never on message text.
+Through `ctx.fs` you can resolve any path to a stable target identity, read a whole text file or stream it in chunks, read raw bytes up to an explicit cap, list one directory level, atomically create or replace a file, and apply a literal text edit atomically. The version guard on both mutations is optional: omit it for unconditional create-or-overwrite, or supply it to fail when the file changed since you last observed it. Every operation returns data or a typed `FsError` carrying a stable code such as `FS_NOT_FOUND`, `FS_STALE_VERSION`, or `FS_AMBIGUOUS_EDIT`, so callers branch on the code, never on message text. Five further operations change paths rather than content: `createDirectory`, `createFile`, `remove`, `copy`, and `move`, all summarized under [the path-changing operations](#the-path-changing-operations).
+
+<a id="the-path-changing-operations"></a>
+### The path-changing operations
+
+`createDirectory` creates one directory, or a directory and its missing ancestors under `recursive: true`; a missing parent without it is `FS_NOT_FOUND`, and an entry already at the target is `FS_ALREADY_EXISTS`. An existing directory at the target is a success only under `recursive`, never a silent overwrite. `createFile` creates an empty regular file and never replaces anything: any entry at the target is `FS_ALREADY_EXISTS`, and a missing parent is `FS_NOT_FOUND`.
+
+`remove` removes a regular file, or a directory that must be empty unless `recursive: true` is set; a directory that still has entries fails with `FS_NOT_EMPTY` and nothing is removed. A target that is not a regular file or a directory fails with `FS_NOT_REGULAR_FILE` rather than being unlinked. Removal is one operation that either completes or fails, and a failed recursive removal may leave the subtree partially removed, because no backend can undo entries it already deleted.
+
+`copy` and `move` both require a destination that does not exist, and an occupied destination fails with `FS_ALREADY_EXISTS` without merging or overwriting. A directory copy reproduces the source layout beneath the destination, and a link inside the copied subtree is reproduced as a link rather than followed, so a copy cannot pull in content from outside the subtree it copied. A move within one filesystem is a single rename and is atomic. When the two ends are on different filesystems the backend copies the subtree and then removes the source, so a move across filesystems is not atomic and can leave the destination complete while the source is still present; the caller must then retry or remove it. A copy that fails partway may leave a partial destination, because copying a subtree is not atomic either; a caller that needs all-or-nothing removes the destination after a failure.
+
+Each of the five takes a per-call `sandboxPolicy`. A sandboxing backend fences by it: it checks the entry a removal removes, the destination of a copy, and both ends of a move, so a removal or a move can neither delete nor create anything outside the policy's writable roots.
 
 -----
 
@@ -110,8 +121,9 @@ No direct invalidation; the named consumer owns any request-prefix changes.
 These limits define when the contract is a poor fit or needs special operational care. They are current package constraints, not a general filesystem comparison or a task backlog.
 
 - **Text-only mutations by contract** — text reads and both mutations reject binary or non-UTF-8 content with `FS_NOT_TEXT`; `readBytes` and `readByteRange` are the raw-byte primitives, and binary-safe mutations remain deferred.
-- **Thirteen primitives only** — no delete, rename, copy, or watch; `listDir` lists a single level, with recursion, globbing, pagination, and search out of scope ([directory-listing note](../../../.agents/notes/archived/architecture/2026-07-03-filesystem-directory-listing-seam.md)).
+- **Thirteen primitives only** — no delete, rename, copy, or watch; `listDir` lists a single level, with recursion, globbing, pagination, and search out of scope ([directory-listing note](../../../.agents/notes/archived/architecture/2026-07-03-filesystem-directory-listing-seam.md)). The path-changing operations add create, remove, copy, and move; watching remains out of scope.
 - **No I/O deadline** — the seam arms no timeout; cancellation is a best-effort optional `AbortSignal` per primitive ([fs family stance](../README.md)).
+- **A cross-filesystem move and a subtree copy are not atomic** — a move that cannot rename copies and then removes the source, and a copy builds its destination entry by entry, so either can leave a partial or doubled result that the caller must reconcile.
 - **Resolve-then-operate costs a remote backend two round-trips per tool call** — folding or caching resolution is left to such a backend.
 
 <a id="dev-note"></a>

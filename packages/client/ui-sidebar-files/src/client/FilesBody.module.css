@@ -124,6 +124,21 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+/* The selected row is what the header's file operations act on, so it keeps a
+   fill of its own: the tree draws one selection at a time, and the stronger
+   active fill separates it from whatever the pointer happens to rest on. */
+.row[data-files-selected] {
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
+/* The name input a new entry waits for: it borrows the row's line and never
+   grows past it. */
+.draft {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+}
+
 /* The folder glyph rides the tertiary ink, as the workspace tree's does (ui-workspace Rows `.slot`). */
 .icon {
   flex: 0 0 auto;
@@ -160,6 +175,25 @@
   font-size: 12px;
 }
 
+/* Why the last gesture did not land. It sits under the header, above the one
+   scroller, so the line stays readable wherever the reader has scrolled to. */
+.notice {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px 16px;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* The confirmation's sentence naming the entry it removes. */
+.confirmLine {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: 1.6;
+}
+
 .status {
   display: flex;
   flex-direction: column;
@@ -171,6 +205,15 @@
   color: var(--dsw-alias-label-secondary);
   font-size: var(--dsh-content-font-size-secondary, 13px);
   line-height: 1.6;
+}
+
+/* The header's file operations, kept together at the row's end so the gap to
+   the reload control reads as a group boundary rather than another control. */
+.tools {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  align-items: center;
 }
 
 /* The same icon button as the Sidebar's strip controls above it: a 28px
@@ -199,6 +242,14 @@
 .tool:hover {
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* An operation with nothing to act on yet — paste without a clipboard — keeps
+   its place in the row and drops out of reach. */
+.tool:disabled {
+  color: var(--dsw-alias-label-dimmed);
+  background: transparent;
+  cursor: default;
 }
 
 /* The folder sheet before the chip's text; the chip's title row centres it

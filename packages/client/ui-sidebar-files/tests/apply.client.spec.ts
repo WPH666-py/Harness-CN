@@ -15,11 +15,13 @@ import { apply, inject } from '../src/client/index.ts'
 import { apply as hostApply } from '../src/index.ts'
 import { FilesBody } from '../src/client/FilesBody.tsx'
 import { FilesTitle } from '../src/client/FilesTitle.tsx'
+import { FilesToggleAction } from '../src/client/FilesToggleAction.tsx'
 import { en, zh } from '../src/client/locales.ts'
 
 interface Recorded {
   name: string
   key: string
+  id: string
   locale: string
   store: unknown
   inject: unknown
@@ -48,6 +50,15 @@ async function boot() {
     }),
   }
   const workspaceFiles = { list: vi.fn() }
+  // The header control reads the column's live state at the moment of the
+  // gesture, so the recorder answers instead of holding a snapshot.
+  const sidebarRight = {
+    openTab: vi.fn(),
+    toggleExpanded: vi.fn(),
+    isExpanded: vi.fn(() => false),
+    active: vi.fn<() => { kind: string } | undefined>(() => undefined),
+  }
+  ctx.provide('sidebarRight', sidebarRight as never)
   ctx.provide('sidebarRightTabs', tabs as never)
   ctx.provide('slots', slots as never)
   ctx.provide('locale', locale as never)
@@ -55,7 +66,19 @@ async function boot() {
   ctx.provide('remote.workspaceFiles', workspaceFiles as never)
   const fiber = ctx.plugin({ inject: [...inject], apply })
   await fiber.await()
-  return { tabs, registered, dictionaries, fiber }
+  return { tabs, registered, dictionaries, fiber, sidebarRight }
+}
+
+/** The header control's own registration, which carries an `id` rather than a keyed seat. */
+function headerToggle(registered: readonly Recorded[]): Recorded {
+  const entry = registered.find(candidate => candidate.name === 'conversation.session.header.utilities')
+  if (entry === undefined) throw new Error('the header toggle was not registered')
+  return entry
+}
+
+/** The gesture the registered header contribution hands its component. */
+function toggleOf(entry: Recorded): () => void {
+  return (entry.inject as () => { toggleWorkspaceFiles: () => void })().toggleWorkspaceFiles
 }
 
 describe('ui-sidebar-files apply', () => {
@@ -63,7 +86,7 @@ describe('ui-sidebar-files apply', () => {
     expect(hostApply).not.toThrow()
   })
 
-  it('registers the type, its dictionaries, and the body and title seats under the type\'s id', async () => {
+  it('registers the type, its dictionaries, its two keyed seats, and the header toggle', async () => {
     const { tabs, registered, dictionaries } = await boot()
     const definition = tabs.get(FILES_KIND)
     expect(definition?.id).toBe(FILES_ID)
@@ -77,9 +100,13 @@ describe('ui-sidebar-files apply', () => {
     expect(registered.map(entry => [entry.name, entry.key, entry.locale, entry.component])).toEqual([
       ['sidebar.right.pane.tab', FILES_ID, 'sidebarFiles', FilesBody],
       ['sidebar.right.pane.tab.title', FILES_ID, undefined, FilesTitle],
+      ['conversation.session.header.utilities', undefined, 'sidebarFiles', FilesToggleAction],
     ])
     expect(registered[0]?.store).toBeDefined()
     expect(typeof registered[0]?.inject).toBe('function')
+    // The header seat is a list cell addressed by id, which is how a caller
+    // could replace exactly this control without disturbing its neighbours.
+    expect(headerToggle(registered).id).toBe('workspace-files')
   })
 
   it('takes every registration back when the plugin is disposed', async () => {
@@ -88,5 +115,30 @@ describe('ui-sidebar-files apply', () => {
     expect(tabs.get(FILES_KIND)).toBeUndefined()
     expect(registered).toEqual([])
     expect(dictionaries.size).toBe(0)
+  })
+
+  it('opens the file tree when the column is not already showing it', async () => {
+    const { registered, sidebarRight } = await boot()
+    toggleOf(headerToggle(registered))()
+    expect(sidebarRight.openTab).toHaveBeenCalledWith(FILES_KIND)
+    expect(sidebarRight.toggleExpanded).not.toHaveBeenCalled()
+  })
+
+  it('folds the column away when the file tree is the tab it is showing', async () => {
+    const { registered, sidebarRight } = await boot()
+    sidebarRight.isExpanded.mockReturnValue(true)
+    sidebarRight.active.mockReturnValue({ kind: FILES_KIND })
+    toggleOf(headerToggle(registered))()
+    expect(sidebarRight.toggleExpanded).toHaveBeenCalledOnce()
+    expect(sidebarRight.openTab).not.toHaveBeenCalled()
+  })
+
+  it('opens the file tree when an expanded column is showing some other tab', async () => {
+    const { registered, sidebarRight } = await boot()
+    sidebarRight.isExpanded.mockReturnValue(true)
+    sidebarRight.active.mockReturnValue({ kind: 'guide' })
+    toggleOf(headerToggle(registered))()
+    expect(sidebarRight.openTab).toHaveBeenCalledWith(FILES_KIND)
+    expect(sidebarRight.toggleExpanded).not.toHaveBeenCalled()
   })
 })

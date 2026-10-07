@@ -10,11 +10,17 @@ import { posix } from 'node:path'
 import { FileSystem, FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import type {
   FsByteWriteOutcome,
+  FsCopyOutcome,
+  FsCreateDirectoryOptions,
+  FsCreateOutcome,
   FsDirEntry,
   FsEditOutcome,
   FsEditRequest,
   FsInfo,
+  FsMoveOutcome,
   FsPathInfo,
+  FsRemoveOptions,
+  FsRemoveOutcome,
   FsTarget,
   FsWriteIntent,
   FsWriteOutcome,
@@ -144,7 +150,28 @@ function mapError(error: unknown, operation: string, displayPath: string, signal
   if (/permission denied|operation not permitted/i.test(String(error))) {
     return new FsError(`cannot ${operation} "${displayPath}": permission denied`, 'FS_PERMISSION_DENIED', { cause: error })
   }
+  // The pinned SDK exposes no distinct class for these two, and the controller's
+  // message is the only fact that separates them; the preflight probes cover the
+  // cases this provider can observe, so this is the fallback that keeps a raced
+  // collision from reporting as an opaque I/O failure.
+  if (/already exists|file exists|directory not empty/i.test(String(error))) {
+    return new FsError(`cannot ${operation} "${displayPath}": already exists`, 'FS_ALREADY_EXISTS', { cause: error })
+  }
+  if (/no such file or directory/i.test(String(error))) {
+    return new FsError(`cannot ${operation} "${displayPath}": not found`, 'FS_NOT_FOUND', { cause: error })
+  }
   return new FsError(`cannot ${operation} "${displayPath}": ${String(error)}`, 'FS_IO_ERROR', { cause: error })
+}
+
+/** The two ends of a move sit on different remote filesystems, so `rename` cannot join them. */
+function isCrossDevice(error: unknown): boolean {
+  return /cross-device|invalid cross-device link|EXDEV/i.test(String(error))
+}
+
+/** Kind of a remote entry, or `undefined` when either end of the link is absent. */
+function kindOf(entry: EntryInfo | undefined): 'file' | 'directory' | 'other' | undefined {
+  if (entry === undefined) return undefined
+  return entryType(entry)
 }
 
 function literalEdit(content: string, request: FsEditRequest, displayPath: string): string {
@@ -508,6 +535,165 @@ export class E2BFileSystem extends FileSystem {
     })
   }
 
+  /**
+   * {@link FileSystem.createDirectory} over the remote execution world. E2B
+   * exposes only a recursive create, so the non-recursive case verifies the
+   * parent first; the recursive case delegates the whole walk to the sandbox.
+   */
+  override async createDirectory(
+    target: FsTarget,
+    options?: FsCreateDirectoryOptions,
+    signal?: AbortSignal,
+  ): Promise<FsCreateOutcome> {
+    const path = String(target.targetKey)
+    return this.withLock(path, async () => {
+      const existing = await this.probe(path, target.displayPath, signal)
+      if (existing !== undefined) {
+        // `makeDir` reports an existing directory by returning false and throws
+        // when a file sits at the path, so the recursive success case is decided
+        // here instead of from the controller's answer.
+        if (options?.recursive === true) {
+          if (entryType(existing) !== 'directory') {
+            throw new FsError(`cannot create directory "${target.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+          }
+          return { target, version: entryVersion(existing), type: 'directory' }
+        }
+        throw new FsError(`cannot create directory "${target.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+      }
+      if (options?.recursive !== true) await this.requireParentDirectory(target, 'create directory', signal)
+      try {
+        const sandbox = await this.ctx.e2b.getSandbox()
+        await sandbox.files.makeDir(path, signalOpts(signal))
+      } catch (error: unknown) {
+        throw mapError(error, 'create directory', target.displayPath, signal)
+      }
+      assertNotAborted(signal, 'create directory')
+      const created = await this.probe(path, target.displayPath, signal)
+      /* v8 ignore next -- the directory was just created by this call, so only a concurrent removal makes the probe miss it. */
+      if (created === undefined) throw new FsError(`cannot create directory "${target.displayPath}": not found`, 'FS_NOT_FOUND')
+      return { target, version: entryVersion(created), type: 'directory' }
+    })
+  }
+
+  /**
+   * {@link FileSystem.createFile} over the remote execution world: one write of
+   * empty content, after a probe that refuses an occupied destination, so no
+   * existing remote entry is ever replaced.
+   */
+  override async createFile(target: FsTarget, signal?: AbortSignal): Promise<FsCreateOutcome> {
+    const path = String(target.targetKey)
+    return this.withLock(path, async () => {
+      const existing = await this.probe(path, target.displayPath, signal)
+      if (existing !== undefined) {
+        throw new FsError(`cannot create file "${target.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+      }
+      await this.requireParentDirectory(target, 'create file', signal)
+      try {
+        const sandbox = await this.ctx.e2b.getSandbox()
+        await sandbox.files.write(path, '', signalOpts(signal))
+      } catch (error: unknown) {
+        throw mapError(error, 'create file', target.displayPath, signal)
+      }
+      assertNotAborted(signal, 'create file')
+      const created = await this.probe(path, target.displayPath, signal)
+      /* v8 ignore next -- the file was just created by this call, so only a concurrent removal makes the probe miss it. */
+      if (created === undefined) throw new FsError(`cannot create file "${target.displayPath}": not found`, 'FS_NOT_FOUND')
+      return { target, version: entryVersion(created), type: 'file' }
+    })
+  }
+
+  /**
+   * {@link FileSystem.remove} over the remote execution world. A non-recursive
+   * removal of a directory that still has entries is refused here, before the
+   * controller is asked, so the failure does not depend on how the sandbox
+   * treats a recursive remove.
+   */
+  override async remove(
+    target: FsTarget,
+    options?: FsRemoveOptions,
+    signal?: AbortSignal,
+  ): Promise<FsRemoveOutcome> {
+    const path = String(target.targetKey)
+    const existing = await this.probe(path, target.displayPath, signal)
+    if (existing === undefined) throw new FsError(`cannot remove "${target.displayPath}": not found`, 'FS_NOT_FOUND')
+    const type = entryType(existing)
+    if (type === 'other') {
+      throw new FsError(`cannot remove "${target.displayPath}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
+    }
+    if (type === 'directory' && options?.recursive !== true) {
+      const children = await this.listChildren(path, target.displayPath, signal)
+      if (children.length > 0) {
+        throw new FsError(`cannot remove "${target.displayPath}": directory not empty`, 'FS_NOT_EMPTY')
+      }
+    }
+    assertNotAborted(signal, 'remove')
+    try {
+      const sandbox = await this.ctx.e2b.getSandbox()
+      await sandbox.files.remove(path, signalOpts(signal))
+    } catch (error: unknown) {
+      throw mapError(error, 'remove', target.displayPath, signal)
+    }
+    return { type }
+  }
+
+  /**
+   * {@link FileSystem.copy} over the remote execution world: a recursive walk of
+   * the source subtree, reproducing links as links so nothing outside the
+   * source is pulled in.
+   */
+  override async copy(from: FsTarget, to: FsTarget, signal?: AbortSignal): Promise<FsCopyOutcome> {
+    return this.withLock(String(to.targetKey), async () => {
+      const source = await this.probe(String(from.targetKey), from.displayPath, signal)
+      if (source === undefined) throw new FsError(`cannot copy "${from.displayPath}": not found`, 'FS_NOT_FOUND')
+      const type = entryType(source)
+      if (type === 'other') {
+        throw new FsError(`cannot copy "${from.displayPath}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
+      }
+      if (await this.probe(String(to.targetKey), to.displayPath, signal) !== undefined) {
+        throw new FsError(`cannot copy "${from.displayPath}" to "${to.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+      }
+      await this.copyEntry(String(from.targetKey), String(to.targetKey), type, signal)
+      const copied = await this.probe(String(to.targetKey), to.displayPath, signal)
+      /* v8 ignore next -- the entry was just copied by this call, so only a concurrent removal makes the probe miss it. */
+      if (copied === undefined) throw new FsError(`cannot copy "${from.displayPath}": not found`, 'FS_NOT_FOUND')
+      return { target: to, type }
+    })
+  }
+
+  /**
+   * {@link FileSystem.move} over the remote execution world: one `rename` when
+   * both ends share a filesystem, otherwise the copy-then-remove fallback, which
+   * is not atomic and leaves the source in place if the removal fails.
+   */
+  override async move(from: FsTarget, to: FsTarget, signal?: AbortSignal): Promise<FsMoveOutcome> {
+    const fromPath = String(from.targetKey)
+    const toPath = String(to.targetKey)
+    return this.withLock(toPath, async () => {
+      const source = await this.probe(fromPath, from.displayPath, signal)
+      if (source === undefined) throw new FsError(`cannot move "${from.displayPath}": not found`, 'FS_NOT_FOUND')
+      const type = entryType(source)
+      if (type === 'other') {
+        throw new FsError(`cannot move "${from.displayPath}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
+      }
+      if (await this.probe(toPath, to.displayPath, signal) !== undefined) {
+        throw new FsError(`cannot move "${from.displayPath}" to "${to.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+      }
+      assertNotAborted(signal, 'move')
+      const sandbox = await this.ctx.e2b.getSandbox()
+      try {
+        const renamed = await sandbox.files.rename(fromPath, toPath, signalOpts(signal))
+        return { target: to, type: kindOf(renamed) === 'directory' ? 'directory' : type }
+      } catch (error: unknown) {
+        if (!isCrossDevice(error)) throw mapError(error, 'move', to.displayPath, signal)
+      }
+      // Different remote filesystems: build the destination from the source and
+      // remove the source only once the destination is complete.
+      await this.copyEntry(fromPath, toPath, type, signal)
+      await this.remove({ targetKey: FsTargetKey(fromPath), displayPath: from.displayPath }, { recursive: true }, signal)
+      return { target: to, type }
+    })
+  }
+
   private async withLock<T>(targetKey: string, operation: () => Promise<T>): Promise<T> {
     const prior = this.locks.get(targetKey) ?? Promise.resolve()
     const run = prior.then(operation, operation)
@@ -551,6 +737,77 @@ export class E2BFileSystem extends FileSystem {
     if (info === undefined) throw new FsError(`cannot read "${target.displayPath}": not found`, 'FS_NOT_FOUND')
     if (info.type !== 'file') throw new FsError(`cannot read "${target.displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
     return info
+  }
+
+  /** Refuse a create whose parent is absent or is not a directory. */
+  private async requireParentDirectory(target: FsTarget, operation: string, signal?: AbortSignal): Promise<void> {
+    const parentPath = posix.dirname(String(target.targetKey))
+    const parentDisplay = posix.dirname(target.displayPath)
+    const parent = await this.probe(parentPath, parentDisplay, signal)
+    if (parent === undefined || entryType(parent) !== 'directory') {
+      throw new FsError(`cannot ${operation} "${target.displayPath}": not found`, 'FS_NOT_FOUND')
+    }
+  }
+
+  /** Direct children of a remote directory, for the non-recursive removal check. */
+  private async listChildren(path: string, displayPath: string, signal?: AbortSignal): Promise<EntryInfo[]> {
+    try {
+      const sandbox = await this.ctx.e2b.getSandbox()
+      const listed = await sandbox.files.list(path, { depth: 1, ...signalOpts(signal) })
+      return listed.filter(entry => entry.path !== path)
+    } catch (error: unknown) {
+      throw mapError(error, 'list', displayPath, signal)
+    }
+  }
+
+  /**
+   * Copy one remote entry — a regular file, a directory subtree, or a symbolic
+   * link — without following links. Every destination below the root was
+   * checked absent by the caller, so each level creates a fresh entry.
+   */
+  private async copyEntry(
+    fromPath: string,
+    toPath: string,
+    type: 'file' | 'directory',
+    signal?: AbortSignal,
+  ): Promise<void> {
+    assertNotAborted(signal, 'copy')
+    try {
+      const sandbox = await this.ctx.e2b.getSandbox()
+      if (type === 'directory') {
+        await sandbox.files.makeDir(toPath, signalOpts(signal))
+        for (const child of await this.listChildren(fromPath, fromPath, signal)) {
+          const childType = entryType(child)
+          if (childType === 'other' && child.symlinkTarget === undefined) {
+            throw new FsError(`cannot copy "${child.path}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
+          }
+          await this.copyEntry(child.path, posix.join(toPath, child.name), childType === 'directory' ? 'directory' : 'file', signal)
+        }
+        return
+      }
+      const source = await this.probe(fromPath, fromPath, signal)
+      /* v8 ignore next -- the caller probed this entry a moment earlier; only a concurrent removal makes it miss. */
+      if (source === undefined) throw new FsError(`cannot copy "${fromPath}": not found`, 'FS_NOT_FOUND')
+      if (source.symlinkTarget !== undefined) {
+        // The link is reproduced, not followed: a link pointing outside the
+        // source subtree must not pull that target's content into the copy.
+        await sandbox.commands.run(
+          `ln -s -- ${quoteE2BShellArg(source.symlinkTarget)} ${quoteE2BShellArg(toPath)}`,
+          commandOpts(signal),
+        )
+        return
+      }
+      if (entryType(source) !== 'file') {
+        throw new FsError(`cannot copy "${fromPath}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
+      }
+      const bytes = await sandbox.files.read(fromPath, { format: 'bytes', ...signalOpts(signal) })
+      // The SDK transports bytes as an ArrayBuffer; `slice` on a view always
+      // yields a non-shared one, which is what its narrower parameter type wants.
+      const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+      await sandbox.files.write(toPath, payload, signalOpts(signal))
+    } catch (error: unknown) {
+      throw mapError(error, 'copy', toPath, signal)
+    }
   }
 
   private checkWriteIntent(existing: EntryInfo | undefined, expected: FsWriteIntent | undefined, target: FsTarget): void {

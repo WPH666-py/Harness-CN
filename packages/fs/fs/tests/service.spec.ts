@@ -1,6 +1,7 @@
 /**
  * Tests for the filesystem Service Definition: registration, duplicate-service
- * behavior, disposal, and the branded id factories. The provider primitives and
+ * behavior, disposal, the path-changing operations, and the branded id
+ * factories. The provider primitives and
  * policy live in `dsh-fs-local` and `dsh-fs-observation-policy`; this seam owns only the
  * abstract service contract, so a minimal fake backend exercises it.
  */
@@ -9,12 +10,18 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { FileSystem, FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import type {
+  FsCopyOutcome,
+  FsCreateDirectoryOptions,
+  FsCreateOutcome,
   FsDirEntry,
   FsEditOutcome,
   FsByteWriteOutcome,
   FsEditRequest,
   FsInfo,
+  FsMoveOutcome,
   FsPathInfo,
+  FsRemoveOptions,
+  FsRemoveOutcome,
   FsTarget,
   FsWriteIntent,
   FsWriteOutcome,
@@ -23,6 +30,8 @@ import type {
 /** A minimal in-memory fake implementing the provider primitives. */
 class FakeFileSystem extends FileSystem {
   files = new Map<string, string>()
+  /** Directories this fake creates, so the create/remove contract has something to report a version for. */
+  directories = new Map<string, FsVersion>()
   /** Byte writes keep their own storage so a non-UTF-8 payload is not forced through text. */
   byteFiles = new Map<string, Uint8Array>()
 
@@ -90,6 +99,63 @@ class FakeFileSystem extends FileSystem {
     const after = content.split(edit.oldString).join(edit.newString)
     this.files.set(target.targetKey, after)
     return { version: FsVersion('v3'), before: content, after }
+  }
+
+  override async createDirectory(
+    target: FsTarget,
+    options?: FsCreateDirectoryOptions,
+  ): Promise<FsCreateOutcome> {
+    const existing = this.directories.get(target.targetKey)
+    if (existing !== undefined) {
+      if (options?.recursive === true) return { target, version: existing, type: 'directory' }
+      throw new FsError(`already exists: ${target.displayPath}`, 'FS_ALREADY_EXISTS')
+    }
+    this.directories.set(target.targetKey, FsVersion('d1'))
+    return { target, version: FsVersion('d1'), type: 'directory' }
+  }
+
+  override async createFile(target: FsTarget): Promise<FsCreateOutcome> {
+    if (this.files.has(target.targetKey) || this.directories.has(target.targetKey)) {
+      throw new FsError(`already exists: ${target.displayPath}`, 'FS_ALREADY_EXISTS')
+    }
+    this.files.set(target.targetKey, '')
+    return { target, version: FsVersion('v1'), type: 'file' }
+  }
+
+  override async remove(target: FsTarget, options?: FsRemoveOptions): Promise<FsRemoveOutcome> {
+    if (this.files.delete(target.targetKey)) return { type: 'file' }
+    const children = [...this.files.keys(), ...this.directories.keys()]
+      .filter(key => key.startsWith(`${target.targetKey}/`))
+    if (children.length > 0 && options?.recursive !== true) {
+      throw new FsError(`not empty: ${target.displayPath}`, 'FS_NOT_EMPTY')
+    }
+    for (const key of children) {
+      this.files.delete(key)
+      this.directories.delete(key)
+    }
+    if (!this.directories.delete(target.targetKey)) {
+      throw new FsError(`not found: ${target.displayPath}`, 'FS_NOT_FOUND')
+    }
+    return { type: 'directory' }
+  }
+
+  override async copy(from: FsTarget, to: FsTarget): Promise<FsCopyOutcome> {
+    const content = this.files.get(from.targetKey)
+    if (content === undefined) {
+      throw new FsError(`not found: ${from.displayPath}`, 'FS_NOT_FOUND')
+    }
+    this.files.set(to.targetKey, content)
+    return { target: to, type: 'file' }
+  }
+
+  override async move(from: FsTarget, to: FsTarget): Promise<FsMoveOutcome> {
+    const content = this.files.get(from.targetKey)
+    if (content === undefined) {
+      throw new FsError(`not found: ${from.displayPath}`, 'FS_NOT_FOUND')
+    }
+    this.files.delete(from.targetKey)
+    this.files.set(to.targetKey, content)
+    return { target: to, type: 'file' }
   }
 }
 
@@ -180,6 +246,38 @@ describe('FileSystem provider seam', () => {
     fs.files.set('a.txt', 'hi')
     expect(await fs.lstat('a.txt')).toEqual({ version: 'v1', type: 'file', size: 2 })
     expect(await fs.lstat('missing.txt')).toBeUndefined()
+  })
+
+  it('serves the path-changing operations through the abstract seam', async () => {
+    const ctx = new Context()
+    await ctx.plugin(FakeFileSystem)
+    const fs = ctx.fs as FakeFileSystem
+
+    const created = await fs.createDirectory(await fs.resolve('skills'))
+    expect(created).toMatchObject({ version: 'd1', type: 'directory' })
+    expect((await fs.createDirectory(created.target, { recursive: true })).version).toBe('d1')
+    await expect(fs.createDirectory(created.target)).rejects.toMatchObject({ code: 'FS_ALREADY_EXISTS' })
+
+    const file = await fs.createFile(await fs.resolve('skills/a.txt'))
+    expect(file.type).toBe('file')
+    await expect(fs.createFile(file.target)).rejects.toMatchObject({ code: 'FS_ALREADY_EXISTS' })
+
+    const copied = await fs.copy(file.target, await fs.resolve('skills/b.txt'))
+    expect(await fs.readText(copied.target)).toBe('')
+    const moved = await fs.move(copied.target, await fs.resolve('skills/c.txt'))
+    expect(await fs.stat(file.target)).toBeDefined()
+    expect(await fs.remove(moved.target)).toEqual({ type: 'file' })
+
+    await expect(fs.remove(created.target)).rejects.toMatchObject({ code: 'FS_NOT_EMPTY' })
+  })
+
+  it('rejects a path-changing operation on a target the fake does not hold', async () => {
+    const ctx = new Context()
+    await ctx.plugin(FakeFileSystem)
+    const fs = ctx.fs as FakeFileSystem
+    const missing = await fs.resolve('missing.txt')
+    await expect(fs.copy(missing, await fs.resolve('other.txt'))).rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+    await expect(fs.move(missing, await fs.resolve('other.txt'))).rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
   })
 })
 

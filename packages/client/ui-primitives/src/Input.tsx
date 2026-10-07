@@ -12,7 +12,10 @@ import css from './Input.module.css'
  */
 export function Input({ icon, className, ...rest }: {
   icon?: ReactNode
-  className?: string
+  // Spelled with `undefined` like every other primitive here: a CSS-Modules
+  // lookup is `string | undefined`, and `exactOptionalPropertyTypes` refuses an
+  // explicitly-undefined value against a prop that does not admit one.
+  className?: string | undefined
 } & InputHTMLAttributes<HTMLInputElement>) {
   return (
     <span className={clsx(css.wrap, className)}>

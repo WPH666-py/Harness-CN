@@ -12,18 +12,28 @@ import z from '@deepseek-ai/schemastery'
 import { FileSystem, FsError, FsVersion } from '@deepseek-ai/dsh-fs'
 import type {
   FsByteWriteOutcome,
+  FsCopyOutcome,
+  FsCreateDirectoryOptions,
+  FsCreateOutcome,
   FsDirEntry,
   FsEditOutcome,
   FsEditRequest,
   FsInfo,
+  FsMoveOutcome,
   FsPathInfo,
+  FsRemoveOptions,
+  FsRemoveOutcome,
   FsTarget,
   FsWriteIntent,
   FsWriteOutcome,
 } from '@deepseek-ai/dsh-fs'
 import {
   applyLiteralEdit,
+  copyPath,
+  createDirectory,
+  createFile,
   listDirectory,
+  movePath,
   normalizeLineEndings,
   probe,
   probeNoFollow,
@@ -32,6 +42,7 @@ import {
   readTextForDiff,
   readWholeBytes,
   readWholeText,
+  removePath,
   resolveLocalTarget,
   restoreLineEndings,
   streamWholeText,
@@ -316,6 +327,88 @@ export class LocalFileSystem extends FileSystem {
   private versionAfterWrite(after: { version: FsVersion } | null, target: FsTarget): FsVersion {
     if (after) return after.version
     return FsVersion(`missing:${target.targetKey}`)
+  }
+
+  /**
+   * {@link FileSystem.createDirectory} over the host filesystem. The directory
+   * is created by one `mkdir` (or one recursive `mkdir`), so a failure leaves
+   * no partial directory behind.
+   */
+  override async createDirectory(
+    target: FsTarget,
+    options?: FsCreateDirectoryOptions,
+    signal?: AbortSignal,
+  ): Promise<FsCreateOutcome> {
+    return this.withLock(target.targetKey, async () => {
+      const outcome = await createDirectory(String(target.targetKey), options, signal)
+      return { ...outcome, target: this.outcomeTarget(outcome.target, target) }
+    })
+  }
+
+  /**
+   * {@link FileSystem.createFile} over the host filesystem. The empty file is
+   * published by one exclusive create, so no existing entry is ever replaced.
+   */
+  override async createFile(target: FsTarget, signal?: AbortSignal): Promise<FsCreateOutcome> {
+    return this.withLock(target.targetKey, async () => {
+      const outcome = await createFile(String(target.targetKey), signal)
+      return { ...outcome, target: this.outcomeTarget(outcome.target, target) }
+    })
+  }
+
+  /**
+   * {@link FileSystem.remove} over the host filesystem. One `rm`/`rmdir` call
+   * carries the removal; a non-recursive removal of a directory that still has
+   * entries reports `FS_NOT_EMPTY` from the syscall itself.
+   */
+  override async remove(target: FsTarget, options?: FsRemoveOptions, signal?: AbortSignal): Promise<FsRemoveOutcome> {
+    return removePath(String(target.targetKey), options, signal)
+  }
+
+  /**
+   * {@link FileSystem.copy} over the host filesystem. The destination subtree is
+   * built entry by entry; a failure partway leaves what it had already copied,
+   * because no filesystem can un-copy atomically.
+   */
+  override async copy(from: FsTarget, to: FsTarget, signal?: AbortSignal): Promise<FsCopyOutcome> {
+    return this.withLock(to.targetKey, async () => {
+      const outcome = await copyPath(String(from.targetKey), String(to.targetKey), signal)
+      return { ...outcome, target: this.outcomeTarget(outcome.target, to) }
+    })
+  }
+
+  /**
+   * {@link FileSystem.move} over the host filesystem. One `rename` carries the
+   * move; a cross-device move falls back to a copy followed by a removal of the
+   * source, and both ends are serialized against other mutations of the same
+   * targets.
+   */
+  override async move(from: FsTarget, to: FsTarget, signal?: AbortSignal): Promise<FsMoveOutcome> {
+    return this.withLocks([from.targetKey, to.targetKey], async () => {
+      const outcome = await movePath(String(from.targetKey), String(to.targetKey), signal, this.internals)
+      return { ...outcome, target: this.outcomeTarget(outcome.target, to) }
+    })
+  }
+
+  /** Run `op` holding every named key at once. */
+  private async withLocks<T>(targetKeys: readonly string[], op: () => Promise<T>): Promise<T> {
+    const unique = [...new Set(targetKeys)].sort()
+    const run = async (index: number): Promise<T> => {
+      const key = unique[index]
+      /* v8 ignore next -- the recursion stops at the length of a list this call built. */
+      if (key === undefined) return op()
+      return this.withLock(key, () => run(index + 1))
+    }
+    return run(0)
+  }
+
+  /**
+   * The display path of an operation's destination, which is the path the
+   * caller resolved — a created entry may have been reached through a symlinked
+   * ancestor, and the display path must keep naming the caller's path.
+   */
+  private outcomeTarget(resolved: { targetKey: FsTarget['targetKey'] }, requested: FsTarget): FsTarget {
+    return { targetKey: resolved.targetKey, displayPath: requested.displayPath }
   }
 }
 

@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'
 import SkillRegistry from '@deepseek-ai/dsh-skill'
-import { FileSystem, FsError, FsVersion, type FsByteWriteOutcome, type FsDirEntry, type FsEditOutcome, type FsEditRequest, type FsInfo, type FsPathInfo, type FsTarget, type FsWriteOutcome } from '@deepseek-ai/dsh-fs'
+import { FileSystem, FsError, FsVersion, type FsByteWriteOutcome, type FsCopyOutcome, type FsCreateDirectoryOptions, type FsCreateOutcome, type FsDirEntry, type FsEditOutcome, type FsEditRequest, type FsInfo, type FsMoveOutcome, type FsPathInfo, type FsRemoveOptions, type FsRemoveOutcome, type FsTarget, type FsWriteOutcome } from '@deepseek-ai/dsh-fs'
 import * as SkillFileSystem from '../src/index.ts'
 
 /** Every temp dir created by this file, removed after each test. */
@@ -152,6 +152,34 @@ class TestFileSystem extends FileSystem {
   }
 
   override async editText(_target: FsTarget, _request: FsEditRequest): Promise<FsEditOutcome> {
+    throw new Error('not needed in skill tests')
+  }
+
+  override async createDirectory(
+    _target: FsTarget,
+    _options?: FsCreateDirectoryOptions,
+    _signal?: AbortSignal,
+  ): Promise<FsCreateOutcome> {
+    throw new Error('not needed in skill tests')
+  }
+
+  override async createFile(_target: FsTarget, _signal?: AbortSignal): Promise<FsCreateOutcome> {
+    throw new Error('not needed in skill tests')
+  }
+
+  override async remove(
+    _target: FsTarget,
+    _options?: FsRemoveOptions,
+    _signal?: AbortSignal,
+  ): Promise<FsRemoveOutcome> {
+    throw new Error('not needed in skill tests')
+  }
+
+  override async copy(_from: FsTarget, _to: FsTarget, _signal?: AbortSignal): Promise<FsCopyOutcome> {
+    throw new Error('not needed in skill tests')
+  }
+
+  override async move(_from: FsTarget, _to: FsTarget, _signal?: AbortSignal): Promise<FsMoveOutcome> {
     throw new Error('not needed in skill tests')
   }
 }

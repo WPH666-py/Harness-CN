@@ -185,6 +185,60 @@ export interface FsEditOutcome {
 }
 
 /**
+ * Options for {@link FileSystem.createDirectory}. Omitting them creates exactly
+ * one directory and fails unless its parent already exists.
+ */
+export interface FsCreateDirectoryOptions {
+  /**
+   * Create missing ancestors as well. An existing directory at the target is
+   * then a success, not `FS_ALREADY_EXISTS`; a file or symlink there still
+   * fails.
+   */
+  readonly recursive?: boolean
+}
+
+/**
+ * Options for {@link FileSystem.remove}. Omitting them removes one file, or one
+ * empty directory.
+ */
+export interface FsRemoveOptions {
+  /** Remove a directory and everything beneath it. A file target ignores it. */
+  readonly recursive?: boolean
+}
+
+/** Outcome of {@link FileSystem.createDirectory} and {@link FileSystem.createFile}. */
+export interface FsCreateOutcome {
+  /** The target that was created, resolved by the provider. */
+  readonly target: FsTarget
+  /** Opaque version of the created entry right after creation. */
+  readonly version: FsVersion
+  /** Whether a directory or an empty regular file was created. */
+  readonly type: 'file' | 'directory'
+}
+
+/** Outcome of {@link FileSystem.remove}. Nothing survives at the target. */
+export interface FsRemoveOutcome {
+  /** Whether a regular file or a directory was removed. */
+  readonly type: 'file' | 'directory'
+}
+
+/** Outcome of {@link FileSystem.copy}. */
+export interface FsCopyOutcome {
+  /** The destination target, resolved by the provider. */
+  readonly target: FsTarget
+  /** Whether a regular file or a whole directory subtree was copied. */
+  readonly type: 'file' | 'directory'
+}
+
+/** Outcome of {@link FileSystem.move}. */
+export interface FsMoveOutcome {
+  /** The target at its new location, resolved by the provider. */
+  readonly target: FsTarget
+  /** Whether a regular file or a whole directory subtree was moved. */
+  readonly type: 'file' | 'directory'
+}
+
+/**
  * Stable, machine-routable codes for filesystem failures. Carried on
  * {@link FsError}; the tool registry exposes `{ name, code }` on `isError`
  * results so retry/permission/UI layers can branch without parsing messages.
@@ -203,6 +257,10 @@ export type FsErrorCode =
   | 'FS_AMBIGUOUS_EDIT'
   | 'FS_EDIT_NOT_FOUND'
   | 'FS_ABORTED'
+  /** The destination of a create, copy, or move already exists. */
+  | 'FS_ALREADY_EXISTS'
+  /** A non-recursive directory removal found entries beneath the target. */
+  | 'FS_NOT_EMPTY'
 
 /**
  * Typed filesystem error. Extends {@link HarnessError} so it carries a stable

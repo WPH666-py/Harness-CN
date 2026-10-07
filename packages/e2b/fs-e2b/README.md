@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-fs-e2b` runs the agent's file operations inside the remote sandbox: the agent can read files, list directories, write new files, overwrite or edit existing ones, and get accurate metadata — all in the same remote world where its commands run. It needs no configuration; mounting it moves file work off the host machine. Use it together with `dsh-e2b` and `dsh-subprocess-e2b` so files and commands share one remote working directory. The host machine's files are never touched, and results look to the model exactly like local file results. Choose the local filesystem package instead when files should live on the host.
+`dsh-fs-e2b` runs the agent's file operations inside the remote sandbox: read files, list directories, write, overwrite or edit, create directories, remove entries, copy subtrees, move or rename entries, and read accurate metadata — all in the same remote world where its commands run. It needs no configuration: mounting it moves file work off the host. Use it with `dsh-e2b` and `dsh-subprocess-e2b` so files and commands share one remote working directory. The host's files are never touched, and results reach the model as local file results do. Choose the local filesystem package when files should live on the host.
 
 ## Table of Contents
 
@@ -50,6 +50,10 @@ The agent can read a file's whole contents, stream large files, or read raw byte
 
 The agent can create files, overwrite them, or edit them by replacing a literal piece of text (optionally every occurrence), and can ask for a file to be created only if it does not exist yet. A write lands completely or not at all — a failed write never leaves a partial file. If the file changed since the agent last read it, the write is refused rather than clobbering the newer content, so two processes cannot overwrite each other's work unseen.
 
+### Creating, removing, copying, and moving
+
+The agent can create a directory or an empty file, remove a file or a directory, copy a file or a whole subtree, and move or rename one. A create, a copy, or a move whose destination is occupied is refused and changes nothing. A directory removal without `recursive` is refused when the directory still has entries. A copy reproduces a link as a link instead of following it, so nothing outside the copied subtree is pulled in. A move inside one remote filesystem is one rename; when the source and the destination are on different filesystems the sandbox copies the subtree and then removes the source, so the destination is complete before the source is touched and a failure of that removal leaves both present.
+
 ### Paths in the sandbox
 
 Relative paths resolve against the caller's working directory or the sandbox's shared working directory, and are reported as the POSIX paths they are in the sandbox — what the agent reads and writes matches exactly what its commands see.
@@ -74,7 +78,7 @@ This section explains the design decisions behind the provider and points at the
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | Plugin entry: `E2BFileSystem` provider, canonicalization, reads, atomic writes, error mapping |
+| [`src/index.ts`](src/index.ts) | Plugin entry: `E2BFileSystem` provider, canonicalization, reads, atomic writes, the create/remove/copy/move operations, error mapping |
 | — | No runtime invariant companion is published; each operation returns the E2B controller's committed result directly, with no independent event or cache to cross-check. |
 
 ### Canonical paths and transport framing
@@ -88,6 +92,10 @@ Writes create a random sibling staging directory, set it to mode `0700` before u
 ### Failure and cancellation
 
 E2B not-found, permission, abort, and other controller failures map to the existing `FsError` codes (`FS_NOT_FOUND`, `FS_PERMISSION_DENIED`, `FS_ABORTED`, `FS_IO_ERROR`), while text and byte reads add `FS_NOT_TEXT` and `FS_TOO_LARGE`. Cancellation is checked at SDK request boundaries and immediately before publication, but the signal is never forwarded into the rename or guarded-link commit, so cancellation cannot interrupt atomic publication or turn a committed write into a reported failure.
+
+### Path-changing operations
+
+The controller exposes only a recursive directory create, so `createDirectory` without `recursive` verifies the parent and the target itself before delegating, and an occupied target is `FS_ALREADY_EXISTS` rather than a controller error. `createFile` probes first and then writes empty content, so an occupied name is refused without replacing anything. `remove` decides a non-recursive directory removal from a listing the provider takes itself, which keeps `FS_NOT_EMPTY` from depending on how the controller phrases a recursive remove. `copy` walks the source with the same one-level listing the provider uses elsewhere, creates each directory through `makeDir`, uploads each regular file as bytes, and recreates each link with `ln -s` instead of following it. `move` is the controller's `rename`; when the controller reports a cross-device failure the provider copies the subtree and then removes the source, and any other rename failure is mapped and propagated with the source untouched.
 
 </details>
 
@@ -126,6 +134,9 @@ These limits define when the provider is a poor fit or needs special operational
 - **Reads reopen canonical targets by path** — a concurrent remote path replacement between resolution and stream opening is not fenced by a stable file handle; no observed product defect justifies a provider-specific bounded-read protocol in this POC.
 - **Whole-file mutation costs remain** — overwrite diffs and literal edits read complete files into host memory, and every operation incurs E2B controller latency.
 - **The POC targets E2B's default Linux image** — it relies on GNU `realpath`/`base64`/`chmod`, same-filesystem rename, streaming reads, and metadata extended attributes; custom templates are outside this POC.
+- **The controller exposes no non-recursive directory create** — `createDirectory` therefore decides the non-recursive case with its own probes, and the recursive case delegates the whole ancestor walk to the sandbox.
+- **A cross-device move and a subtree copy are not atomic** — a move that cannot rename copies and then removes the source, and a copy uploads entry by entry, so either can leave a partial or doubled result that the caller must reconcile.
+- **Cross-device detection reads the controller's message** — the pinned SDK exposes no distinct error class for a cross-filesystem rename, so the provider recognizes it from the failure text; a template that rephrases that message would fall back to the copy path only if the text still names the condition.
 
 <a id="dev-note"></a>
 ### Dev Note

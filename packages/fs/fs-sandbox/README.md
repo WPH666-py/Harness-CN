@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-fs-sandbox` confines model file writes and edits according to each session's sandbox mode while preserving the local filesystem's read behavior. In `read-only`, it rejects every mutation; in `workspace-write`, it permits targets only inside the session workspace or a platform temporary root; in `danger-full-access`, it does not restrict mutations. Use it instead of `fs-local` with `ctx.sandboxPolicy` when sessions need workspace-confined file changes. Denied operations return `FS_SANDBOX_DENIED`, which filesystem tools present with the active mode and a same-turn escalation hint.
+`dsh-fs-sandbox` confines model file writes, edits, and path changes according to each session's sandbox mode while preserving the local filesystem's read behavior. In `read-only`, it rejects every mutation; in `workspace-write`, it permits targets only inside the session workspace or a platform temporary root; in `danger-full-access`, it does not restrict mutations. Use it instead of `fs-local` with `ctx.sandboxPolicy` when sessions need workspace-confined file changes. Denied operations return `FS_SANDBOX_DENIED`, which filesystem tools present with the active mode and a same-turn escalation hint.
 
 ## Table of Contents
 
@@ -25,7 +25,7 @@ English | [中文](README.zh.md)
 <a id="use-this-package"></a>
 ## Use this package
 
-Mount this backend instead of `fs-local` when the model's file writes and edits must be confined by the session's sandbox mode, while reads stay unconfined. The fence applies per call: the tool layer resolves the calling session's mode and workspace root into the same policy the bash runner receives, so the filesystem and shell families never confine to different roots.
+Mount this backend instead of `fs-local` when the model's file writes, edits, and path changes must be confined by the session's sandbox mode, while reads stay unconfined. The fence applies per call: the tool layer resolves the calling session's mode and workspace root into the same policy the bash runner receives, so the filesystem and shell families never confine to different roots.
 
 ### Minimal composition
 
@@ -44,6 +44,12 @@ The backend's config is the local backend's unchanged (`cwd` resolution default 
 ### How the fence behaves
 
 The effective mode comes from the calling session's override or escalation grant, falling back to the deployment default when neither is in force. `read-only` denies every mutation with the structured `FS_SANDBOX_DENIED`. `workspace-write` allows a mutation only when the target canonicalizes under the workspace root or a platform temp area (`/tmp`, `os.tmpdir()`) — the same writable set the Seatbelt profile grants. `danger-full-access` delegates unfenced.
+
+### What the fence covers
+
+Every operation that changes a path is fenced, and an operation with two ends is fenced on both of them. `createDirectory` and `createFile` are checked on the entry they create; `remove` is checked on the entry it removes, so `recursive` cannot widen the fence — it decides the depth of the removal, not its root. `copy` is checked on the source and the destination, because the destination is the only end it writes. `move` is checked on BOTH ends, because it removes the source as well: without that check a move would be a way to delete an entry the policy protects, and a move into the workspace would import one from outside it. All ends are re-canonicalized and checked before any of them is returned, so a two-ended operation never begins with one end validated and the other refused.
+
+The `read-only` denial is decided before any path is resolved, so a denied call performs no filesystem I/O beyond the resolution the caller already did.
 
 ### Observable success and failures
 
@@ -67,12 +73,12 @@ The fence is a policy check in trusted code over a model-controlled path — not
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`: mode fence on `writeText`/`editText`, `sandboxMode` fact |
+| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`: mode fence on `writeText`/`writeBytes`/`editText` and on `createDirectory`/`createFile`/`remove`/`copy`/`move`, `sandboxMode` fact |
 | [`src/containment.ts`](src/containment.ts) | Ancestor containment check with lexical fast path and identity-based fallback |
 
 ### How a mutation is fenced
 
-Each mutation resolves the per-call policy (`danger-full-access` returns the caller's target untouched; `read-only` throws `FS_SANDBOX_DENIED`), then for `workspace-write` re-canonicalizes the target immediately and requires containment under one of the writable roots derived from the single `writableRoots` function — the same set the Seatbelt profile grants, so the fs fence and the bash runner cannot drift. The fresh target is the one mutated, so a symlink ancestor swapped since the tool resolved it is caught.
+Each mutation resolves the per-call policy (`danger-full-access` returns the caller's target untouched; `read-only` throws `FS_SANDBOX_DENIED`), then for `workspace-write` re-canonicalizes the target immediately and requires containment under one of the writable roots derived from the single `writableRoots` function — the same set the Seatbelt profile grants, so the fs fence and the bash runner cannot drift. The fresh target is the one mutated, so a symlink ancestor swapped since the tool resolved it is caught. A two-ended operation resolves and checks every end before returning any of them, so a `move` whose source is contained but whose destination is not is refused without mutating either end.
 
 ### Threat model
 
@@ -103,7 +109,7 @@ Read these pages when the package-level contract is not enough. They move from t
 
 #### What the model sees
 
-The policy owner contributes capability-neutral `sandbox:policy` context. Indirectly, `dsh-tool-fs` renders this backend's `FS_SANDBOX_DENIED` refusals as the `[sandbox: file access denied under <mode> mode]` marker plus the same-turn escalation hint.
+The policy owner contributes capability-neutral `sandbox:policy` context. Indirectly, `dsh-tool-fs` renders this backend's `FS_SANDBOX_DENIED` refusals as the `[sandbox: file access denied under <mode> mode]` marker plus the same-turn escalation hint. The path-changing operations are not model-facing tools today, so their denials reach a Client only through the Host service that called them.
 
 #### Token effect
 
@@ -123,6 +129,8 @@ These limits define when the sandbox backend is a poor fit or needs special oper
 - **A policy fence, not a kernel boundary** — the check is trusted code over a model-controlled path, so the residual resolve-to-syscall TOCTOU is narrowed (by the in-place re-canonicalization) but not eliminated; adversarial host processes are out of scope. Kernel-grade isolation of untrusted code stays `ctx.shell`'s.
 - **Fence-vs-runner parity is derived from one owner** — the writable set comes from `writableRoots`, shared with the Seatbelt profile; a runner profile that defines its writable set elsewhere would drift.
 - **Requires `ctx.sandboxPolicy`** — tools use it to resolve each session policy and the backend uses it for agentless-call fallbacks; the backend does not confine without it composed.
+- **The fence decides the root of a removal, not its depth** — `remove` with `recursive: true` removes everything beneath a contained target, so an entry that a symlink or a mount placed under the target is removed without a separate check.
+- **`copy` reads beyond the writable roots by design** — only the destination is fenced, matching the read behavior this backend leaves unconfined; a copy can therefore bring content from outside the workspace into it.
 
 <a id="dev-note"></a>
 ### Dev Note

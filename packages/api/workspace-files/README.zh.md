@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-使用本包可从 Web Client 预览 Session 文件系统允许读取的文件。它按页读取 UTF-8 文本、按有界窗口或完整文件读取原始字节、从基文件目录解析关联文件，并报告文件元数据。文件读取可以指向工作区外路径；目录列举与已埋点的文件系统观察仍限定于工作区。本服务不提供修改操作。
+使用本包可从 Web Client 预览 Session 文件系统允许读取的文件，并在该 Session 的工作区内增删条目。它按页读取 UTF-8 文本、按有界窗口或完整文件读取原始字节、从基文件目录解析关联文件，并报告文件元数据。文件读取可以指向工作区外路径；目录列举、已埋点的文件系统观察与每一项变更仍限定于工作区。本服务还会在工作区内创建、删除、复制和移动条目。
 
 ## 目录
 
@@ -36,10 +36,27 @@ kind: "package-reference"
 | `readRelated(path, relativePath)` | `WorkspaceFileBytes` | Host 从基文件目录解析出的文件的完整字节 |
 | `list(path)` | `WorkspaceDirectoryListing { path, entries, truncated }` | 一个目录的直接子项 |
 | `changes()` | `WorkspaceFileWatchFrame` 流 | 订阅就绪确认，随后为工作区根内的文件系统观察 |
+| `createDirectory(path, name)` | `WorkspaceFileMutation { path, absolutePath, version, bytes? }` | 在 `path` 内新建一个名为 `name` 的目录 |
+| `createFile(path, name)` | `WorkspaceFileMutation` | 在 `path` 内新建一个名为 `name` 的空文件 |
+| `remove(path, { recursive?, contentsOnly? })` | `WorkspaceFileRemoval { sessionId, path }` | 一个条目，或一个目录所包含的条目 |
+| `copy(fromPath, toPath)` | `WorkspaceFileMutation` | 一个文件或一棵目录子树，落在不存在的目标上 |
+| `move(fromPath, toPath)` | `WorkspaceFileMutation` | 一个文件或一棵目录子树，重命名或改变位置 |
 
 ### 寻址与路径
 
 `read`、`readBytes`、`readAll`、`readRelated` 与 `stat` 接受绝对路径或相对于所选 Session 工作区根的路径。组合文件系统决定路径是否可读；本服务不额外要求文件读取限定于工作区。`readRelated` 从基文件所在目录解析相对文件系统路径，基文件或目标文件位于工作区外时同样适用。这些方法以文件系统执行环境中的绝对路径报告文件。`list` 仍限定于工作区，并以相对于该根的路径报告被列举目录。`changes` 同样只报告工作区根内已埋点的文件系统观察。
+
+### 变更操作
+
+每一项变更都限定于工作区。Host 解析 Session 工作区根，并相对该根解析目标；除非解析出的目标是该根本身或其后代，否则以 `workspace-file/outside-workspace` 拒绝该调用。路径可以是绝对路径或相对于工作区根的路径，与 `list` 接受的路径完全一致。
+
+`createDirectory` 与 `createFile` 接收一个父目录外加一个 `name`，该名称必须是一个路径段：不含 `/`、不含 `\`、不是 `.` 或 `..`、不为空、不是空白，且首尾没有空白。所创建条目的 `path` 是父目录的工作区路径与 `name` 以 `/` 连接。名称已被占用时以 `workspace-file/exists` 失败；不做任何合并或覆盖。父目录不是目录时以 `workspace-file/not-directory` 失败，父目录不存在时以 `workspace-file/not-found` 失败。
+
+`remove` 删除 `path` 处的条目。仍包含条目的目录要求 `recursive: true`；未提供时调用以 `workspace-file/not-empty` 失败，且不删除任何内容。`contentsOnly: true` 删除目标目录所包含的内容并保留该目录本身，工作区根正是这样清空的；删除根本身是 `gateway/bad-request`。
+
+`copy` 与 `move` 要求目标不存在：`toPath` 已被占用时以 `workspace-file/exists` 失败，不会移动或复制任何内容。目标位于源之内是 `gateway/bad-request`，因为那要么会把一棵子树复制进它自己，要么会让被移动的目录脱离它自己的父目录。源与目标都必须位于工作区内。同一文件系统内的移动就是一次重命名；两端分处不同文件系统时，后端先复制子树再删除源，因此移动跨文件系统不是原子的，该删除失败时可能把源留在原处。
+
+每个变更动词都会返回结果所在的位置。`WorkspaceFileMutation` 携带生成条目的 `path`（相对于工作区根、以 `/` 连接）、`absolutePath`、`version`，以及普通文件的 `bytes`；`WorkspaceFileRemoval` 携带该调用运行所在的 `sessionId`，以及内容被清空或本身被删除的工作区 `path`。
 
 ### 分页
 
@@ -70,7 +87,7 @@ kind: "package-reference"
 
 ### 失败
 
-每种失败都是一个带类型化 details 的 `RemoteError` 代码，声明于 [`src/types.ts`](src/types.ts)：`workspace-file/not-found`、`workspace-file/outside-workspace`（仅目录列举）、`workspace-file/too-large`（带 `limit`，即适用的页、窗口或完整文件上限）、`workspace-file/not-text`、`workspace-file/not-regular-file`（`kind` 为 `directory`、`symlink` 或 `other`）以及 `workspace-file/not-directory`（`kind` 为 `file`、`symlink` 或 `other`）。调用方按代码分支，绝不按消息文本。
+每种失败都是一个带类型化 details 的 `RemoteError` 代码，声明于 [`src/types.ts`](src/types.ts)：`workspace-file/not-found`、`workspace-file/outside-workspace`（目录列举与每一项变更）、`workspace-file/too-large`（带 `limit`，即适用的页、窗口或完整文件上限）、`workspace-file/not-text`、`workspace-file/not-regular-file`（`kind` 为 `directory`、`symlink` 或 `other`）、`workspace-file/not-directory`（`kind` 为 `file`、`symlink` 或 `other`），以及变更新增的两个——目标已被占用时的 `workspace-file/exists`，与非递归删除非空目录时的 `workspace-file/not-empty`。路径格式错误、名称不是一个路径段、以工作区根作为复制或移动的源，以及目标嵌套在自己的源之内，都是 `gateway/bad-request`。调用方按代码分支，绝不按消息文本。
 
 ### Client 文件资源
 
@@ -92,13 +109,13 @@ kind: "package-reference"
 
 ### 设计概念
 
-经 `ctx.fs` 的读取使用后端的读取权限；沙箱后端限制写与编辑，而不限制读取。Typert lookup 从 live Session header 或持久层的 header-only `stat` 导出 `WorkspaceFileScope`，所以 cold subagent Session 不需要激活 Agent 或读取事件正文。本服务增加普通文件检查与有界传输，工作区包含要求只属于目录列举与变更观察。页从 `streamText` 切出，后者逐块解码并拒绝非 UTF-8：切页器对窗口之前的行只计数不保留，对窗口内的每个片段先按字节上限验收再缓冲，并在窗口之后的第一个字符处返回。流之前的一次 `stat` 给出页所报告的版本与大小。
+经 `ctx.fs` 的读取使用后端的读取权限；沙箱后端限制变更，而不限制读取。Typert lookup 从 live Session header 或持久层的 header-only `stat` 导出 `WorkspaceFileScope`，所以 cold subagent Session 不需要激活 Agent 或读取事件正文。本服务增加普通文件检查与有界传输，工作区包含要求属于目录列举、变更观察与每一个变更动词。变更只解析一次目标，并复用 `list` 的 `contains` 判定，而不另立第二套包含机制；创建则用受限父目录的进程路径加一个已校验路径段拼出子路径，因此该名称的任何写法都无法让结果移出该父目录。页从 `streamText` 切出，后者逐块解码并拒绝非 UTF-8：切页器对窗口之前的行只计数不保留，对窗口内的每个片段先按字节上限验收再缓冲，并在窗口之后的第一个字符处返回。流之前的一次 `stat` 给出页所报告的版本与大小。
 
 ### 源码地图
 
 | 文件 | 职责 |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `WorkspaceFiles`：`workspaceFiles` 服务与 Remote 命名空间、`Config`、四道关、切页器、`read`、`readBytes`、`readAll`、`readRelated`、`stat`、`list` |
+| [`src/index.ts`](src/index.ts) | `WorkspaceFiles`：`workspaceFiles` 服务与 Remote 命名空间、`Config`、四道关、切页器、`read`、`readBytes`、`readAll`、`readRelated`、`stat`、`list`、`createDirectory`、`createFile`、`remove`、`copy`、`move` |
 | [`src/changes.ts`](src/changes.ts) | `WorkspaceChangeFeed`：`fs/observed` 订阅与每个打开的 `changes` generation 各一条队列 |
 | [`src/types.ts`](src/types.ts) | 线路类型与 `RemoteErrorDetailsMap` 错误码，以 `./types` 发布给 Client 包 |
 | [`src/client/index.ts`](src/client/index.ts)、[`provider.ts`](src/client/provider.ts)、[`change-feed.ts`](src/client/change-feed.ts) | 浏览器插件、文件元数据与每 Session 变更流 |

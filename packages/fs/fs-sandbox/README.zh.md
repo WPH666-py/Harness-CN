@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-fs-sandbox` 按各会话的沙箱模式限制模型对文件的写入与编辑，同时保留本地文件系统的读取行为。`read-only` 拒绝所有变更；`workspace-write` 只允许目标位于会话工作区或平台临时根目录内；`danger-full-access` 不限制变更。当会话需要将文件变更限制在工作区内时，使用它代替 `fs-local`，并加载 `ctx.sandboxPolicy`。被拒绝的操作返回 `FS_SANDBOX_DENIED`，文件系统工具会显示当前模式和同轮次升级提示。
+`dsh-fs-sandbox` 按各会话的沙箱模式限制模型对文件的写入、编辑以及路径变更，同时保留本地文件系统的读取行为。`read-only` 拒绝所有变更；`workspace-write` 只允许目标位于会话工作区或平台临时根目录内；`danger-full-access` 不限制变更。当会话需要将文件变更限制在工作区内时，使用它代替 `fs-local`，并加载 `ctx.sandboxPolicy`。被拒绝的操作返回 `FS_SANDBOX_DENIED`，文件系统工具会显示当前模式和同轮次升级提示。
 
 ## 目录
 
@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-当模型的文件写入与编辑必须受会话沙箱模式约束、而读取保持不受约束时，挂载此后端以替代 `fs-local`。围栏按调用生效：工具层把调用会话的模式与工作区根目录解析为与 bash runner 收到的相同策略，因此文件系统与 shell 两个能力族绝不会约束到不同根目录。
+当模型的文件写入、编辑以及路径变更必须受会话沙箱模式约束、而读取保持不受约束时，挂载此后端以替代 `fs-local`。围栏按调用生效：工具层把调用会话的模式与工作区根目录解析为与 bash runner 收到的相同策略，因此文件系统与 shell 两个能力族绝不会约束到不同根目录。
 
 ### 最小组合
 
@@ -44,6 +44,12 @@ kind: "package-reference"
 ### 围栏行为
 
 有效模式来自调用会话的覆盖值或升级授权，两者都未生效时才回退到部署默认值。`read-only` 以结构化 `FS_SANDBOX_DENIED` 拒绝所有变更。`workspace-write` 只允许目标规范化后位于工作区根目录或平台临时区域（`/tmp`、`os.tmpdir()`）之下的变更——与 Seatbelt profile 授权的可写集合相同。`danger-full-access` 不加围栏直接委托。
+
+### 围栏覆盖哪些操作
+
+每一个改变路径的操作都被围栏，而有两端的操作两端都被围栏。`createDirectory` 与 `createFile` 检查它们创建的那个条目；`remove` 检查它删除的那个条目，因此 `recursive` 无法放宽围栏——它决定的是删除的深度，不是删除的根。`copy` 同时检查源与目标，因为目标才是它唯一写入的一端。`move` 检查**两端**，因为它同时删除源：少了这道检查，移动就成了删除策略所保护条目的途径，而把外部条目移进工作区也会成为一条通路。所有端都在任何一端被返回之前重新规范化并检查，因此有两端的操作绝不会出现「一端已通过、另一端被拒」就开工的情况。
+
+`read-only` 的拒绝在任何路径被解析之前就已判定，因此被拒的调用除了调用方自己已经做过的解析之外不产生任何文件系统 I/O。
 
 ### 可观察的成功与失败
 
@@ -67,12 +73,12 @@ kind: "package-reference"
 
 | 文件 | 职责 |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`：`writeText`/`editText` 上的模式围栏、`sandboxMode` 事实 |
+| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`：`writeText`/`writeBytes`/`editText` 以及 `createDirectory`/`createFile`/`remove`/`copy`/`move` 上的模式围栏、`sandboxMode` 事实 |
 | [`src/containment.ts`](src/containment.ts) | 祖先包含检查，带词法快速路径与基于身份的兜底 |
 
 ### 变更如何被围栏
 
-每次变更先解析按调用策略（`danger-full-access` 原样返回调用方目标；`read-only` 抛出 `FS_SANDBOX_DENIED`），`workspace-write` 则立即重新规范化目标，并要求它位于由唯一的 `writableRoots` 函数派生的某个可写根之下——与 Seatbelt profile 授权的集合相同，因此 fs 围栏与 bash runner 不会漂移。被变更的正是这个新目标，因此工具解析后被替换的符号链接祖先也会被发现。
+每次变更先解析按调用策略（`danger-full-access` 原样返回调用方目标；`read-only` 抛出 `FS_SANDBOX_DENIED`），`workspace-write` 则立即重新规范化目标，并要求它位于由唯一的 `writableRoots` 函数派生的某个可写根之下——与 Seatbelt profile 授权的集合相同，因此 fs 围栏与 bash runner 不会漂移。被变更的正是这个新目标，因此工具解析后被替换的符号链接祖先也会被发现。有两端的操作会在返回任何一端之前把每一端都解析并检查，因此「源在范围内、目标不在」的 `move` 会在两端都没有被改动的情况下被拒。
 
 ### 威胁模型
 
@@ -103,7 +109,7 @@ kind: "package-reference"
 
 #### 模型看到的内容
 
-策略归属方贡献与具体能力无关的 `sandbox:policy` 上下文。作为间接影响，`dsh-tool-fs` 会把本后端的 `FS_SANDBOX_DENIED` 拒绝渲染为 `[sandbox: file access denied under <mode> mode]` 标记和同轮次升级提示。
+策略归属方贡献与具体能力无关的 `sandbox:policy` 上下文。作为间接影响，`dsh-tool-fs` 会把本后端的 `FS_SANDBOX_DENIED` 拒绝渲染为 `[sandbox: file access denied under <mode> mode]` 标记和同轮次升级提示。变更路径的操作目前不是面向模型的工具，因此它们的拒绝只会经由调用它们的 Host 服务到达客户端。
 
 #### Token 影响
 
@@ -123,6 +129,8 @@ kind: "package-reference"
 - **策略围栏，而非内核边界**：该检查是可信代码处理模型控制的路径，因此解析到系统调用之间残留的 TOCTOU 会被原位重新规范化缩小，但不会消除；对抗性宿主进程不在范围内。不可信代码的内核级隔离仍属于 `ctx.shell`。
 - **围栏与 runner 的一致性由单一所有方派生**：可写集合来自 `writableRoots`，该函数与 Seatbelt profile 共享；在其他位置定义可写集合的 runner profile 会发生漂移。
 - **要求 `ctx.sandboxPolicy`**：工具使用它解析每个会话策略，后端用它处理无 agent（智能体）调用的回退；未组合该服务时，后端不会实施约束。
+- **围栏决定的是删除的根，不是删除的深度**：带 `recursive: true` 的 `remove` 会删掉已通过围栏的目标之下的一切，因此由符号链接或挂载点放进该目标下的条目会被一并删除，而不会单独检查。
+- **`copy` 按设计会读取可写根之外的内容**：只有目标端受围栏约束，与该后端本就放任的读取行为一致；因此复制可以把工作区之外的内容带进来。
 
 <a id="dev-note"></a>
 ### 开发备注

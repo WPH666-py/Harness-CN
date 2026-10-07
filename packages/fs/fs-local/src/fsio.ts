@@ -7,11 +7,19 @@
 
 import { randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { chmod, link, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises'
+import { chmod, copyFile, link, lstat, mkdir, open, readFile, readdir, readlink, realpath, rename, rm, rmdir, stat, symlink, writeFile } from 'node:fs/promises'
 import type { BigIntStats, Dirent, Stats } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { TextDecoder } from 'node:util'
 import { FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
+import type {
+  FsCopyOutcome,
+  FsCreateDirectoryOptions,
+  FsCreateOutcome,
+  FsMoveOutcome,
+  FsRemoveOptions,
+  FsRemoveOutcome,
+} from '@deepseek-ai/dsh-fs'
 import { copyFileDaclWin32, replaceFileWin32 } from './win32.ts'
 
 const BINARY_SAMPLE_BYTES = 8192
@@ -34,6 +42,21 @@ function isEEXIST(error: unknown): boolean {
  */
 function isENOTDIR(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOTDIR'
+}
+
+/**
+ * The errno a directory removal reports when entries are still beneath the
+ * path. POSIX reports `ENOTEMPTY`; a plain `EEXIST` is left to the
+ * already-exists arm, because the recursive `mkdir` and `rm` paths raise it for
+ * an occupied destination rather than for a non-empty directory.
+ */
+function isNotEmptyDirectory(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOTEMPTY'
+}
+
+/** The two ends of a move are on different filesystems, so no rename can join them. */
+function isEXDEV(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'EXDEV'
 }
 
 function isAbortError(error: unknown): boolean {
@@ -100,6 +123,8 @@ export interface FsIoInternals {
   inspectTemp?: (paths: { stagingDir: string; tempPath: string }) => void | Promise<void>
   /** Test hook after raw-read stat preflight and before bounded content I/O. */
   inspectReadBytesAfterStat?: (target: LocalTarget) => void | Promise<void>
+  /** Override the rename boundary, so the cross-device fallback is reachable without a second mounted filesystem. */
+  renameFile?: (from: string, to: string) => Promise<void>
 }
 
 /** A resolved local path: the absolute path shown to callers and its realpath identity. */
@@ -655,6 +680,305 @@ export async function writeFileAtomic(
     if (!stagingCreated) throw failure
     return removeStagingDirOrThrow(stagingDir, failure, removeStagingDir)
   }
+}
+
+// --- Path-changing operations ---
+
+/**
+ * Probe that refuses a real metadata fault instead of reporting absence. The
+ * listing path already does this; the create paths need the same distinction
+ * because a permission error would otherwise read as "absent parent" and a
+ * `recursive` creation would then walk past it.
+ */
+async function probeOrThrow(absolutePath: string, displayPath: string, verb: string): Promise<PathInfo | null> {
+  try {
+    return await probe(absolutePath)
+  } catch (error: unknown) {
+    throw new FsError(`cannot ${verb} "${displayPath}": ${errorMessage(error)}`, 'FS_IO_ERROR', { cause: error })
+  }
+}
+
+/** Translate a raw Node failure from a path-changing syscall into the seam's error taxonomy. */
+function mutationError(error: unknown, verb: string, displayPath: string): FsError {
+  /* v8 ignore next -- defensive pass-through for a nested helper that already produced a structured FsError. */
+  if (error instanceof FsError) return error
+  if (isAbortError(error)) return new FsError(`${verb} aborted`, 'FS_ABORTED', { cause: error })
+  if (isENOENT(error) || isENOTDIR(error)) {
+    return new FsError(`cannot ${verb} "${displayPath}": not found`, 'FS_NOT_FOUND', { cause: error })
+  }
+  if (isNotEmptyDirectory(error)) {
+    return new FsError(`cannot ${verb} "${displayPath}": directory not empty`, 'FS_NOT_EMPTY', { cause: error })
+  }
+  if (isEEXIST(error)) {
+    return new FsError(`cannot ${verb} "${displayPath}": already exists`, 'FS_ALREADY_EXISTS', { cause: error })
+  }
+  /* v8 ignore next -- crossing devices needs two mounted filesystems; the fallback is covered through the EXDEV seam instead. */
+  if (isEXDEV(error)) {
+    return new FsError(`cannot ${verb} "${displayPath}": cross-device operation`, 'FS_IO_ERROR', { cause: error })
+  }
+  if (isPermissionError(error)) {
+    return new FsError(`cannot ${verb} "${displayPath}": permission denied`, 'FS_PERMISSION_DENIED', { cause: error })
+  }
+  /* v8 ignore next -- any other syscall failure needs a kernel or filesystem fault. */
+  return new FsError(`cannot ${verb} "${displayPath}": ${errorMessage(error)}`, 'FS_IO_ERROR', { cause: error })
+}
+
+/**
+ * Create one directory, or a directory and every missing ancestor.
+ * @param absolutePath - the directory to create.
+ * @param options - whether missing ancestors are created as well.
+ * @param signal - aborts before the directory is published (`FS_ABORTED`).
+ * @returns the created (or, recursively, already present) directory.
+ */
+export async function createDirectory(
+  absolutePath: string,
+  options: FsCreateDirectoryOptions | undefined,
+  signal?: AbortSignal,
+): Promise<FsCreateOutcome> {
+  throwIfAborted(signal, 'create directory')
+  if (options?.recursive === true) {
+    // An existing directory is the recursive success case, so inspect first:
+    // `mkdir({recursive})` also succeeds when a file sits at the path.
+    const existing = await probeOrThrow(absolutePath, absolutePath, 'create directory')
+    if (existing !== null) {
+      if (existing.type !== 'directory') throw new FsError(`cannot create directory "${absolutePath}": not a directory`, 'FS_ALREADY_EXISTS')
+      return { target: await resolvedTarget(absolutePath), version: existing.version, type: 'directory' }
+    }
+    try {
+      await mkdir(absolutePath, { recursive: true })
+    } catch (error: unknown) {
+      throw mutationError(error, 'create directory', absolutePath)
+    }
+  } else {
+    // The ancestors decide whether this can succeed at all; `mkdir` alone would
+    // report its own ENOENT for a missing parent and ENOTDIR for a file one.
+    const parent = await probeOrThrow(dirname(absolutePath), absolutePath, 'create directory')
+    if (parent === null || parent.type !== 'directory') throw new FsError(`cannot create directory "${absolutePath}": not found`, 'FS_NOT_FOUND')
+    try {
+      await mkdir(absolutePath)
+    } catch (error: unknown) {
+      throw mutationError(error, 'create directory', absolutePath)
+    }
+  }
+  throwIfAborted(signal, 'create directory')
+  const created = await probe(absolutePath)
+  /* v8 ignore next -- the directory was just created by this call, so only a concurrent removal can make the probe miss it. */
+  if (created === null) throw new FsError(`cannot create directory "${absolutePath}": not found`, 'FS_NOT_FOUND')
+  return { target: await resolvedTarget(absolutePath), version: created.version, type: 'directory' }
+}
+
+/**
+ * Create an empty regular file. Any entry already at the path wins: the create
+ * reports `FS_ALREADY_EXISTS` and publishes nothing.
+ * @param absolutePath - the file to create; its parent directory must exist.
+ * @param signal - aborts before the file is published (`FS_ABORTED`).
+ * @returns the created file.
+ */
+export async function createFile(absolutePath: string, signal?: AbortSignal): Promise<FsCreateOutcome> {
+  throwIfAborted(signal, 'create file')
+  const parent = await probeOrThrow(dirname(absolutePath), absolutePath, 'create file')
+  // A file or a directory at the parent is the same refusal the `wx` create
+  // would report, but a symlink to a directory is not: the create would follow
+  // it and publish outside the path the caller named, so the target kind is
+  // rejected before anything is opened.
+  if (parent === null || parent.type !== 'directory') throw new FsError(`cannot create file "${absolutePath}": not found`, 'FS_NOT_FOUND')
+  if ((await probeNoFollow(dirname(absolutePath)))?.type === 'symlink') {
+    throw new FsError(`cannot create file "${absolutePath}": parent is a symbolic link`, 'FS_NOT_DIRECTORY')
+  }
+  try {
+    // Exclusive create: the filesystem itself is the existence check, with no
+    // probe-then-create window for a concurrent creator.
+    await writeFile(absolutePath, '', { flag: 'wx' })
+  } catch (error: unknown) {
+    throw mutationError(error, 'create file', absolutePath)
+  }
+  throwIfAborted(signal, 'create file')
+  const created = await probe(absolutePath)
+  /* v8 ignore next -- the file was just created by this call, so only a concurrent removal can make the probe miss it. */
+  if (created === null) throw new FsError(`cannot create file "${absolutePath}": not found`, 'FS_NOT_FOUND')
+  return { target: await resolvedTarget(absolutePath), version: created.version, type: 'file' }
+}
+
+/**
+ * Remove a regular file, or a directory with its contents when `recursive` is
+ * set. A directory that still has entries and no `recursive` is left untouched
+ * and reports `FS_NOT_EMPTY`.
+ * @param absolutePath - the file or directory to remove.
+ * @param options - whether a non-empty directory is removed with its contents.
+ * @param signal - aborts before the removal starts (`FS_ABORTED`).
+ * @returns which kind of entry was removed.
+ */
+export async function removePath(
+  absolutePath: string,
+  options: FsRemoveOptions | undefined,
+  signal?: AbortSignal,
+): Promise<FsRemoveOutcome> {
+  throwIfAborted(signal, 'remove')
+  const existing = await probeOrThrow(absolutePath, absolutePath, 'remove')
+  if (existing === null) throw new FsError(`cannot remove "${absolutePath}": not found`, 'FS_NOT_FOUND')
+  if (existing.type === 'other') {
+    throw new FsError(`cannot remove "${absolutePath}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
+  }
+  throwIfAborted(signal, 'remove')
+  await removeEntry(absolutePath, existing.type, options?.recursive === true)
+  return { type: existing.type }
+}
+
+/**
+ * Remove an entry whose kind the caller already resolved. The kind is a
+ * parameter rather than a fresh probe so a removal that follows a completed
+ * copy — the cross-device move — removes exactly the source it read.
+ * @param absolutePath - the file or directory to remove.
+ * @param type - the kind the caller observed at `absolutePath`.
+ * @param recursive - whether a directory is removed with its contents.
+ */
+async function removeEntry(absolutePath: string, type: 'file' | 'directory', recursive: boolean): Promise<void> {
+  try {
+    if (type === 'file') {
+      await rm(absolutePath)
+      return
+    }
+    if (recursive) {
+      await rm(absolutePath, { recursive: true })
+      return
+    }
+    // `rmdir` refuses a directory that gained an entry since the probe, so the
+    // non-recursive contract holds without a second listing.
+    await rmdir(absolutePath)
+  } catch (error: unknown) {
+    throw mutationError(error, 'remove', absolutePath)
+  }
+}
+
+/**
+ * Copy one regular file. The destination must not exist.
+ * @param from - absolute source path.
+ * @param to - absolute destination path.
+ * @param signal - aborts before the copy starts (`FS_ABORTED`).
+ */
+async function copyRegularFile(from: string, to: string, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal, 'copy')
+  try {
+    await copyFile(from, to)
+  } catch (error: unknown) {
+    throw mutationError(error, 'copy', to)
+  }
+}
+
+/**
+ * Copy one entry — a regular file, a directory subtree, or a symbolic link —
+ * without following links. Callers reach this only after the destination has
+ * been checked absent, so every copy below the root creates a fresh entry.
+ */
+async function copyEntry(from: string, to: string, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal, 'copy')
+  const info = await probeNoFollow(from)
+  /* v8 ignore next -- the caller probed this entry a moment earlier; only a concurrent removal makes it miss. */
+  if (info === null) throw new FsError(`cannot copy "${from}": not found`, 'FS_NOT_FOUND')
+  if (info.type === 'directory') {
+    try {
+      await mkdir(to, { mode: info.mode })
+    } catch (error: unknown) {
+      throw mutationError(error, 'copy', to)
+    }
+    const children = await readdir(from, { withFileTypes: true, encoding: 'utf8' })
+    for (const child of children) {
+      await copyEntry(join(from, child.name), join(to, child.name), signal)
+    }
+    return
+  }
+  if (info.type === 'symlink') {
+    try {
+      // The link is reproduced, not followed: a link pointing outside the
+      // source subtree must not pull that target's content into the copy.
+      await symlink(await readlink(from), to)
+    } catch (error: unknown) {
+      throw mutationError(error, 'copy', to)
+    }
+    return
+  }
+  if (info.type !== 'file') {
+    throw new FsError(`cannot copy "${from}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
+  }
+  await copyRegularFile(from, to, signal)
+}
+
+/**
+ * Copy a regular file or a whole directory subtree. The destination must not
+ * exist; links inside a copied directory are reproduced as links and never
+ * followed.
+ * @param from - absolute source path.
+ * @param to - absolute destination path.
+ * @param signal - aborts between entries of a directory copy (`FS_ABORTED`).
+ * @returns the copied destination target and its kind.
+ */
+export async function copyPath(from: string, to: string, signal?: AbortSignal): Promise<FsCopyOutcome> {
+  throwIfAborted(signal, 'copy')
+  const source = await probeOrThrow(from, from, 'copy')
+  if (source === null) throw new FsError(`cannot copy "${from}": not found`, 'FS_NOT_FOUND')
+  if (source.type === 'other') throw new FsError(`cannot copy "${from}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
+  // A link at the top is refused rather than followed: the outcome has to name
+  // what was copied, and which kind a link exposes is the link's target's
+  // business, not this call's.
+  if ((await probeNoFollow(from))?.type === 'symlink') {
+    throw new FsError(`cannot copy "${from}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
+  }
+  if (await probeOrThrow(to, to, 'copy') !== null) {
+    throw new FsError(`cannot copy "${from}" to "${to}": already exists`, 'FS_ALREADY_EXISTS')
+  }
+  await copyEntry(from, to, signal)
+  throwIfAborted(signal, 'copy')
+  return { target: await resolvedTarget(to), type: source.type }
+}
+
+/**
+ * Move or rename a regular file or a whole directory subtree. A rename is one
+ * filesystem operation; when the two ends are on different devices the subtree
+ * is copied and then removed, so the source may outlive a failure of that
+ * removal.
+ * @param from - absolute source path.
+ * @param to - absolute destination path.
+ * @param signal - aborts between entries of the cross-device fallback (`FS_ABORTED`).
+ * @param internals - test seam overriding the rename boundary, so the cross-device fallback is reachable here.
+ * @returns the destination target and the moved entry's kind.
+ */
+export async function movePath(
+  from: string,
+  to: string,
+  signal?: AbortSignal,
+  internals: FsIoInternals = {},
+): Promise<FsMoveOutcome> {
+  throwIfAborted(signal, 'move')
+  const source = await probeOrThrow(from, from, 'move')
+  if (source === null) throw new FsError(`cannot move "${from}": not found`, 'FS_NOT_FOUND')
+  if (source.type === 'other') throw new FsError(`cannot move "${from}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
+  // Same refusal as {@link copyPath}: `rename` would move the link itself while
+  // the reported kind came from its destination.
+  if ((await probeNoFollow(from))?.type === 'symlink') {
+    throw new FsError(`cannot move "${from}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
+  }
+  if (await probeOrThrow(to, to, 'move') !== null) {
+    throw new FsError(`cannot move "${from}" to "${to}": already exists`, 'FS_ALREADY_EXISTS')
+  }
+  const renameFile = internals.renameFile ?? rename
+  try {
+    // `rename` never replaces the destination: the probe above established that
+    // nothing is there, and a concurrent creator wins with ENOTEMPTY or EEXIST.
+    await renameFile(from, to)
+  } catch (error: unknown) {
+    if (!isEXDEV(error)) throw mutationError(error, 'move', to)
+    // Different filesystems: no rename can join them, so the destination is
+    // built from the source and the source is removed only after it is complete.
+    await copyEntry(from, to, signal)
+    throwIfAborted(signal, 'move')
+    await removeEntry(from, source.type, true)
+  }
+  return { target: await resolvedTarget(to), type: source.type }
+}
+
+/** The stable target of an entry this module just created or copied. */
+async function resolvedTarget(absolutePath: string): Promise<{ targetKey: FsTargetKey; displayPath: string }> {
+  return resolveLocalTarget(dirname(absolutePath), basename(absolutePath))
 }
 
 // --- Editing ---

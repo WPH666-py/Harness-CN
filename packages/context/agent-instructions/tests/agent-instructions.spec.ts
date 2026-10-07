@@ -10,13 +10,19 @@ import SessionStore, { SessionId, SessionSeq, type SessionEvent, type SurfaceInt
 import AgentRegistry, { agentEvents, type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop, { turnBoundaryProjectionDefinition } from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { FileSystem, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
+import { FileSystem, FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import type {
+  FsCopyOutcome,
+  FsCreateDirectoryOptions,
+  FsCreateOutcome,
   FsDirEntry,
   FsEditOutcome,
   FsEditRequest,
   FsInfo,
+  FsMoveOutcome,
   FsPathInfo,
+  FsRemoveOptions,
+  FsRemoveOutcome,
   FsTarget,
   FsWriteIntent,
   FsByteWriteOutcome,
@@ -177,6 +183,34 @@ class RecordingFileSystem extends FileSystem {
 
   override async editText(_target: FsTarget, _edit: FsEditRequest): Promise<FsEditOutcome> {
     return { version: FsVersion('unused'), before: '', after: '' }
+  }
+
+  override async createDirectory(
+    _target: FsTarget,
+    _options?: FsCreateDirectoryOptions,
+    _signal?: AbortSignal,
+  ): Promise<FsCreateOutcome> {
+    throw new FsError('createDirectory is not needed in agent-instructions tests', 'FS_IO_ERROR')
+  }
+
+  override async createFile(_target: FsTarget, _signal?: AbortSignal): Promise<FsCreateOutcome> {
+    throw new FsError('createFile is not needed in agent-instructions tests', 'FS_IO_ERROR')
+  }
+
+  override async remove(
+    _target: FsTarget,
+    _options?: FsRemoveOptions,
+    _signal?: AbortSignal,
+  ): Promise<FsRemoveOutcome> {
+    throw new FsError('remove is not needed in agent-instructions tests', 'FS_IO_ERROR')
+  }
+
+  override async copy(_from: FsTarget, _to: FsTarget, _signal?: AbortSignal): Promise<FsCopyOutcome> {
+    throw new FsError('copy is not needed in agent-instructions tests', 'FS_IO_ERROR')
+  }
+
+  override async move(_from: FsTarget, _to: FsTarget, _signal?: AbortSignal): Promise<FsMoveOutcome> {
+    throw new FsError('move is not needed in agent-instructions tests', 'FS_IO_ERROR')
   }
 }
 

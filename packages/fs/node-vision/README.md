@@ -1,5 +1,9 @@
 # @deepseek-ai/dsh-node-vision
 
+English | [中文](README.zh.md)
+
+## Summary
+
 Model-facing image inspection and pixel operations over [sharp](https://sharp.pixelplumbing.com/), with no Python runtime and no external vision provider.
 
 The model does the understanding itself: `read_image` shows it a picture, and these tools measure and transform one. Every tool that produces pixels returns them as an `image` content block, so the model inspects what it just produced instead of trusting a summary.
@@ -18,6 +22,11 @@ Every producing tool also accepts `output_path` and saves the same bytes to that
 
 Coordinates are pixels measured from the top-left of the file on disk. Results are encoded in the source's own format when the attachment store accepts it, so a JPEG crop stays a JPEG.
 
+## Requirements
+
+- The current model route must declare `image` input. Every execution resolves the calling session's routed provider and model and refuses with a named error otherwise, so the failure is visible rather than silent.
+- A mounted `attachments` service. The tools never register without one, because a produced image has nowhere durable to live.
+
 ## Model Experience
 
 Each call adds one tool result. A producing call carries a short summary plus one image, so it costs the pixels of its output rather than of its input. `vision_info` and `vision_colors` add text only.
@@ -25,11 +34,6 @@ Each call adds one tool result. A producing call carries a short summary plus on
 No tool echoes image bytes into the transcript, and none of them re-reads the source image into the model's context, so a sequence of pixel operations does not accumulate pictures of the original. The image a producing tool attaches is the operation's result at the size the caller asked for; `vision_resize` is the way to shrink a large result before a later step reads it.
 
 Prompt cacheability is unaffected: the package contributes no prompt sections and no system-prompt text.
-
-## Requirements
-
-- The current model route must declare `image` input. Every execution resolves the calling session's routed provider and model and refuses with a named error otherwise, so the failure is visible rather than silent.
-- A mounted `attachments` service. The tools never register without one, because a produced image has nowhere durable to live.
 
 ## Known Limitations and Deferred Work
 

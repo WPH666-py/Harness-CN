@@ -22,7 +22,7 @@ The `fs/` group gives agents durable, policy-governed access to files: the `ctx.
 <a id="packages"></a>
 ## Packages
 
-Eight packages plus the remote sibling `fs-e2b` play the filesystem roles; the subsystem reference owns the exhaustive contracts and the error taxonomy.
+Nine packages plus the remote sibling `fs-e2b` play the filesystem roles; the subsystem reference owns the exhaustive contracts and the error taxonomy.
 
 | Package | Role | ctx key |
 |---|---|---|

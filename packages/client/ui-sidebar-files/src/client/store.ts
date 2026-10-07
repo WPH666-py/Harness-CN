@@ -1,11 +1,13 @@
 /**
- * The file tree's view state: which directories are expanded, and what each
- * loaded level contains.
+ * The file tree's view state: which directories are expanded, what each loaded
+ * level contains, and what the reader is doing to those entries.
  *
  * The tree is not one resource. A directory listing per level, expanded lazily,
  * is state the type owns — so it lives in a Slot-standard exclusive store
  * (one instance per session), bucketed by tab id because two tabs of this kind
- * in one session expand independently.
+ * in one session expand independently. The reader's own working state — the
+ * selected row, the clipboard, the open name input, and why the last gesture
+ * failed — is per tab for the same reason.
  *
  * Writers run between `start` and `forget`: the owner's `signal` is what ends a
  * bucket's life, and the face stops dispatching once it aborts.
@@ -35,7 +37,30 @@ export type LevelState =
   | { readonly kind: 'failed'; readonly failure: RemoteFailure }
 
 /**
- * One tab's tree: its root, the levels it has asked for, and what is open.
+ * One entry held for a later paste, and which verb the paste performs.
+ *
+ * The two modes differ in more than the Remote call: a landed `cut` releases
+ * the clipboard and leaves the source gone, while a `copy` leaves the source
+ * and stays on the clipboard for another paste.
+ */
+export interface FilesClipboard {
+  /** `copy` leaves the source in place; `cut` moves it. */
+  readonly mode: 'copy' | 'cut'
+  /** Absolute path of the entry that was copied or cut. */
+  readonly path: string
+}
+
+/** The inline name input one new entry is waiting for. */
+export interface NewEntryDraft {
+  /** Absolute path of the directory the entry is created in. */
+  readonly parent: string
+  /** Which entry the committed name produces. */
+  readonly kind: 'file' | 'directory'
+}
+
+/**
+ * One tab's tree: its root, the levels it has asked for, what is open, and what
+ * the reader has in hand.
  *
  * Every path here is absolute: the root is the session's working directory as
  * the Host reports it, and a child is the parent joined with the entry name.
@@ -47,6 +72,14 @@ export interface FilesTabState {
   levels: Record<string, LevelState>
   /** Expanded absolute directory paths, root included. */
   expanded: string[]
+  /** Absolute path of the selected row, `null` while nothing is selected. */
+  selected: string | null
+  /** The entry a paste places, `null` while the clipboard is empty. */
+  clipboard: FilesClipboard | null
+  /** The new entry still waiting for its name, `null` while no input is open. */
+  draft: NewEntryDraft | null
+  /** Why the last gesture failed, `null` while none has. */
+  notice: RemoteFailure | null
 }
 
 /** Every tab's tree, keyed by tab id. */
@@ -67,6 +100,19 @@ function bucket(state: FilesState, tabId: TabId): FilesTabState {
   return tree
 }
 
+/**
+ * Whether one absolute path is `path` itself or lies under it.
+ *
+ * Child paths are joined with `/` whatever the platform's separators, so the
+ * descendant test is one prefix and one separator.
+ * @param candidate - absolute path to test.
+ * @param path - absolute path of the entry that went away.
+ * @returns whether the candidate belongs to the removed subtree.
+ */
+function within(candidate: string, path: string): boolean {
+  return candidate === path || candidate.startsWith(`${path}/`)
+}
+
 /** The tree store's write set; every action names the tab it writes. */
 type FilesActions = {
   start: (draft: FilesState, tabId: TabId, root: string) => void
@@ -76,6 +122,11 @@ type FilesActions = {
   toggled: (draft: FilesState, tabId: TabId, path: string) => void
   reset: (draft: FilesState, tabId: TabId) => void
   forget: (draft: FilesState, tabId: TabId) => void
+  selected: (draft: FilesState, tabId: TabId, path: string | null) => void
+  clipboarded: (draft: FilesState, tabId: TabId, clipboard: FilesClipboard | null) => void
+  drafted: (draft: FilesState, tabId: TabId, entry: NewEntryDraft | null) => void
+  noticed: (draft: FilesState, tabId: TabId, failure: RemoteFailure | null) => void
+  pruned: (draft: FilesState, tabId: TabId, path: string) => void
 }
 
 /**
@@ -90,13 +141,16 @@ export function createFilesStore(): EngineStoreHandle<FilesState, FilesActions> 
     init: (): FilesState => ({ byTab: {} }),
     actions: {
       /**
-       * Seed one tab's tree at its workspace root, with the root expanded.
+       * Seed one tab's tree at its workspace root, with the root expanded and
+       * nothing in hand.
        * @param d - draft state.
        * @param tabId - the tab being drawn.
        * @param root - absolute path of the workspace root.
        */
       start: (d, tabId: TabId, root: string) => {
-        d.byTab[tabId] = { root, levels: {}, expanded: [root] }
+        d.byTab[tabId] = {
+          root, levels: {}, expanded: [root], selected: null, clipboard: null, draft: null, notice: null,
+        }
       },
       /**
        * Mark one directory as being listed.
@@ -159,6 +213,63 @@ export function createFilesStore(): EngineStoreHandle<FilesState, FilesActions> 
        */
       forget: (d, tabId: TabId) => {
         d.byTab = Object.fromEntries(Object.entries(d.byTab).filter(([id]) => id !== tabId))
+      },
+      /**
+       * Select one row, or clear the selection with `null`.
+       *
+       * Selecting is the reader moving on to another entry, so it also drops
+       * the last gesture's notice.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       * @param path - absolute path of the selected row.
+       */
+      selected: (d, tabId: TabId, path: string | null) => {
+        const state = bucket(d, tabId)
+        state.selected = path
+        state.notice = null
+      },
+      /**
+       * Put one entry on the clipboard, or clear it with `null`.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       * @param clipboard - the entry a paste will place.
+       */
+      clipboarded: (d, tabId: TabId, clipboard: FilesClipboard | null) => {
+        bucket(d, tabId).clipboard = clipboard
+      },
+      /**
+       * Open the inline name input, or close it with `null`.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       * @param entry - the directory and kind the next committed name creates.
+       */
+      drafted: (d, tabId: TabId, entry: NewEntryDraft | null) => {
+        bucket(d, tabId).draft = entry
+      },
+      /**
+       * Record why the last gesture failed, or clear it with `null`.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       * @param failure - the settled Remote failure.
+       */
+      noticed: (d, tabId: TabId, failure: RemoteFailure | null) => {
+        bucket(d, tabId).notice = failure
+      },
+      /**
+       * Forget one entry that is gone: its level, every level under it, the
+       * expanded entries that pointed at them, and a selection inside it.
+       *
+       * A later entry may reuse the name, and it must not draw the removed
+       * subtree's listing or hold the reader's gesture against it.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       * @param path - absolute path of the entry that went away.
+       */
+      pruned: (d, tabId: TabId, path: string) => {
+        const state = bucket(d, tabId)
+        state.levels = Object.fromEntries(Object.entries(state.levels).filter(([at]) => !within(at, path)))
+        state.expanded = state.expanded.filter(at => !within(at, path))
+        if (state.selected !== null && within(state.selected, path)) state.selected = null
       },
     },
   })
