@@ -16,10 +16,15 @@
  * fetching one, so that build works with no network at all.
  */
 
-import { cpSync, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { cpSync, createReadStream, createWriteStream, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
+import { createZstdCompress, constants as zlibConstants } from 'node:zlib'
 import { create as createTar } from 'tar'
+
+/** zstd's own id for "the compression level", which Node's zlib passes straight through. */
+const ZSTD_COMPRESSION_LEVEL = zlibConstants.ZSTD_c_compressionLevel
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const REPO_ROOT = resolve(PACKAGE_ROOT, '..', '..')
@@ -110,22 +115,32 @@ if (withSeed) {
 }
 
 // The offline package itself: one archive of the whole seed, so the first launch fetches one file,
-// named after the release it belongs to.
+// named after the release it belongs to. zstd rather than gzip because the download is the user's
+// wall-clock and zstd is roughly a fifth smaller on this content at a level it still compresses at
+// build speed; the app accepts either extension, so older releases stay fetchable.
 mkdirSync(ARTIFACT_ROOT, { recursive: true })
-const archive = join(ARTIFACT_ROOT, `Harness-CN-seed-${version}.tar.gz`)
+const level = Number(process.env.HARNESS_CN_ZSTD_LEVEL ?? '19')
+const tarPath = join(ARTIFACT_ROOT, `Harness-CN-seed-${version}.tar`)
+const archive = join(ARTIFACT_ROOT, `Harness-CN-seed-${version}.tar.zst`)
+rmSync(tarPath, { force: true })
 rmSync(archive, { force: true })
 createTar({
   cwd: SEED_SOURCE,
-  file: archive,
-  gzip: { level: 9 },
+  file: tarPath,
   // Timestamps and ownership would only make two builds of the same seed differ; nothing reads
   // either out of the extracted tree, and the inventory check does not cover them.
   noMtime: true,
   portable: true,
   sync: true,
 }, readdirSync(SEED_SOURCE))
+await pipeline(
+  createReadStream(tarPath),
+  createZstdCompress({ params: { [ZSTD_COMPRESSION_LEVEL]: level } }),
+  createWriteStream(archive),
+)
+rmSync(tarPath, { force: true })
 const megabytes = (statSync(archive).size / 1024 / 1024).toFixed(1)
-process.stdout.write(`prepare-shell: offline package ${archive} (${megabytes} MB)\n`)
+process.stdout.write(`prepare-shell: offline package ${archive} (${megabytes} MB, zstd -${String(level)})\n`)
 
 // Tauri needs the application icon inside `src-tauri`, and it takes it from the Electron shell's
 // own build resources so both shells of this fork wear the same icon by construction.

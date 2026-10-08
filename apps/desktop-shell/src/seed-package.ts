@@ -7,7 +7,7 @@
  * would spend. Publishing it as its own attachment puts both files far under the limit and lets the
  * two be replaced independently.
  *
- * WHAT THAT COSTS. The first launch is no longer offline out of the box: it downloads ~87 MB once
+ * WHAT THAT COSTS. The first launch is no longer offline out of the box: it downloads ~68 MB once
  * and keeps the extracted result, so every later launch is offline as before. The launch reports
  * the download, and a machine that cannot reach either host is told what to fetch and from where
  * rather than being left at a progress bar.
@@ -17,8 +17,11 @@
  */
 
 import { existsSync } from 'node:fs'
-import { mkdir, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, rename, rm } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
 import { join } from 'node:path'
+import { pipeline } from 'node:stream/promises'
+import { createGunzip, createZstdDecompress } from 'node:zlib'
 import { extract } from 'tar'
 import { findPublishedAsset } from './release-sources.ts'
 import { downloadVerified } from './release-channel.ts'
@@ -26,19 +29,25 @@ import { downloadVerified } from './release-channel.ts'
 /** Prefix every published seed archive carries. */
 export const SEED_ARCHIVE_PREFIX = 'Harness-CN-seed-'
 
-/** Suffix every published seed archive carries. */
-export const SEED_ARCHIVE_SUFFIX = '.tar.gz'
+/**
+ * Extensions a published seed archive may carry, best first.
+ *
+ * zstd is what this build publishes: it is about a fifth smaller than gzip on this content, and the
+ * download is the user's wall clock. The gzip form is still accepted so a release published before
+ * the switch remains fetchable by the same code path.
+ */
+export const SEED_ARCHIVE_EXTENSIONS = ['.tar.zst', '.tar.gz'] as const
 
 /** Name of the bounded inventory that proves a seed is exactly what was published. */
 const SEED_INTEGRITY_FILE = 'integrity.json'
 
 /**
- * The published name of one release's seed archive.
+ * The published names of one release's seed archive, best first.
  * @param version - release version the seed belongs to.
- * @returns the file name the release publishes.
+ * @returns the file names the release may publish.
  */
-export function seedArchiveName(version: string): string {
-  return `${SEED_ARCHIVE_PREFIX}${version}${SEED_ARCHIVE_SUFFIX}`
+export function seedArchiveNames(version: string): readonly string[] {
+  return SEED_ARCHIVE_EXTENSIONS.map(extension => `${SEED_ARCHIVE_PREFIX}${version}${extension}`)
 }
 
 /** Where a seed came from, for the run log. */
@@ -74,12 +83,20 @@ function isSeedDirectory(directory: string): boolean {
   return existsSync(join(directory, SEED_INTEGRITY_FILE))
 }
 
+/** The decompressor one published archive needs, chosen by the name the host gave it. */
+function decompressorFor(archive: string): ReturnType<typeof createGunzip> | undefined {
+  if (archive.endsWith('.gz')) return createGunzip()
+  if (archive.endsWith('.zst')) return createZstdDecompress()
+  return undefined
+}
+
 /**
  * Extract one seed archive into a directory that is not published until it is complete.
  *
- * The rename is what makes the cache safe to trust on the next launch: a directory that exists is
- * a directory whose extraction finished, so a download interrupted halfway cannot be mistaken for
- * a seed and cannot brick the next launch.
+ * The extraction is streamed straight from the archive through its decompressor into tar, so the
+ * 314 MB that come out never exist a second time on disk as an intermediate tar. The rename is what
+ * makes the cache safe to trust on the next launch: a directory that exists is a directory whose
+ * extraction finished, so a download interrupted halfway cannot be mistaken for a seed.
  * @param archive - absolute path of the downloaded archive.
  * @param destination - absolute directory the seed should end up at.
  * @param staging - absolute directory the extraction runs in, beside the destination.
@@ -88,16 +105,23 @@ async function extractSeed(archive: string, destination: string, staging: string
   await rm(staging, { recursive: true, force: true })
   await mkdir(staging, { recursive: true })
   try {
-    extract({
+    const unpack = extract({
       cwd: staging,
-      file: archive,
-      // The published archive is gzipped; the extension is the only thing that says so.
-      gzip: archive.endsWith('.gz'),
       noMtime: true,
       preservePaths: false,
-      strict: true,
-      sync: true,
+      // An entry that leaves the extraction directory is refused rather than sanitized: the archive
+      // is one this product published, so a traversal attempt is a fault worth failing on.
+      filter: (path) => {
+        if (path.startsWith('/') || path.includes('\\') || path.split('/').includes('..')) {
+          throw new Error(`the archive contains an unsafe path: ${path}`)
+        }
+        return true
+      },
     })
+    const decompressor = decompressorFor(archive)
+    await (decompressor === undefined
+      ? pipeline(createReadStream(archive), unpack)
+      : pipeline(createReadStream(archive), decompressor, unpack))
     if (!isSeedDirectory(staging)) {
       throw new Error(`the archive does not contain ${SEED_INTEGRITY_FILE}`)
     }
@@ -128,21 +152,20 @@ export async function ensureSeedPackage(options: SeedPackageOptions): Promise<Se
   if (isSeedDirectory(cached)) return { directory: cached, origin: 'cache' }
 
   const request = options.fetch ?? globalThis.fetch
-  const name = seedArchiveName(options.version)
+  const names = seedArchiveNames(options.version)
   options.onProgress?.('正在查找离线包…')
-  const published = await findPublishedAsset(request, candidate => candidate === name)
+  const published = await findPublishedAsset(request, candidate => names.includes(candidate))
   if (published === undefined) {
     throw new Error(
-      `找不到离线包 ${name}。\n\n`
+      `找不到离线包 ${names[0] ?? ''}。\n\n`
       + `请确认网络可用后重试；也可以手动从发布页下载该文件，`
       + `放进 ${join(options.cacheRoot, 'downloads')} 后重新启动。`,
     )
   }
 
-  const downloads = join(options.cacheRoot, 'downloads')
   const result = await downloadVerified({
-    directory: downloads,
-    name,
+    directory: join(options.cacheRoot, 'downloads'),
+    name: published.asset.name,
     url: published.asset.url,
     size: published.asset.size,
     sha256: published.asset.sha256,
@@ -157,11 +180,8 @@ export async function ensureSeedPackage(options: SeedPackageOptions): Promise<Se
 
   options.onProgress?.('正在解包离线包…')
   await extractSeed(result.path, cached, `${cached}.partial`)
-  // The archive is 87 MB and only useful once; keeping it would cost more than the seed itself
-  // is worth to re-fetch, and it can be fetched again.
+  // The archive is only useful once; keeping it would cost more than re-fetching it is worth.
   await rm(result.path, { force: true }).catch(() => undefined)
-  const bytes = await stat(cached).then(() => true, () => false)
-  if (!bytes) throw new Error('the offline package could not be stored')
   options.onProgress?.('', undefined)
   return { directory: cached, origin: 'download' }
 }

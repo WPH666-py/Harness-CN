@@ -38,6 +38,7 @@ import { DesktopUpdateSkipStore } from '../../desktop/src/update-skip-store.ts'
 import type { DesktopApiKeyStatus, DesktopUpdateState } from '../../desktop/src/ipc.ts'
 import { startShellServer, type ShellApi, type ShellServer } from './shell-server.ts'
 import { ensureSeedPackage } from './seed-package.ts'
+import { verifyStagedRuntime } from './staged-runtime-check.ts'
 import type { ShellArguments, ShellCommand, ShellHandshake, ShellStatus } from './shell-types.ts'
 import { createReleaseChannel } from './release-channel.ts'
 
@@ -139,6 +140,11 @@ async function main(): Promise<void> {
   }
 
   const hooks: DesktopProjectHooks = {
+    // Booting a Host from the staged tree is the strongest available proof that it composes, and
+    // it is kept for the one operation that can introduce a package this build never saw: adding,
+    // removing, or updating a plugin. A first launch and an upgrade install a tree assembled from
+    // a seed whose every file was verified against the published inventory, and for those the
+    // structural check below establishes completeness in a few seconds instead of fifty.
     healthCheck: async (projectDir) => {
       const active = host
       host = undefined
@@ -315,6 +321,17 @@ async function main(): Promise<void> {
     logShell('checking the desktop runtime against the bundled release')
     const activated = await manager.applyRelease(seed.directory, options.version, {
       ...hooks,
+      // A tree built from a verified seed is checked for completeness rather than booted: the boot
+      // would cost about fifty seconds of every first launch and every upgrade, and the only thing
+      // it adds over this is proof that a composition applies — which cannot have changed, because
+      // no package in this tree is new. Plugin changes still take the boot.
+      healthCheck: async (projectDir) => {
+        const report = await verifyStagedRuntime({ projectDir, node: options.node })
+        logShell(
+          `staged runtime verified: ${String(report.files)} files,`
+          + ` native modules [${report.nativeModules.join(', ')}]`,
+        )
+      },
       beforeActivate: async () => {},
       afterActivate: async () => {},
     })
