@@ -64,3 +64,13 @@ h1 {
   color: GrayText;
   font-size: 13px;
 }
+
+/* The line naming what the launch is doing right now. It sits between the bar and the elapsed
+   counter, and reserves its height so the layout does not jump when it appears. */
+#note {
+  min-height: 1.4em;
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: GrayText;
+  text-align: center;
+}

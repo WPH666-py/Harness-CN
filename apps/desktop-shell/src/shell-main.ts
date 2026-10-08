@@ -37,6 +37,7 @@ import { DesktopUpdateCoordinator } from '../../desktop/src/update-coordinator.t
 import { DesktopUpdateSkipStore } from '../../desktop/src/update-skip-store.ts'
 import type { DesktopApiKeyStatus, DesktopUpdateState } from '../../desktop/src/ipc.ts'
 import { startShellServer, type ShellApi, type ShellServer } from './shell-server.ts'
+import { ensureSeedPackage } from './seed-package.ts'
 import type { ShellArguments, ShellCommand, ShellHandshake, ShellStatus } from './shell-types.ts'
 import { createReleaseChannel } from './release-channel.ts'
 
@@ -104,9 +105,11 @@ async function main(): Promise<void> {
   const locale = resolveDesktopLocale(options.locale)
   const messages = locale.messages
   const paths = resolveDesktopPaths()
-  const seedDir = join(options.resourceDir, 'seed')
 
-  for (const required of [options.node, options.pnpm, seedDir]) {
+  // The seed is no longer an installer resource, so only the runtime itself has to be present:
+  // an offline or full installer still carries a seed beside it, and a normal one fetches it on
+  // the first launch. Either way the seed's own inventory is what vouches for it.
+  for (const required of [options.node, options.pnpm]) {
     if (!existsSync(required)) throw new Error(`dsh shell: bundled resource is missing: ${required}`)
   }
 
@@ -289,9 +292,28 @@ async function main(): Promise<void> {
   }
 
   try {
-    publishStatus({ phase: 'starting', progress: 0.1, version: options.version })
+    publishStatus({ phase: 'starting', progress: 0.05, version: options.version })
+    // The offline package is obtained before anything can be installed from it. A first launch on
+    // a normal installation fetches it once; every later launch finds it where it was left, and an
+    // offline installer ships it beside the runtime so nothing is fetched at all.
+    const seed = await ensureSeedPackage({
+      version: options.version,
+      resourceDir: options.resourceDir,
+      cacheRoot: join(paths.root, 'seed'),
+      onProgress: (note, fraction) => {
+        publishStatus({
+          phase: 'starting',
+          // The fetch owns the first tenth of the bar; the install that follows owns the rest.
+          progress: fraction === undefined ? status.progress : 0.05 + fraction * 0.09,
+          version: options.version,
+          note,
+        })
+      },
+    })
+    logShell(`offline package: ${seed.origin} at ${seed.directory}`)
+    publishStatus({ phase: 'starting', progress: 0.15, version: options.version })
     logShell('checking the desktop runtime against the bundled release')
-    const activated = await manager.applyRelease(seedDir, options.version, {
+    const activated = await manager.applyRelease(seed.directory, options.version, {
       ...hooks,
       beforeActivate: async () => {},
       afterActivate: async () => {},

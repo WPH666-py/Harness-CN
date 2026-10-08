@@ -75,6 +75,17 @@ export interface SidebarRightGuideEntry {
   readonly description?: () => string
   /** Optional glyph, drawn before the title; without one the guide draws its cube placeholder. */
   readonly icon?: ComponentType<IconProps>
+  /**
+   * Whether this type is the page a fresh right sidebar opens on.
+   *
+   * Without one, the sidebar opens on the guide — the list of everything that
+   * registered an entry — which is the right answer only while the list is short
+   * enough to read at a glance. A product whose sidebar has one obvious subject
+   * (the workspace's files, say) says so here instead of asking the reader to
+   * pick from a menu of one useful entry and several incidental ones. At most one
+   * registered entry should carry it; the first in `order` wins if several do.
+   */
+  readonly default?: boolean
 }
 
 /** A guide entry as the registry lists it: with the kind of the type that contributed it, which is what picking it opens. */

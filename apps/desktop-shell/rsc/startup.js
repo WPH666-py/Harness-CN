@@ -15,6 +15,7 @@ const CONNECTION_FAILED = '无法连接桌面外壳，请重新打开窗口。'
 let target = 0
 let shown = 0
 let captioned = false
+let lastNote = ''
 
 /** Report a locale failure only while the shell has supplied no words of its own yet. */
 function reportFailure() {
@@ -57,6 +58,14 @@ async function main() {
   subscribeEvents({
     status: (state) => {
       target = Math.min(1, Math.max(target, state.progress))
+      // The server names what it is doing whenever a step is long enough to need saying — the
+      // first launch downloads the offline package, which takes longer than the rest of the
+      // launch put together. An absent note clears the line rather than leaving a stale one.
+      const note = typeof state.note === 'string' ? state.note : ''
+      if (note !== lastNote) {
+        lastNote = note
+        document.querySelector('#note').textContent = note
+      }
     },
   })
 

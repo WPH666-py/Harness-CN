@@ -10,6 +10,14 @@ export interface ShellStatus {
   readonly progress: number
   /** Harness-CN version this installation is bound to. */
   readonly version: string
+  /**
+   * What the launch is doing right now, for the line under the progress bar.
+   *
+   * The first launch fetches the offline package, which takes far longer than everything else the
+   * launch does put together; a bar that only advances cannot say whether that wait is work or a
+   * hang. Absent when there is nothing worth saying.
+   */
+  readonly note?: string
   /** Reason the launch stopped, present only while `phase` is `error`. */
   readonly message?: string
 }

@@ -15,6 +15,10 @@
       <div id="track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
         <div id="bar"></div>
       </div>
+      <!-- What the launch is doing right now. The first launch downloads the offline package
+           before it can install anything, which takes long enough that a bare progress bar
+           reads as a hang. -->
+      <p id="note" role="status" aria-live="polite"></p>
       <p id="elapsed" role="status" aria-live="polite"></p>
     </main>
     <script type="module" src="./startup.js"></script>

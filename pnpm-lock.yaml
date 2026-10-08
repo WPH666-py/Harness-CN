@@ -591,6 +591,9 @@ importers:
       esbuild:
         specifier: ^0.25.12
         version: 0.25.12
+      tar:
+        specifier: ^7.5.0
+        version: 7.5.22
 
   apps/web:
     devDependencies:
