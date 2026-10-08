@@ -11,11 +11,23 @@
 ; knows about the shortcuts and the registry entry it wrote. A leftover directory — an uninstaller
 ; that failed, or an installation whose uninstaller was already removed by hand — is then cleaned
 ; up directly.
+;
+; The payload directory is removed for a second reason, and it is the important one: the bundled
+; seed names every file it ships after the release that produced it (`…-0.1.5-rc.4.tgz`), and the
+; first launch refuses a seed that holds a file its own inventory does not list. Installing over
+; an older version without clearing the old seed therefore left both sets on disk, and the upgrade
+; would fail at `desktop seed: integrity verification failed` with a perfectly good download. The
+; check is right to be strict — a seed that is not exactly what was published is not something to
+; assemble a runtime from — so the installer is what has to leave it exactly as published.
 
 !macro NSIS_HOOK_PREINSTALL
-  ; A running Electron shell holds its own files open, and the old uninstaller refuses to run
-  ; while it is up. This release is replacing it, so asking it to stop is not destructive.
+  ; A running shell holds its own files open, and the old uninstaller refuses to run while it is
+  ; up. This release is replacing it, so asking it to stop is not destructive.
   ExecWait '"$SYSDIR\taskkill.exe" /IM Harness-CN.exe /F'
+
+  ; Everything this release owns and replaces wholesale: the runtime, the seed, the shell pages,
+  ; and the sidecar. User data lives in `~/.dsh` and is never touched here.
+  RMDir /r "$INSTDIR\resources"
 
   IfFileExists "$LOCALAPPDATA\Programs\Harness-CN\Uninstall Harness-CN.exe" 0 hcn_no_previous
     ExecWait '"$LOCALAPPDATA\Programs\Harness-CN\Uninstall Harness-CN.exe" /S'

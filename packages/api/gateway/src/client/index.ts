@@ -336,8 +336,8 @@ class ClientRemoteService extends Service implements ClientRemote {
         if (!method.token.active) continue
         method.token.active = false
         method.token.abort.abort()
-        if (method.scoped) handle.service.remove('scoped', method.descriptor.method, method.token)
-        if (method.direct) handle.service.remove('direct', method.descriptor.method, method.token)
+        if (method.scoped) handle.service.uninstall('scoped', method.descriptor.method, method.token)
+        if (method.direct) handle.service.uninstall('direct', method.descriptor.method, method.token)
       }
       await this.disposeNamespace(name, handle)
     }
@@ -598,7 +598,22 @@ class RemoteNamespaceService extends Service {
     else record.scoped = value as ScopedMethod
   }
 
-  remove(kind: 'direct' | 'scoped', method: string, token: MountToken): void {
+  /**
+   * Uninstall one live variant of a remote method.
+   *
+   * The name is load-bearing. `assertMethodAvailable` refuses any remote method whose name is a
+   * member of this class, because the installation publishes the remote method as a property of
+   * this same object and a shadowed member would silently stop working. An internal helper
+   * therefore occupies the name for every product verb that happens to match it — and `remove`
+   * was exactly that: `workspaceFiles/remove`, the endpoint behind the Sidebar's delete action,
+   * could never be installed, and the whole `api-remotes` client half failed to apply with
+   * "conflicts with its namespace service". Renaming this helper keeps the invariant (nothing
+   * here shadows anything) while leaving ordinary product verbs available.
+   * @param kind - which variant of the method is going away.
+   * @param method - method name the variant was installed under.
+   * @param token - mount token that installed it; a newer one has already replaced it.
+   */
+  uninstall(kind: 'direct' | 'scoped', method: string, token: MountToken): void {
     const record = this.methods.get(method)
     const current = record?.[kind]
     /* v8 ignore next -- duplicate live variants are rejected before installation, so no newer token can replace this one. */
@@ -646,8 +661,8 @@ function installMethods(
     for (const method of [...installed].reverse()) {
       method.token.active = false
       method.token.abort.abort()
-      if (method.scoped) service.remove('scoped', method.descriptor.method, method.token)
-      if (method.direct) service.remove('direct', method.descriptor.method, method.token)
+      if (method.scoped) service.uninstall('scoped', method.descriptor.method, method.token)
+      if (method.direct) service.uninstall('direct', method.descriptor.method, method.token)
     }
     throw error
   }
