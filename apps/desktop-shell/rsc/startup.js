@@ -16,6 +16,7 @@ let target = 0
 let shown = 0
 let captioned = false
 let lastNote = ''
+let lastStep = ''
 
 /** Report a locale failure only while the shell has supplied no words of its own yet. */
 function reportFailure() {
@@ -58,6 +59,17 @@ async function main() {
   subscribeEvents({
     status: (state) => {
       target = Math.min(1, Math.max(target, state.progress))
+      // The step says what is running and how far into it the launch is. A step with no
+      // denominator to measure against — starting the Host, which reports only that it is ready —
+      // shows its name alone; the note below it carries how long that has been going on.
+      const name = typeof state.step === 'string' ? state.step : ''
+      const step = typeof state.stepProgress === 'number'
+        ? `${name} ${String(Math.round(state.stepProgress * 100))}%`
+        : name
+      if (step !== lastStep) {
+        lastStep = step
+        document.querySelector('#step').textContent = step
+      }
       // The server names what it is doing whenever a step is long enough to need saying — the
       // first launch downloads the offline package, which takes longer than the rest of the
       // launch put together. An absent note clears the line rather than leaving a stale one.

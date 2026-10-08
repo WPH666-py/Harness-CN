@@ -390,6 +390,38 @@ describe('desktop project transactions', () => {
     expect(rebuilt).not.toContain('unpacking the bundled package store')
   })
 
+  it('names every step of a first install and reports each step its own progress', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    createTestSeedMetadata(seed, release())
+    writeFileSync(join(seed, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    writeLinkedProfileSeed(seed, release())
+    archiveStore(seed)
+    writeIntegrity(seed)
+    const paths = resolveDesktopPaths(join(root, '.dsh'))
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+
+    const steps: { label: string; fraction: number }[] = []
+    await expect(manager.applyRelease(seed, '1.0.0', hooks({
+      step: (label, fraction) => { steps.push({ label, fraction }) },
+    }))).resolves.toBe(true)
+
+    // A first launch is minutes of work in four different steps, and the bar moves too little
+    // within one of them to say whether it is working. Each step therefore names itself and
+    // carries its own fraction, which is what the window shows while that step runs.
+    const labels = [...new Set(steps.map(entry => entry.label))]
+    expect(labels).toEqual(['校验离线包内容', '展开软件包仓库', '重建桌面运行时', '检查运行时完整性'])
+    for (const label of labels) {
+      const fractions = steps.filter(entry => entry.label === label).map(entry => entry.fraction)
+      expect([...fractions].sort((left, right) => left - right)).toEqual(fractions)
+      expect(fractions.at(-1)).toBe(1)
+      for (const fraction of fractions) {
+        expect(fraction).toBeGreaterThanOrEqual(0)
+        expect(fraction).toBeLessThanOrEqual(1)
+      }
+    }
+  })
+
   it('rebuilds a profile left without its manifest instead of reading it as installed', async () => {
     const root = temporaryRoot()
     const seed = join(root, 'seed')

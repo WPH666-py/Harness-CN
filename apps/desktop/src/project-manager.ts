@@ -147,6 +147,16 @@ export interface DesktopProjectHooks {
    * @param progress - completed fraction of the transaction, from 0 through 1.
    */
   progress?(progress: number): void
+  /**
+   * Name the step the following progress belongs to, and report that step's own fraction.
+   *
+   * `progress` says how far the whole transaction has come; on a first launch it also moves so
+   * slowly within one step that the bar alone cannot tell work from a hang. This carries the step's
+   * own share, which is the figure a user can watch while one step runs.
+   * @param label - short name of the step, in the language the shell shows.
+   * @param fraction - completed fraction of that step, from 0 through 1.
+   */
+  step?(label: string, fraction: number): void
 }
 
 /** Supported dependency mutation. */
@@ -279,9 +289,13 @@ function copyMetadata(source: string, target: string): void {
  * The walk yields between files: the shell serves its own windows, and a launch that never
  * yields also stops the startup window from loading.
  * @param root - seed directory to inventory, excluding its own integrity inventory.
+ * @param onProgress - receives the hashed fraction so a caller can show real progress.
  * @returns one record per file, in path order.
  */
-async function seedFiles(root: string): Promise<readonly DesktopSeedIntegrityRecord[]> {
+async function seedFiles(
+  root: string,
+  onProgress?: (fraction: number) => void,
+): Promise<readonly DesktopSeedIntegrityRecord[]> {
   const paths: string[] = []
   const collect = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -308,6 +322,7 @@ async function seedFiles(root: string): Promise<readonly DesktopSeedIntegrityRec
       sha256: createHash('sha256').update(body).digest('hex'),
     })
     await yieldToEventLoop()
+    if (paths.length > 0) onProgress?.(files.length / paths.length)
   }
   return files
 }
@@ -340,11 +355,15 @@ function readSeedIntegrity(seedDir: string): readonly DesktopSeedIntegrityRecord
 /**
  * Verify the packaged offline seed before any content enters writable desktop state.
  * @param seedDir - packaged seed directory described by its own integrity inventory.
+ * @param onProgress - receives the hashed fraction so a caller can show real progress.
  * @returns resolves once every shipped seed file matches the inventory.
  */
-export async function verifySeedIntegrity(seedDir: string): Promise<void> {
+export async function verifySeedIntegrity(
+  seedDir: string,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
   const expected = readSeedIntegrity(seedDir)
-  const actual = await seedFiles(seedDir)
+  const actual = await seedFiles(seedDir, onProgress)
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error('desktop seed: integrity verification failed')
   }
@@ -606,6 +625,14 @@ export class DesktopProjectManager {
   async applyRelease(seedDir: string, electronVersion: string, hooks: DesktopProjectHooks): Promise<boolean> {
     const note = (message: string): void => { hooks.note?.(message) }
     const progress = (fraction: number): void => { hooks.progress?.(fraction) }
+    // Each step owns a band of the overall bar, so a step can publish its own fraction
+    // without knowing how the launch is weighted as a whole. The same call names the step, which
+    // is what lets the shell show a percentage for the step and not only for the whole launch.
+    const step = (label: string, from: number, to: number) => (fraction: number): void => {
+      const completed = Math.min(Math.max(fraction, 0), 1)
+      hooks.step?.(label, completed)
+      progress(from + completed * (to - from))
+    }
     return this.withLock(async () => {
       this.recover()
       // The release identity is read before the seed is verified so an installed profile can
@@ -625,7 +652,7 @@ export class DesktopProjectManager {
       }
       // Everything below consumes seed content, so the seed is verified before any of it
       // reaches writable desktop state.
-      await verifySeedIntegrity(seedDir)
+      await verifySeedIntegrity(seedDir, step('校验离线包内容', 0, 0.15))
       note('bundled seed verified')
       progress(0.15)
       verifyDesktopCorePackageSet(seedDir, target.version)
@@ -638,7 +665,7 @@ export class DesktopProjectManager {
       } else {
         note('unpacking the bundled package store')
         progress(0.3)
-        await this.mergeSeedPnpmState(seedDir)
+        await this.mergeSeedPnpmState(seedDir, step('展开软件包仓库', 0.3, 0.45))
         this.recordStoreSeed(archives)
         note('package store ready; rebuilding the desktop runtime')
         progress(0.45)
@@ -655,7 +682,13 @@ export class DesktopProjectManager {
         const plugins = (this.hasInstalledProfile() ? pluginRecords(this.paths.profile) : [])
           .filter(plugin => bundled[plugin.name] !== plugin.version)
         copyMetadata(seedDir, stagingProfile)
-        await materializeLinkedProfile(seedDir, stagingProfile, this.paths.pnpm.store, this.paths.profile)
+        await materializeLinkedProfile(
+          seedDir,
+          stagingProfile,
+          this.paths.pnpm.store,
+          this.paths.profile,
+          step('重建桌面运行时', 0.45, 0.75),
+        )
         writeJson(join(stagingProfile, DESKTOP_SEED_IDENTITY_FILE), {
           schemaVersion: 1,
           integrity: identity,
@@ -673,8 +706,10 @@ export class DesktopProjectManager {
           writeProfilePlugins(stagingProfile, plugins)
         }
         note('verifying the staged runtime')
+        hooks.step?.('检查运行时完整性', 0)
         progress(0.85)
         await hooks.healthCheck(stagingProfile)
+        hooks.step?.('检查运行时完整性', 1)
         note('staged runtime boots; activating it')
         progress(0.9)
         await this.activate(stagingProfile, hooks)
@@ -811,12 +846,17 @@ export class DesktopProjectManager {
     } satisfies DesktopStoreSeedRecord)
   }
 
-  private async mergeSeedPnpmState(seedDir: string): Promise<void> {
+  private async mergeSeedPnpmState(seedDir: string, onProgress?: (fraction: number) => void): Promise<void> {
     const transactionRoot = join(this.paths.staging, randomUUID())
     const extractedStore = join(transactionRoot, 'store')
+    // Unpacking the shards dominates this step; publishing the store into place is a rename on
+    // a cold machine, so the merge reports into the last quarter of the band.
+    const merge = (fraction: number): void => { onProgress?.(0.75 + fraction * 0.25) }
     try {
-      await extractPnpmStoreArchives(seedDir, extractedStore)
-      await mergePnpmStore(extractedStore, this.paths.pnpm.store)
+      await extractPnpmStoreArchives(seedDir, extractedStore, onProgress === undefined
+        ? undefined
+        : (fraction) => { onProgress(fraction * 0.75) })
+      await mergePnpmStore(extractedStore, this.paths.pnpm.store, merge)
     } finally {
       removeOwnedDirectory(transactionRoot)
     }

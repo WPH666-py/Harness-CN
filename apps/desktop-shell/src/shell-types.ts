@@ -18,6 +18,21 @@ export interface ShellStatus {
    * hang. Absent when there is nothing worth saying.
    */
   readonly note?: string
+  /**
+   * Short name of the startup step the launch is in right now.
+   *
+   * A first launch spends its minutes in four or five steps that differ in kind — fetching,
+   * hashing, unpacking, linking — and the overall bar moves so little within one of them that it
+   * cannot say whether that step is working or stuck. Present whenever a step is known.
+   */
+  readonly step?: string
+  /**
+   * Completed fraction of `step`, from 0 through 1.
+   *
+   * Omitted for a step that has no denominator to measure against, such as starting the Host: the
+   * window then shows the step's elapsed time rather than a percentage that would be invented.
+   */
+  readonly stepProgress?: number
   /** Reason the launch stopped, present only while `phase` is `error`. */
   readonly message?: string
 }

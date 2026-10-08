@@ -62,42 +62,83 @@ export interface StagedRuntimeOptions {
   readonly projectDir: string
   /** Absolute path of the bundled Node the Host will run under. */
   readonly node: string
-}
-
-function errorOf(reason: unknown, fallback: string): Error {
-  return reason instanceof Error ? reason : new Error(fallback)
+  /**
+   * Receives the completed fraction of the check.
+   *
+   * The walk owns the first four fifths and the native probes the rest: the probes are one process
+   * start whose duration is not knowable in advance, and the walk is the part worth watching.
+   */
+  readonly onProgress?: (fraction: number) => void
 }
 
 /**
  * Count every entry under one tree, and reject a link that leads nowhere.
+ *
+ * The count is taken one top-level package at a time rather than in a single pass: the number of
+ * packages is known before the walk starts, which is what makes a real percentage available, and
+ * the loop yields between them so the window drawing that percentage can repaint. A walk that
+ * never yielded held the event loop for the whole check, and the progress it reported would have
+ * reached the screen only after there was none left to show.
  * @param root - absolute directory to walk.
+ * @param onProgress - receives the completed fraction of the top-level entries.
  * @returns files seen, and directories seen.
  */
-function walk(root: string): { files: number; directories: number } {
+async function walk(root: string, onProgress?: (fraction: number) => void): Promise<{ files: number; directories: number }> {
   let files = 0
   let directories = 0
-  const stack = [root]
-  while (stack.length > 0) {
-    const directory = stack.pop() as string
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name)
-      if (entry.isSymbolicLink()) {
-        // A hoisted install has no links, so one here is unexpected rather than routine; it is
-        // still only a fault when it does not resolve.
-        if (!existsSync(path)) throw new Error(`desktop runtime: ${path} is a link that leads nowhere`)
+  const tree = (start: string): void => {
+    const stack = [start]
+    while (stack.length > 0) {
+      const directory = stack.pop() as string
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name)
+        if (entry.isSymbolicLink()) {
+          // A hoisted install has no links, so one here is unexpected rather than routine; it is
+          // still only a fault when it does not resolve.
+          if (!existsSync(path)) throw new Error(`desktop runtime: ${path} is a link that leads nowhere`)
+          files += 1
+          continue
+        }
+        if (entry.isDirectory()) {
+          directories += 1
+          stack.push(path)
+          continue
+        }
+        if (!entry.isFile()) throw new Error(`desktop runtime: unsupported entry ${path}`)
         files += 1
-        continue
       }
-      if (entry.isDirectory()) {
-        directories += 1
-        stack.push(path)
-        continue
-      }
-      if (!entry.isFile()) throw new Error(`desktop runtime: unsupported entry ${path}`)
-      files += 1
     }
   }
+  const entries = readdirSync(root, { withFileTypes: true })
+  let done = 0
+  for (const entry of entries) {
+    const path = join(root, entry.name)
+    if (entry.isSymbolicLink()) {
+      if (!existsSync(path)) throw new Error(`desktop runtime: ${path} is a link that leads nowhere`)
+      files += 1
+    } else if (entry.isDirectory()) {
+      directories += 1
+      tree(path)
+    } else if (entry.isFile()) {
+      files += 1
+    } else {
+      throw new Error(`desktop runtime: unsupported entry ${path}`)
+    }
+    done += 1
+    onProgress?.(entries.length === 0 ? 1 : done / entries.length)
+    await yieldToEventLoop()
+  }
   return { files, directories }
+}
+
+/**
+ * Let the shell's windows paint while a long synchronous step runs.
+ *
+ * A macrotask, not a resolved promise: repainting happens after the microtask queue empties, so
+ * resolving a promise would hand control straight back and the window would stay frozen.
+ */
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
 }
 
 /**
@@ -157,7 +198,7 @@ async function probeNativeModules(options: StagedRuntimeOptions): Promise<readon
 export async function verifyStagedRuntime(options: StagedRuntimeOptions): Promise<StagedRuntimeReport> {
   const modules = join(options.projectDir, 'node_modules')
   if (!existsSync(modules)) throw new Error(`desktop runtime: ${modules} is missing`)
-  const counted = walk(modules)
+  const counted = await walk(modules, (fraction) => { options.onProgress?.(fraction * 0.8) })
   if (counted.files < MINIMUM_RUNTIME_FILES) {
     throw new Error(
       `desktop runtime: the staged tree holds ${String(counted.files)} files,`
@@ -178,6 +219,8 @@ export async function verifyStagedRuntime(options: StagedRuntimeOptions): Promis
       throw new Error(`desktop runtime: ${path} is missing or empty`)
     }
   }
+  options.onProgress?.(0.8)
   const nativeModules = await probeNativeModules(options)
+  options.onProgress?.(1)
   return { files: counted.files, nativeModules }
 }

@@ -36,7 +36,7 @@ import {
 import { DesktopUpdateCoordinator } from '../../desktop/src/update-coordinator.ts'
 import { DesktopUpdateSkipStore } from '../../desktop/src/update-skip-store.ts'
 import type { DesktopApiKeyStatus, DesktopUpdateState } from '../../desktop/src/ipc.ts'
-import { startShellServer, type ShellApi, type ShellServer } from './shell-server.ts'
+import { startShellServer, type ShellApi } from './shell-server.ts'
 import { ensureSeedPackage } from './seed-package.ts'
 import { verifyStagedRuntime } from './staged-runtime-check.ts'
 import type { ShellArguments, ShellCommand, ShellHandshake, ShellStatus } from './shell-types.ts'
@@ -119,12 +119,13 @@ async function main(): Promise<void> {
   let status: ShellStatus = { phase: 'starting', progress: 0.05, version: options.version }
   let updateState: DesktopUpdateState = { phase: 'idle' }
   let host: DesktopHostProcess | undefined
-  let server: ShellServer | undefined
   let stopping = false
 
   function publishStatus(next: ShellStatus): void {
     status = next
-    server?.publish('status', next)
+    // The control surface is listening before anything publishes a status: this closure and the
+    // update coordinator below are only ever called after `startShellServer` has resolved.
+    running.publish('status', next)
     handshake({ type: 'status', status: next })
   }
 
@@ -185,6 +186,9 @@ async function main(): Promise<void> {
     progress: (fraction: number) => {
       publishStatus({ ...status, progress: Math.min(1, Math.max(status.progress, fraction)) })
     },
+    step: (label: string, fraction: number) => {
+      publishStatus({ ...status, step: label, stepProgress: fraction })
+    },
   }
 
   const requireHost = (): DesktopHostProcess => {
@@ -205,7 +209,7 @@ async function main(): Promise<void> {
   const updates = new DesktopUpdateCoordinator(
     (state) => {
       updateState = state
-      server?.publish('update', state)
+      running.publish('update', state)
       handshake({ type: 'update', state })
       return state
     },
@@ -270,7 +274,6 @@ async function main(): Promise<void> {
   }
 
   const running = await startShellServer({ resourceDir: options.resourceDir, api })
-  server = running
   logShell(`Harness-CN ${options.version} starting; control surface on ${running.origin}`)
   handshake({ type: 'listen', port: running.port })
 
@@ -306,13 +309,17 @@ async function main(): Promise<void> {
       version: options.version,
       resourceDir: options.resourceDir,
       cacheRoot: join(paths.root, 'seed'),
-      onProgress: (note, fraction) => {
+      onProgress: (note, fraction, step) => {
+        // The status type keeps `step` and `stepProgress` absent rather than undefined, so a
+        // message that has no step to name carries no step key at all.
         publishStatus({
           phase: 'starting',
           // The fetch owns the first tenth of the bar; the install that follows owns the rest.
           progress: fraction === undefined ? status.progress : 0.05 + fraction * 0.09,
           version: options.version,
           note,
+          ...(step === undefined ? {} : { step }),
+          ...(fraction === undefined ? {} : { stepProgress: fraction }),
         })
       },
     })
@@ -326,7 +333,13 @@ async function main(): Promise<void> {
       // it adds over this is proof that a composition applies — which cannot have changed, because
       // no package in this tree is new. Plugin changes still take the boot.
       healthCheck: async (projectDir) => {
-        const report = await verifyStagedRuntime({ projectDir, node: options.node })
+        const report = await verifyStagedRuntime({
+          projectDir,
+          node: options.node,
+          onProgress: (fraction) => {
+            publishStatus({ ...status, step: '检查运行时完整性', stepProgress: fraction })
+          },
+        })
         logShell(
           `staged runtime verified: ${String(report.files)} files,`
           + ` native modules [${report.nativeModules.join(', ')}]`,
@@ -338,9 +351,28 @@ async function main(): Promise<void> {
     logShell(activated
       ? 'desktop runtime installed from the bundled seed'
       : 'desktop runtime already matches the bundled release')
-    publishStatus({ phase: 'starting', progress: 0.95, version: options.version })
-
-    host = await startHost(paths.profile)
+    // Starting the Host is the one step with no denominator: dsh reports that it is ready, and
+    // nothing in between counts anything, so this shows how long it has been running instead of a
+    // percentage that would have to be invented. Silence is what a stuck launch looks like.
+    publishStatus({
+      phase: 'starting',
+      progress: 0.95,
+      version: options.version,
+      step: '启动工作区',
+      note: '正在启动工作区…',
+    })
+    const hostStartedAt = Date.now()
+    const hostTicker = setInterval(() => {
+      publishStatus({
+        ...status,
+        note: `正在启动工作区… 已等待 ${String(Math.round((Date.now() - hostStartedAt) / 1000))} 秒`,
+      })
+    }, 1000)
+    try {
+      host = await startHost(paths.profile)
+    } finally {
+      clearInterval(hostTicker)
+    }
     publishStatus({ phase: 'ready', progress: 1, version: options.version })
 
     let needsApiKey = false

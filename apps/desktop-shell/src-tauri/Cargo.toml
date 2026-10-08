@@ -1,6 +1,6 @@
 [package]
 name = "harness-cn"
-version = "0.1.5-rc.6"
+version = "0.1.5-rc.8"
 description = "Harness-CN desktop shell"
 authors = ["水哥"]
 edition = "2021"

@@ -285,6 +285,37 @@ describe('desktop seed store archives', () => {
     expect(second.map(entry => entry.body)).toEqual(first.map(entry => entry.body))
   })
 
+  it('reports every archive once, never backwards, and ends at exactly one', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    const store = join(seed, 'store')
+    mkdirSync(join(store, 'v10', 'files'), { recursive: true })
+    // Enough entries that the shards are all populated: the report is per completed archive, so a
+    // fixture that lands in one shard would exercise one report out of sixteen.
+    for (let index = 0; index < 96; index += 1) {
+      writeFileSync(join(store, 'v10', 'files', `entry-${String(index)}`), `body-${String(index)}`)
+    }
+    archivePnpmStore(seed, store)
+    const manifest = JSON.parse(readFileSync(join(seed, SEED_STORE_ARCHIVE_MANIFEST), 'utf8')) as {
+      archives: { file: string }[]
+    }
+
+    const fractions: number[] = []
+    await extractPnpmStoreArchives(seed, join(root, 'extracted'), (fraction) => { fractions.push(fraction) })
+
+    // The startup window draws a percentage straight from this stream, so three things have to
+    // hold: every archive is accounted for, the figure never goes backwards, and the last report
+    // is exactly 1 rather than a value short of it that would leave a launch looking unfinished.
+    expect(manifest.archives.length).toBeGreaterThan(1)
+    expect(fractions).toHaveLength(manifest.archives.length)
+    expect([...fractions].sort((left, right) => left - right)).toEqual(fractions)
+    expect(fractions.at(-1)).toBe(1)
+    for (const fraction of fractions) {
+      expect(fraction).toBeGreaterThan(0)
+      expect(fraction).toBeLessThanOrEqual(1)
+    }
+  })
+
   it('rejects an archive entry that is not a file while extracting it', async () => {
     const root = temporaryRoot()
     const seed = join(root, 'seed')

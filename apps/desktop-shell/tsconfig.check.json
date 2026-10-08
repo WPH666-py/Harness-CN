@@ -1,0 +1,22 @@
+{
+  // This app is bundled by esbuild, which strips types without checking them, and the repository's
+  // two aggregates do not cover it. `pnpm check:types` in this package therefore runs this config:
+  // without it a type error here — including the `exactOptionalPropertyTypes` kind this app's
+  // `ShellStatus` depends on — would only surface as behavior at runtime.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../apps/desktop/src/**/*.ts",
+    "../../packages/util/home-paths/src/**/*.ts",
+    "../../packages/util/atomic-write/src/**/*.ts"
+  ]
+}

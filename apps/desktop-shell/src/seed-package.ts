@@ -16,10 +16,10 @@
  * (`verifySeedIntegrity`), so "downloaded" is not a weaker claim than "shipped".
  */
 
-import { existsSync } from 'node:fs'
+import { createReadStream, existsSync, statSync } from 'node:fs'
 import { mkdir, rename, rm } from 'node:fs/promises'
-import { createReadStream } from 'node:fs'
 import { join } from 'node:path'
+import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createGunzip, createZstdDecompress } from 'node:zlib'
 import { extract } from 'tar'
@@ -70,9 +70,18 @@ export interface SeedPackageOptions {
   readonly cacheRoot: string
   /** Request implementation; replaceable for tests. */
   readonly fetch?: typeof globalThis.fetch
-  /** Report what the fetch is doing, and how far it has come. */
-  readonly onProgress?: (note: string, fraction?: number) => void
+  /** Report what the fetch is doing, how far it has come, and which step that fraction belongs to. */
+  readonly onProgress?: (note: string, fraction?: number, step?: SeedPackageStep) => void
 }
+
+/**
+ * Which part of obtaining the offline package a report belongs to.
+ *
+ * The shell shows one step at a time with its own percentage, and looking for the package, fetching
+ * it, and unpacking it are three different waits with three different denominators. They are named
+ * here rather than parsed back out of the message, which exists to be read by a person.
+ */
+export type SeedPackageStep = '查找离线包' | '下载离线包' | '解包离线包'
 
 function errorOf(reason: unknown, fallback: string): Error {
   return reason instanceof Error ? reason : new Error(fallback)
@@ -100,8 +109,14 @@ function decompressorFor(archive: string): ReturnType<typeof createGunzip> | und
  * @param archive - absolute path of the downloaded archive.
  * @param destination - absolute directory the seed should end up at.
  * @param staging - absolute directory the extraction runs in, beside the destination.
+ * @param onProgress - receives the fraction of the archive that has been read through.
  */
-async function extractSeed(archive: string, destination: string, staging: string): Promise<void> {
+async function extractSeed(
+  archive: string,
+  destination: string,
+  staging: string,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
   await rm(staging, { recursive: true, force: true })
   await mkdir(staging, { recursive: true })
   try {
@@ -118,15 +133,36 @@ async function extractSeed(archive: string, destination: string, staging: string
         return true
       },
     })
+    // What this pass writes is a fixed, much larger expansion of the archive, and measuring that
+    // would mean measuring the disk rather than the work: the bytes that have gone in are what
+    // tracks the pass, and they are already known exactly from the file's own size.
+    const total = statSync(archive).size
+    let read = 0
+    let reported = -1
+    const counter = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        read += chunk.byteLength
+        const percent = total === 0 ? 100 : Math.floor((read / total) * 100)
+        if (percent !== reported) {
+          reported = percent
+          onProgress?.(total === 0 ? 1 : Math.min(read / total, 1))
+        }
+        callback(null, chunk)
+      },
+    })
     const decompressor = decompressorFor(archive)
-    await (decompressor === undefined
-      ? pipeline(createReadStream(archive), unpack)
-      : pipeline(createReadStream(archive), decompressor, unpack))
+    await pipeline(
+      createReadStream(archive),
+      counter,
+      ...(decompressor === undefined ? [] : [decompressor]),
+      unpack,
+    )
     if (!isSeedDirectory(staging)) {
       throw new Error(`the archive does not contain ${SEED_INTEGRITY_FILE}`)
     }
     await rm(destination, { recursive: true, force: true })
     await rename(staging, destination)
+    onProgress?.(1)
   } catch (error) {
     await rm(staging, { recursive: true, force: true }).catch(() => undefined)
     throw errorOf(error, 'the offline package could not be unpacked')
@@ -153,12 +189,12 @@ export async function ensureSeedPackage(options: SeedPackageOptions): Promise<Se
 
   const request = options.fetch ?? globalThis.fetch
   const names = seedArchiveNames(options.version)
-  options.onProgress?.('正在查找离线包…')
+  options.onProgress?.('正在查找离线包…', undefined, '查找离线包')
   const published = await findPublishedAsset(request, candidate => names.includes(candidate))
   if (published === undefined) {
     throw new Error(
       `找不到离线包 ${names[0] ?? ''}。\n\n`
-      + `请确认网络可用后重试；也可以手动从发布页下载该文件，`
+      + '请确认网络可用后重试；也可以手动从发布页下载该文件，'
       + `放进 ${join(options.cacheRoot, 'downloads')} 后重新启动。`,
     )
   }
@@ -174,14 +210,21 @@ export async function ensureSeedPackage(options: SeedPackageOptions): Promise<Se
       options.onProgress?.(
         `正在下载离线包… ${String(Math.round(fraction * 100))}%（${published.tag}）`,
         fraction,
+        '下载离线包',
       )
     },
   })
 
-  options.onProgress?.('正在解包离线包…')
-  await extractSeed(result.path, cached, `${cached}.partial`)
+  options.onProgress?.('正在解包离线包… 0%', 0, '解包离线包')
+  await extractSeed(result.path, cached, `${cached}.partial`, (fraction) => {
+    options.onProgress?.(
+      `正在解包离线包… ${String(Math.round(fraction * 100))}%`,
+      fraction,
+      '解包离线包',
+    )
+  })
   // The archive is only useful once; keeping it would cost more than re-fetching it is worth.
   await rm(result.path, { force: true }).catch(() => undefined)
-  options.onProgress?.('', undefined)
+  options.onProgress?.('', 1, '解包离线包')
   return { directory: cached, origin: 'download' }
 }

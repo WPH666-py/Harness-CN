@@ -15,9 +15,13 @@
       <div id="track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
         <div id="bar"></div>
       </div>
-      <!-- What the launch is doing right now. The first launch downloads the offline package
-           before it can install anything, which takes long enough that a bare progress bar
-           reads as a hang. -->
+      <!-- The step the launch is in, with that step's own percentage. The overall bar moves so
+           little within one step of a first launch that it cannot say whether that step is
+           working or stuck; this is the figure that can. -->
+      <p id="step" role="status" aria-live="polite"></p>
+      <!-- What the launch is doing right now, in more detail than the step name carries. The
+           first launch downloads the offline package before it can install anything, which takes
+           long enough that a bare progress bar reads as a hang. -->
       <p id="note" role="status" aria-live="polite"></p>
       <p id="elapsed" role="status" aria-live="polite"></p>
     </main>

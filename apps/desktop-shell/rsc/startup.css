@@ -74,3 +74,14 @@ h1 {
   color: GrayText;
   text-align: center;
 }
+
+/* The step the launch is in and how far into it, directly under the overall bar. It is the figure
+   that moves during a first launch's long steps, so it is set in the body colour and tabular
+   figures keep the percentage from shifting the text as the digits change. */
+#step {
+  min-height: 1.4em;
+  margin: 10px 0 0;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}

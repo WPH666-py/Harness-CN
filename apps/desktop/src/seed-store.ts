@@ -32,6 +32,18 @@ export const SEED_PROFILE_LINK_MANIFEST = 'profile-links.json'
 export const SEED_PROFILE_FILE_ARCHIVE = 'profile-files.tar'
 
 const DEFAULT_SHARD_COUNT = 16
+
+/**
+ * How many store archives are unpacked at once.
+ *
+ * Sixteen shards of ~18 MB each, and the work is per-file: a shard spends its time creating
+ * entries, not moving bytes. Running them together therefore overlaps the latency the filesystem
+ * and any on-access scanner charge for each new file, which is what dominates this step. The bound
+ * is the shard count itself: the shards are disjoint by construction, so there is no reason to
+ * hold one back, and a lower bound would leave the disk idle at the end of every pass while the
+ * last few archives finished on their own.
+ */
+const EXTRACTION_CONCURRENCY = 16
 const ARCHIVE_NAME_PATTERN = /^store-[0-9a-f]{2}\.tar$/u
 const STORE_VERSION_PATTERN = /^v\d+$/u
 
@@ -189,12 +201,18 @@ function mergeStoreIndex(source: string, destination: string): void {
  * what keeps a refresh cheap and preserves the packages user plugins brought in.
  * @param source - Verified temporary store extraction.
  * @param destination - Desktop-owned persistent pnpm store.
+ * @param onProgress - receives the merged fraction so a caller can show real progress.
  */
-export async function mergePnpmStore(source: string, destination: string): Promise<void> {
+export async function mergePnpmStore(
+  source: string,
+  destination: string,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 })
   if (!existsSync(destination)) {
     try {
       renameOwnedDirectory(source, destination)
+      onProgress?.(1)
       return
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
@@ -208,7 +226,7 @@ export async function mergePnpmStore(source: string, destination: string): Promi
     .filter(entry => entry.isDirectory() && STORE_VERSION_PATTERN.test(entry.name)
       && existsSync(join(source, entry.name, 'index.db')))
     .map(entry => `${entry.name}/index.db`)
-  await copyStoreEntries(source, destination, new Set(indexPaths))
+  await copyStoreEntries(source, destination, new Set(indexPaths), onProgress)
   for (const path of indexPaths) {
     mergeStoreIndex(join(source, ...path.split('/')), join(destination, ...path.split('/')))
   }
@@ -222,8 +240,14 @@ export async function mergePnpmStore(source: string, destination: string): Promi
  * @param source - extracted seed store.
  * @param destination - persistent store that receives the missing entries.
  * @param skipped - store-relative paths the caller merges itself, such as `index.db`.
+ * @param onProgress - receives the examined fraction so a caller can show real progress.
  */
-async function copyStoreEntries(source: string, destination: string, skipped: ReadonlySet<string>): Promise<void> {
+async function copyStoreEntries(
+  source: string,
+  destination: string,
+  skipped: ReadonlySet<string>,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
   const directories: string[] = []
   const files: string[] = []
   const visit = (directory: string): void => {
@@ -253,15 +277,16 @@ async function copyStoreEntries(source: string, destination: string, skipped: Re
   for (const relativePath of files) {
     const from = join(source, ...relativePath.split('/'))
     const to = join(destination, ...relativePath.split('/'))
-    if (!needsStoreCopy(relativePath, from, to)) {
-      examined += 1
-      if (examined % COOPERATIVE_BATCH_ENTRIES === 0) await yieldToEventLoop()
-      continue
+    if (needsStoreCopy(relativePath, from, to)) {
+      copyFileSync(from, to)
     }
-    copyFileSync(from, to)
     examined += 1
-    if (examined % COOPERATIVE_BATCH_ENTRIES === 0) await yieldToEventLoop()
+    if (examined % COOPERATIVE_BATCH_ENTRIES === 0) {
+      onProgress?.(examined / files.length)
+      await yieldToEventLoop()
+    }
   }
+  onProgress?.(1)
 }
 
 function needsStoreCopy(relativePath: string, source: string, destination: string): boolean {
@@ -317,12 +342,22 @@ export function archivePnpmStore(
  * One `extract` pass validates and writes. node-tar calls the filter with each entry's raw
  * archive path before that entry reaches the filesystem, so the entry type, path, shard, and
  * duplicate checks run there instead of in a preceding `list` pass over the same bytes. A
- * rejected archive therefore fails mid-pass, which is safe because the destination is a
- * disposable extraction directory that the caller discards with its transaction.
+ * rejected entry is refused and its reason kept, so a bad archive fails the extraction before it
+ * is published; the destination is a disposable extraction directory the caller discards with its
+ * transaction, which is what makes a half-written pass safe to abandon.
+ *
+ * The archives are unpacked concurrently, so this is one of the few places where the seed's own
+ * structure decides how long a first launch takes: sixteen independent shards can fill the disk's
+ * latency together, and the progress reported is the share of shards that have finished.
  * @param seedRoot - verified packaged seed directory.
  * @param destination - empty Desktop-owned temporary extraction directory.
+ * @param onProgress - completed fraction of the archive set, from 0 through 1.
  */
-export async function extractPnpmStoreArchives(seedRoot: string, destination: string): Promise<void> {
+export async function extractPnpmStoreArchives(
+  seedRoot: string,
+  destination: string,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
   const manifest = readArchiveManifest(seedRoot)
   const archiveRoot = join(seedRoot, SEED_STORE_ARCHIVE_DIR)
   const actualFiles = readdirSync(archiveRoot, { withFileTypes: true }).map((entry) => {
@@ -340,42 +375,79 @@ export async function extractPnpmStoreArchives(seedRoot: string, destination: st
   }
   mkdirSync(destination, { recursive: true, mode: 0o700 })
   const paths = new Set<string>()
-  for (const archive of manifest.archives) {
-    const archivePath = join(archiveRoot, archive.file)
-    const archiveShard = Number.parseInt(archive.file.slice('store-'.length, -'.tar'.length), 16)
-    let entries = 0
-    extract({
-      chmod: true,
-      cwd: destination,
-      file: archivePath,
-      filter: (path, entry) => {
-        if (!('type' in entry)) throw new Error('desktop seed: pnpm store archive entry was not parsed')
-        if (entry.type !== 'File' && entry.type !== 'OldFile') {
-          throw new Error(`desktop seed: unsupported pnpm store archive entry type ${entry.type}`)
-        }
-        assertArchivePath(path)
-        if (shardFor(path, manifest.shardCount) !== archiveShard) {
-          throw new Error(`desktop seed: pnpm store path is assigned to the wrong archive shard: ${path}`)
-        }
-        if (paths.has(path)) {
-          throw new Error(`desktop seed: duplicate pnpm store archive path ${path}`)
-        }
-        paths.add(path)
-        entries += 1
-        return true
-      },
-      noMtime: true,
-      preservePaths: false,
-      processUmask: 0,
-      strict: true,
-      sync: true,
-    })
-    if (entries !== archive.entries) {
-      throw new Error(`desktop seed: pnpm store archive ${archive.file} has an unexpected entry count`)
-    }
-    // One archive is bounded work; yielding between them keeps the shell able to paint.
-    await yieldToEventLoop()
+  // The shards are disjoint by construction — the filter below re-checks that every entry belongs
+  // to the shard it was found in — so several can be unpacksed at the same time. They are unpacked
+  // concurrently because this work is dominated by per-file cost rather than by bytes: 22,399 files
+  // across sixteen archives land far sooner with several archives in flight than when each one is
+  // finished before the next begins.
+  let unpacked = 0
+  // A filter that throws under the asynchronous form of `extract` does not reject the promise it
+  // returns: node-tar is being driven by a stream at that point, so the throw leaves through the
+  // stream and the pass never settles. The filter therefore refuses a bad entry and records why,
+  // and the violation is raised once the pass returns, which keeps the same rejection and the same
+  // message as a throwing filter while leaving the awaited promise accountable for it.
+  let violation: Error | undefined
+  const reject = (error: unknown): false => {
+    violation ??= error instanceof Error ? error : new Error(String(error))
+    return false
   }
+  const queue = [...manifest.archives]
+  const workers = Array.from({ length: Math.min(EXTRACTION_CONCURRENCY, queue.length) }, async () => {
+    for (;;) {
+      const archive = queue.shift()
+      if (archive === undefined) return
+      // An archive already rejected by another worker has no work left to do: the caller discards
+      // the whole extraction, so unpacking the rest of the set would only delay the failure.
+      if (violation !== undefined) return
+      const archivePath = join(archiveRoot, archive.file)
+      const archiveShard = Number.parseInt(archive.file.slice('store-'.length, -'.tar'.length), 16)
+      let entries = 0
+      await extract({
+        chmod: true,
+        cwd: destination,
+        file: archivePath,
+        filter: (path, entry) => {
+          if (violation !== undefined) return false
+          if (!('type' in entry)) return reject(new Error('desktop seed: pnpm store archive entry was not parsed'))
+          if (entry.type !== 'File' && entry.type !== 'OldFile') {
+            return reject(new Error(`desktop seed: unsupported pnpm store archive entry type ${entry.type}`))
+          }
+          try {
+            assertArchivePath(path)
+          } catch (error) {
+            return reject(error)
+          }
+          if (shardFor(path, manifest.shardCount) !== archiveShard) {
+            return reject(new Error(`desktop seed: pnpm store path is assigned to the wrong archive shard: ${path}`))
+          }
+          if (paths.has(path)) {
+            return reject(new Error(`desktop seed: duplicate pnpm store archive path ${path}`))
+          }
+          paths.add(path)
+          entries += 1
+          return true
+        },
+        noMtime: true,
+        preservePaths: false,
+        processUmask: 0,
+        strict: true,
+      })
+      if (violation !== undefined) return
+      if (entries !== archive.entries) {
+        violation = new Error(`desktop seed: pnpm store archive ${archive.file} has an unexpected entry count`)
+        return
+      }
+      unpacked += 1
+      onProgress?.(unpacked / manifest.archives.length)
+    }
+  })
+  // Every worker is awaited before any failure is raised: the caller removes the extraction
+  // directory as soon as this rejects, and a worker still writing into it would turn one clear
+  // failure into a second, misleading one about a directory that was taken away underneath it.
+  const results = await Promise.allSettled(workers)
+  if (violation !== undefined) throw violation
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+  if (failed !== undefined) throw failed.reason
 }
 
 /**
@@ -553,14 +625,17 @@ function recordInstalledPnpmPaths(profileDir: string, storeRoot: string, install
  * @param profileDir - staging profile that receives the tree.
  * @param storeRoot - published pnpm store the links resolve against.
  * @param installedProfileDir - path this staging profile takes once it is activated.
+ * @param onProgress - receives the rebuilt fraction so a caller can show real progress.
  */
 export async function materializeLinkedProfile(
   seedRoot: string,
   profileDir: string,
   storeRoot: string,
   installedProfileDir: string,
+  onProgress?: (fraction: number) => void,
 ): Promise<void> {
   const manifest = readProfileLinkManifest(seedRoot)
+  onProgress?.(0)
   extract({
     chmod: true,
     cwd: profileDir,
@@ -582,8 +657,11 @@ export async function materializeLinkedProfile(
     mkdirSync(join(profileDir, ...parent.split('/')), { recursive: true, mode: 0o755 })
   }
   // Links are created concurrently: the work is one syscall per entry, so overlapping them
-  // costs nothing and hides the per-entry latency Windows charges for each new name.
+  // costs nothing and hides the per-entry latency Windows charges for each new name. The
+  // archived entries land first and are a small share of this step on a cold machine, so the
+  // links own the rest of the bar.
   const entries = Object.entries(manifest.links)
+  let linked = 0
   for (let start = 0; start < entries.length; start += COOPERATIVE_BATCH_ENTRIES) {
     await Promise.all(entries.slice(start, start + COOPERATIVE_BATCH_ENTRIES).map(async ([profilePath, storePath]) => {
       try {
@@ -593,7 +671,10 @@ export async function materializeLinkedProfile(
         throw new Error(`desktop seed: profile link ${profilePath} targets a missing store file ${storePath}`)
       }
     }))
+    linked += COOPERATIVE_BATCH_ENTRIES
+    onProgress?.(0.2 + 0.8 * Math.min(linked / entries.length, 1))
     await yieldToEventLoop()
   }
+  onProgress?.(1)
   recordInstalledPnpmPaths(profileDir, storeRoot, installedProfileDir)
 }
