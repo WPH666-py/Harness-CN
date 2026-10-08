@@ -126,22 +126,21 @@ Key 只保存在本机，**不会随安装包分发**，也不会出现在会话
 
 ## 十、从源码构建
 
-前置：Windows x64、Node 22.19+ 或 24+、git、pnpm 11.7.0；只有需要从源码编译原生模块时才需要 Python（`node-pty`、`koffi` 有预编译产物）。
+前置：Windows x64、Node 22.19+ 或 24+、git、pnpm 11.7.0、Rust 工具链（Tauri 外壳）；只有需要从源码编译原生模块时才需要 Python（`node-pty`、`koffi` 有预编译产物）。
 
 ```powershell
-powershell -File build-harness-cn.ps1              # 含 pnpm install
-powershell -File build-harness-cn.ps1 -SkipInstall
+powershell -File build-harness-cn-tauri.ps1              # 含 pnpm install 与资源准备
+powershell -File build-harness-cn-tauri.ps1 -SkipPrepare
 ```
 
-脚本会设置本发行版的应用标识与"未签名"模式、切换 Electron 镜像源，然后执行上游的 `package:desktop:win:x64`（构建 → 打包 tarball → 准备运行时 → 准备种子 → electron-builder）。产物在：
+脚本分两步：先执行上游的 `prepare:package`（构建 → 打包 tarball → 准备运行时 → 准备种子），再由 `@deepseek-ai/dsh-desktop-shell` 打包 Node sidecar 并运行 `tauri build`。产物在：
 
 ```
-apps/desktop/.desktop-build/targets/win-x64/artifacts/
-  ├── harness-cn-0.1.5-rc.1-win-x64.exe      # 安装包
-  └── win-unpacked/                          # 免安装目录（含 resources/seed 与 runtime）
+apps/desktop-shell/src-tauri/target/release/bundle/nsis/
+  └── Harness-CN_0.1.5-rc.3_x64-setup.exe    # 安装包
 ```
 
-安装包超过 GitHub 单文件 100 MB 上限，必须作为 **Release 附件**发布，不能直接提交进仓库。
+安装包约 80 MB，可同时作为 GitHub Release 附件与 Gitee 发行版附件发布（Gitee 单附件上限 100 MB）。
 
 ## 十一、已知限制
 

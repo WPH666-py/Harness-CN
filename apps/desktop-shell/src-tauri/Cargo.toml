@@ -10,7 +10,9 @@ rust-version = "1.77"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `devtools` keeps the menu's developer-tools entry working in a release build, which is what
+# the Electron shell it replaces did; without the feature the call does not exist at all.
+tauri = { version = "2", features = ["devtools"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `windows-sys` is already in the tree through Tauri's own Windows support; declaring it
@@ -18,8 +20,12 @@ serde_json = "1"
 # without pulling a plugin, a runtime, or a JavaScript API into a process that has no use
 # for any of them.
 [target.'cfg(windows)'.dependencies]
+# `Win32_Security` is not optional here even though nothing in this crate names a security type:
+# `CreateMutexW` takes a `SECURITY_ATTRIBUTES` pointer, and windows-sys gates the whole function
+# behind that feature rather than behind the threading module it is declared in.
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
+  "Win32_Security",
   "Win32_System_Threading",
   "Win32_UI_WindowsAndMessaging",
 ] }

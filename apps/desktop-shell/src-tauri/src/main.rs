@@ -15,12 +15,22 @@
 mod platform;
 
 use std::io::{BufRead, BufReader, Write};
+use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
 use serde::Deserialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+
+/// Windows creation flag that keeps a console-subsystem child from opening a console window.
+///
+/// This shell is a GUI-subsystem process, but `node.exe` is not: starting it the ordinary way
+/// allocates a console for it, and the user sees a black command window sitting behind the
+/// product for as long as the application runs. The sidecar has no use for a console — its
+/// stdout and stderr are pipes this shell reads — so the window is suppressed at creation.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Window label of the launch progress window.
 const SPLASH: &str = "splash";
@@ -35,11 +45,15 @@ const LOGS: &str = "logs";
 /// Window label of the release prompt.
 const UPDATE: &str = "update";
 
-/// Owned children and the port the sidecar published.
+/// Owned children, the port the sidecar published, and the account of a failed launch.
 #[derive(Default)]
 struct Shell {
     child: Mutex<Option<Child>>,
     port: Mutex<Option<u16>>,
+    /// Whether the sidecar ever reported a usable workspace.
+    ready: std::sync::atomic::AtomicBool,
+    /// Tail of the sidecar's own diagnostics, shown when it dies before that.
+    diagnostics: Mutex<String>,
 }
 
 /// One line the sidecar wrote to its stdout.
@@ -77,6 +91,26 @@ struct UpdateState {
 
 fn origin(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
+}
+
+/// Convert a Windows verbatim path back to the ordinary form.
+///
+/// Tauri's path APIs — and `std::fs::canonicalize` — answer with `\\?\C:\...` on Windows, which
+/// is a valid path for Win32 but not for every consumer. Node is one that cannot read it: its
+/// module loader resolves `\\?\C:\...` to the bare drive `C:` and then dies looking for its own
+/// entry point (`EISDIR: lstat 'C:'`). Every path this shell hands to the sidecar therefore has
+/// to be converted first, and the conversion is done once, at the point the path is obtained.
+/// @param path - path as a Windows API returned it.
+/// @returns the same path without its verbatim prefix.
+fn plain_path(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy().into_owned();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => path,
+    }
 }
 
 /// Create one shell window, or bring the existing one forward.
@@ -133,6 +167,7 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
             if let Ok(mut current) = app.state::<Shell>().port.lock() {
                 *current = Some(port);
             }
+            app.state::<Shell>().ready.store(true, std::sync::atomic::Ordering::SeqCst);
             if let Some(splash) = app.get_webview_window(SPLASH) {
                 let _ = splash.destroy();
             }
@@ -249,17 +284,24 @@ fn start_sidecar(app: AppHandle) {
     // layout — `runtime/node/node.exe`, `runtime/pnpm/bin/pnpm.mjs`, `seed`, `shell` — is the same
     // one the Electron build used.
     let resource_dir = match app.path().resource_dir() {
-        Ok(directory) => directory.join("resources"),
+        Ok(directory) => plain_path(directory.join("resources")),
         Err(_) => {
             platform::show_error("Harness-CN 启动失败", "找不到安装目录。");
             app.exit(1);
             return;
         }
     };
-    let log_dir = app.path().app_log_dir().unwrap_or_else(|_| resource_dir.clone());
+    let log_dir = app.path().app_log_dir().map(plain_path).unwrap_or_else(|_| resource_dir.clone());
     let node = resource_dir.join("runtime").join("node").join("node.exe");
     let script = resource_dir.join("sidecar").join("shell.mjs");
     let version = app.package_info().version.to_string();
+    eprintln!(
+        "Harness-CN: node={} script={} resource_dir={} log_dir={}",
+        node.display(),
+        script.display(),
+        resource_dir.display(),
+        log_dir.display(),
+    );
     let spawned = Command::new(&node)
         .arg(&script)
         .arg("--resource-dir")
@@ -268,9 +310,12 @@ fn start_sidecar(app: AppHandle) {
         .arg(&version)
         .arg("--log-dir")
         .arg(&log_dir)
+        .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        // The sidecar's own diagnostics are the only account of why it refused to start, so they
+        // are captured rather than discarded: a shell that exits silently is not a report.
+        .stderr(Stdio::piped())
         .spawn();
     let mut child = match spawned {
         Ok(child) => child,
@@ -288,6 +333,25 @@ fn start_sidecar(app: AppHandle) {
         app.exit(1);
         return;
     };
+    if let Some(stderr) = child.stderr.take() {
+        let owner = app.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines() {
+                let Ok(line) = line else { break };
+                eprintln!("Harness-CN sidecar: {line}");
+                if let Ok(mut captured) = owner.state::<Shell>().diagnostics.lock() {
+                    captured.push_str(&line);
+                    captured.push('\n');
+                    // Only the end of a crash report is worth showing, and only a bounded amount
+                    // of it: the dialog has to stay readable.
+                    if captured.len() > 4000 {
+                        let trimmed = captured[captured.len() - 4000..].to_string();
+                        *captured = trimmed;
+                    }
+                }
+            }
+        });
+    }
     if let Ok(mut guard) = app.state::<Shell>().child.lock() {
         *guard = Some(child);
     }
@@ -301,9 +365,26 @@ fn start_sidecar(app: AppHandle) {
             let _ = reader.run_on_main_thread(move || { apply_handshake(&handle, message) });
         }
         // The sidecar owns the Host, the project transaction, and the control surface: once it
-        // is gone there is nothing left for this shell to show, so it goes with it.
+        // is gone there is nothing left for this shell to show. A sidecar that died before it
+        // ever reported a workspace is a launch failure the user has to be told about; one that
+        // ended after that is an ordinary quit.
         let handle = reader.clone();
-        let _ = reader.run_on_main_thread(move || { handle.exit(0) });
+        let _ = reader.run_on_main_thread(move || {
+            let shell = handle.state::<Shell>();
+            if shell.ready.load(std::sync::atomic::Ordering::SeqCst) {
+                handle.exit(0);
+                return;
+            }
+            let detail = shell.diagnostics.lock().map(|text| text.clone()).unwrap_or_default();
+            platform::show_error(
+                "Harness-CN 启动失败",
+                &format!(
+                    "内置运行时未能启动。\n\n{}",
+                    if detail.trim().is_empty() { "（没有诊断输出）" } else { detail.trim() },
+                ),
+            );
+            handle.exit(1);
+        });
     });
 }
 
@@ -340,9 +421,28 @@ fn main() {
             return;
         }
     };
-    app.run(|handle, event| {
-        if let RunEvent::Exit = event {
-            stop_sidecar(handle);
+    app.run(|handle, event| match event {
+        RunEvent::ExitRequested { api, .. } => {
+            // A window disappearing is not a quit. The splash is destroyed on purpose when the
+            // workspace opens, and a launch that is still installing has no window at all; ending
+            // the process there would kill the very transaction that was making progress. The
+            // launch ends when its own window is closed, or when the sidecar that owns the
+            // workspace is gone.
+            let sidecar_alive = handle
+                .state::<Shell>()
+                .child
+                .lock()
+                .map(|child| child.is_some())
+                .unwrap_or(false);
+            if sidecar_alive && handle.get_webview_window(MAIN).is_none() {
+                eprintln!("Harness-CN: a window closed while the launch is still running; staying up");
+                api.prevent_exit();
+            }
         }
+        RunEvent::Exit => stop_sidecar(handle),
+        RunEvent::WindowEvent { ref label, event: tauri::WindowEvent::Destroyed, .. } if label == MAIN => {
+            handle.exit(0);
+        }
+        _ => {}
     });
 }

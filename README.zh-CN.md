@@ -29,7 +29,7 @@ Harness-CN 做的事情只有一件：**把这一整套东西做成一个 Window
 3. 安装器是"向导式"（非一键式）：可以自选安装目录（默认按用户安装，不需要管理员权限）。
 4. 首次启动请在启动界面绑定 **DeepSeek API Key**（凭据只保存在本机 `~/.dsh/.credentials.yaml`，不会随安装包分发）。
 
-**环境要求**：Windows 10/11 x64（Electron 44 的门槛，Win7/8 不支持）；用户目录所在磁盘预留约 1 GB（运行时镜像 ≈540 MB）；能访问 `api.deepseek.com`。
+**环境要求**：Windows 10/11 x64（WebView2 的门槛，Win7/8 不支持；Win10 由安装包自动补装运行时）；用户目录所在磁盘预留约 1 GB（程序本体 ≈420 MB，首次启动重建包存储再占 ≈300 MB）；能访问 `api.deepseek.com`。
 
 ## 首次启动会发生什么
 
@@ -69,31 +69,31 @@ Harness-CN 做的事情只有一件：**把这一整套东西做成一个 Window
 ## 从源码构建
 
 ```powershell
-# 前置：Windows x64、Node 22.19+ 或 24+、git、可选的真实 Python（编译原生模块用）
-pwsh -File build-harness-cn.ps1            # 首次会 pnpm install
-pwsh -File build-harness-cn.ps1 -SkipInstall
+# 前置：Windows x64、Node 22.19+ 或 24+、git、Rust 工具链（Tauri 外壳用）、可选的真实 Python（编译原生模块用）
+pwsh -File build-harness-cn-tauri.ps1            # 含 pnpm install 与资源准备
+pwsh -File build-harness-cn-tauri.ps1 -SkipPrepare
 ```
 
-脚本做的事：固定 pnpm `11.7.0`、设置 Harness-CN 的应用标识与"未签名"模式、切到 Electron 镜像源，然后执行上游的 `package:desktop:win:x64`（`build:official` → `release:pack` → `prepare:runtime` → `prepare:package-set` → `prepare:seed` → `electron-builder`）。产物在：
+脚本分两步，顺序不能换：先让 `@deepseek-ai/dsh-desktop` 准备好两个外壳共用的载荷（`build:official` → `release:pack` → `prepare:runtime` → `prepare:packages` → `prepare:seed`），再让 `@deepseek-ai/dsh-desktop-shell` 打包 Node sidecar、把运行时与种子挂进 `src-tauri/resources`，最后跑 `tauri build`。产物在：
 
 ```
-harness-0.1.5-rc.1/apps/desktop/.desktop-build/targets/win-x64/artifacts/
-  ├── harness-cn-0.1.5-rc.1-win-x64.exe      # 安装包
-  └── win-unpacked/                          # 免安装目录（含 resources/seed 与 runtime）
+harness-0.1.5-rc.1/apps/desktop-shell/src-tauri/target/release/bundle/nsis/
+  └── Harness-CN_0.1.5-rc.3_x64-setup.exe    # 安装包
 ```
 
-构建要点：原生模块（`node-pty`、`koffi`、`fs-ext`）在构建机上编译或取预编译产物，**使用者的机器上不需要编译器**；`apps/desktop/.desktop-build` 是构建产物目录，不要提交。
+构建要点：原生模块（`node-pty`、`koffi`、`fs-ext`）在构建机上编译或取预编译产物，**使用者的机器上不需要编译器**；`apps/desktop/.desktop-build` 与 `apps/desktop-shell/src-tauri/{resources,target}` 都是构建产物目录，不要提交。
 
 ## 仓库结构
 
 ```
-apps/desktop/          Electron Shell：窗口、菜单、启动事务、种子与 store 管理
+apps/desktop-shell/    Tauri 外壳：Rust 窗口与进程生命周期 + Node sidecar（控制面与 Host 载体）
+apps/desktop/          Electron 外壳（rc.2 及更早）；其 prepare 流水线仍被 Tauri 外壳复用
 apps/desktop-host/     桌面后端载体：把 Web 组合跑在字节管道上（含插件路由转发）
 packages/              上游的 Cordis 插件包（core/api/client/fs/llm/session/… 共 200+）
 vendor/                上游 vendored 的 Cordis 源码
 python/ native/        Python SDK 与原生扩展
 scripts/ docs/         构建与文档
-build-harness-cn.ps1   本分支的打包入口
+build-harness-cn-tauri.ps1   本分支的打包入口
 ```
 
 ## 常见问题

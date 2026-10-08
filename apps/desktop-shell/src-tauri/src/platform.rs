@@ -1,14 +1,14 @@
-# Single-instance claim and fatal-error dialog for the Harness-CN shell.
-#
-# Both are done through `windows-sys` rather than a Tauri plugin: the shell needs exactly three
-# Win32 calls, and a plugin would add a JavaScript API and a runtime to a process that uses
-# neither. Nothing here depends on the Windows version.
+// Single-instance claim and fatal-error dialog for the Harness-CN shell.
+//
+// Both are done through `windows-sys` rather than a Tauri plugin: the shell needs exactly three
+// Win32 calls, and a plugin would add a JavaScript API and a runtime to a process that uses
+// neither. Nothing here depends on the Windows version.
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::Mutex;
 
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, SetLastError, ERROR_ALREADY_EXISTS};
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     FindWindowW, MessageBoxW, SetForegroundWindow, ShowWindow, MB_ICONERROR, MB_OK, SW_RESTORE,
@@ -35,13 +35,17 @@ fn wide(text: &str) -> Vec<u16> {
 /// @returns whether this process is the one that owns the slot.
 pub fn claim_single_instance() -> bool {
     let name = wide(INSTANCE_MUTEX);
+    // `CreateMutexW` reports "somebody else already owns this name" through the thread's
+    // last-error value, and that value is whatever the previous API call in this process left
+    // there. Without clearing it, an unrelated stale error reads as "an instance is running",
+    // and the shell exits before showing anything at all.
+    unsafe { SetLastError(0) };
     let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
     if handle.is_null() {
         // A mutex that cannot be created is not a reason to refuse to start.
         return true;
     }
-    let taken = unsafe { GetLastError() == ERROR_ALREADY_EXISTS };
-    if taken {
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         unsafe { CloseHandle(handle) };
         return false;
     }

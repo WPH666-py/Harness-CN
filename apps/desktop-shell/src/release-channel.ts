@@ -166,10 +166,16 @@ async function readGitee(source: ReleaseSource, fetchImpl: typeof globalThis.fet
       if (Array.isArray(files)) {
         for (const file of files.filter(isRecord)) {
           const name = typeof file.title === 'string' ? file.title : (typeof file.name === 'string' ? file.name : '')
-          const url = typeof file.download_url === 'string'
-            ? file.download_url
-            : (typeof file.browser_download_url === 'string' ? file.browser_download_url : '')
-          if (name === '' || url === '') continue
+          if (name === '') continue
+          // Gitee has answered this endpoint with a URL under more than one field name, and with no
+          // URL at all. The canonical download path is derivable from facts this function already
+          // holds, so a release whose attachment record carries only a title is still installable
+          // rather than being silently skipped.
+          const published = [file.download_url, file.browser_download_url, file.url]
+            .find(candidate => typeof candidate === 'string' && candidate !== '')
+          const url = typeof published === 'string'
+            ? published
+            : `https://gitee.com/${source.owner}/${source.repo}/releases/download/${newest.tag}/${encodeURIComponent(name)}`
           assets.push({ name, url, size: typeof file.size === 'number' ? file.size : undefined, sha256: '' })
         }
       }
