@@ -99,6 +99,32 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     version: '1.10.74',
     active: false,
   },
+  {
+    // Prompt-injection, jailbreak, and secret-leak defense: it intercepts inbound messages, tool
+    // arguments, and tool results on the official seams and answers allow/ask/block, plus a
+    // destructive-delete guard on shell commands. Its declared peer corridor already covers this
+    // line (`>=0.1.5-alpha.1 <0.2.0`), and it was verified mounted here before being bundled.
+    //
+    // One documented degradation on this line: the audit event's `ignorable` marker is dropped by
+    // hosts that predate it, so the plugin disables session-log audit and warns once instead of
+    // writing events that would make a session unresumable. Detection and interception are
+    // unaffected — only the audit trail is.
+    name: 'dsh-defend',
+    version: '0.3.21',
+    active: true,
+  },
+  {
+    // Shadow-git checkpoints of the workspace with one-click rollback, so an agent's multi-file
+    // refactor can be undone without touching the user's own commits or branches.
+    //
+    // Pinned to the last release of its 0.1.5 corridor: 0.1.23 moved its peers to
+    // `^0.1.7-rc.2 || ^0.2.0-rc.1`, a line this product does not carry. 0.1.22 declares
+    // `^0.1.0-rc.6` for tools, settings, and the web server, which `0.1.5-rc.9` satisfies, and it
+    // was verified mounted here on that version.
+    name: '@goodandready/dsh-time-machine',
+    version: '0.1.22',
+    active: true,
+  },
 ]
 
 /**
