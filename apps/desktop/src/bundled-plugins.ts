@@ -87,23 +87,62 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
   },
   {
     // An encrypted credential vault (AES-256-GCM with TOTP) exposing model tools and a
-    // Settings page. It ships its own bundle patch, so it activates itself; an empty vault
-    // exposes the tools and nothing else.
+    // Settings page.
+    //
+    // Installed but not activated, and the reason is startup rather than preference: the vault
+    // refuses to load without `DSH_VAULT_PASSWORD` — that is its fail-closed design, and it is
+    // right — but a bundle row is applied while the composition boots, so an activated vault
+    // turns a missing environment variable into a product that cannot open at all. Shipping it
+    // one toggle away is the same trade the vision toolkit below already makes: present without
+    // letting an unconfigured plugin decide whether the application starts.
     name: 'dsh-vault',
     version: '1.10.74',
-    active: true,
+    active: false,
   },
+]
+
+/**
+ * Runtime dependency of a bundled plugin that pnpm does not install on its own.
+ *
+ * A plugin's `dependencies` are installed with it, but a package that is reachable only through
+ * another package's own tree is not the same thing as one this profile can resolve: the Host
+ * loads plugins from the profile, so a plugin's runtime import has to sit where the profile
+ * resolves it. Declaring it here is what puts it in the seed store and in the profile manifest.
+ */
+export interface BundledPluginDependency {
+  readonly name: string
+  readonly version: string
+  /** Bundled plugin whose runtime imports it. */
+  readonly requiredBy: string
+}
+
+/**
+ * Dependencies the bundled plugins import at runtime but do not bring with them.
+ *
+ * `billion-context-dsh` imports `acp-kernel` from its own code, and the lockfile for the seed
+ * never contained it — so the first launch assembled a profile whose `billion-context-dsh` could
+ * not load, and the Host spent its whole startup budget failing to compose. A dependency that is
+ * only ever reached through another package's tree is exactly the one that has to be named.
+ */
+export const BUNDLED_PLUGIN_DEPENDENCIES: readonly BundledPluginDependency[] = [
+  { name: 'acp-kernel', version: '0.0.101', requiredBy: 'billion-context-dsh' },
 ]
 
 /**
  * Direct dependencies contributed to the seed and profile manifests.
  *
  * Every bundled plugin is installed whether or not a fresh profile activates it, so the
- * seed store carries its closure and it can be enabled later without a download.
- * @returns Bundled plugin names mapped to their pinned versions.
+ * seed store carries its closure and it can be enabled later without a download. The
+ * runtime dependencies above are named here for the same reason: they are part of that
+ * closure, and a profile that cannot resolve one of them cannot load the plugin that
+ * imports it.
+ * @returns Bundled plugin names and their runtime dependencies, mapped to pinned versions.
  */
 export function bundledPluginDependencies(): Record<string, string> {
-  return Object.fromEntries(BUNDLED_PLUGINS.map(plugin => [plugin.name, plugin.version]))
+  return {
+    ...Object.fromEntries(BUNDLED_PLUGINS.map(plugin => [plugin.name, plugin.version])),
+    ...Object.fromEntries(BUNDLED_PLUGIN_DEPENDENCIES.map(dependency => [dependency.name, dependency.version])),
+  }
 }
 
 /**
