@@ -76,6 +76,14 @@ export interface ShellArguments {
   readonly pnpm: string
   /** Absolute directory this process may write the run log into. */
   readonly logDirectory: string
+  /**
+   * Absolute directory the application is installed in.
+   *
+   * The platform uninstaller lives there, and this process cannot derive it: the only path it
+   * knows is the Node runtime inside the installation, so the shell states the directory instead
+   * of the sidecar guessing at it.
+   */
+  readonly installDir: string
 }
 
 /** State sink the sidecar publishes to both its pages and the Rust shell. */

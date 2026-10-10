@@ -71,6 +71,10 @@ export interface ShellApi {
   checkUpdates(): Promise<DesktopUpdateState>
   /** Download and start the offered release. */
   installUpdates(): Promise<DesktopUpdateState>
+  /** Stop a download the user cancelled. */
+  cancelUpdates(): boolean
+  /** Remove this installation, leaving the user's own files alone. */
+  uninstall(): void
   /** Remember the release the user chose not to install. */
   skipUpdate(version: string): void
   /** Whether the DeepSeek credential is configured. */
@@ -244,6 +248,8 @@ async function serveShellAsset(message: ServerResponse, resourceDir: string, pat
 export async function startShellServer(options: ShellServerOptions): Promise<ShellServer> {
   const token = randomBytes(32).toString('hex')
   const clients = new Set<ServerResponse>()
+  /** Requests still being answered, with the signal that ends each one. */
+  const inFlight = new Set<AbortController>()
   let port = 0
 
   const publish = (name: string, value: unknown): void => {
@@ -295,6 +301,13 @@ export async function startShellServer(options: ShellServerOptions): Promise<She
     if (route === 'updates' && method === 'GET') return sendJson(response, 200, options.api.updateState())
     if (route === 'updates/check' && method === 'POST') return sendJson(response, 200, await options.api.checkUpdates())
     if (route === 'updates/install' && method === 'POST') return sendJson(response, 200, await options.api.installUpdates())
+    if (route === 'updates/cancel' && method === 'POST') {
+      return sendJson(response, 200, { cancelled: options.api.cancelUpdates() })
+    }
+    if (route === 'updates/uninstall' && method === 'POST') {
+      options.api.uninstall()
+      return sendJson(response, 200, {})
+    }
     if (route === 'updates/skip' && method === 'POST') {
       const body = await readJsonBody(message)
       options.api.skipUpdate(requireString(body.version, 'release version'))
@@ -328,6 +341,12 @@ export async function startShellServer(options: ShellServerOptions): Promise<She
       if (cookie === undefined) {
         response.setHeader('set-cookie', `${SHELL_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict`)
       }
+      // A Host request can outlive the exit that started: the workspace's event stream is open
+      // until the page is gone, so a stop that waited for connections to drain would wait for the
+      // WebView it is in the middle of closing. Tracking the request is what lets the stop abort
+      // it instead.
+      const abort = new AbortController()
+      inFlight.add(abort)
       try {
         if (url.pathname.startsWith(SHELL_API_PREFIX)) {
           if (!sameToken(token, cookie)) {
@@ -341,13 +360,17 @@ export async function startShellServer(options: ShellServerOptions): Promise<She
           await serveShellAsset(response, options.resourceDir, url.pathname)
           return
         }
-        await writeResponse(response, await options.api.fetchHost(toHostRequest(message, port)))
+        const forwarded = toHostRequest(message, port)
+        abort.signal.addEventListener('abort', () => { forwarded.signal.throwIfAborted() }, { once: true })
+        await writeResponse(response, await options.api.fetchHost(forwarded))
       } catch (error) {
         if (response.headersSent) {
           response.destroy()
           return
         }
         sendJson(response, 500, { error: errorOf(error, 'dsh shell: request failed').message })
+      } finally {
+        inFlight.delete(abort)
       }
     })()
   })
@@ -371,7 +394,16 @@ export async function startShellServer(options: ShellServerOptions): Promise<She
     close: async () => {
       for (const client of clients) client.end()
       clients.clear()
-      await new Promise<void>((settle) => { server.close(() => { settle() }) })
+      // The workspace holds its own event stream open for as long as the page is loaded, and the
+      // page is only unloaded once this process is gone. Waiting for the connections to drain
+      // would therefore wait for the exit that is trying to happen, so each in-flight request is
+      // aborted and the sockets still open when the listener stops accepting are destroyed.
+      for (const abort of inFlight) abort.abort(new Error('dsh shell: the control surface is stopping'))
+      inFlight.clear()
+      const closed = new Promise<void>((settle) => { server.close(() => { settle() }) })
+      server.closeIdleConnections()
+      server.closeAllConnections()
+      await closed
     },
   }
 }

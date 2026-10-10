@@ -35,9 +35,25 @@ export interface DesktopApiKeyStatus {
 /** Desktop release update state rendered by desktop-owned UI. */
 export interface DesktopUpdateState {
   readonly phase: 'idle' | 'checking' | 'available' | 'installing' | 'ready' | 'error'
+  /** Version this installation runs, so the prompt can name both sides of the upgrade. */
+  readonly current?: string
+  /** Version the release channel offers. */
   readonly version?: string
   /** Completed fraction of an installer download, reported while `phase` is `installing`. */
   readonly progress?: number
+  /**
+   * Bytes received so far and the published size of the installer.
+   *
+   * The fraction above is what draws the bar; these two are what let the window say how much of
+   * the file is on disk, which is the difference between "working" and "stalled" for a transfer
+   * measured in tens of megabytes. `total` is absent when the host published no size.
+   */
+  readonly downloaded?: number
+  readonly total?: number
+  /** Release notes the host published for the offered version. */
+  readonly notes?: string
+  /** When the host published the offered version. */
+  readonly publishedAt?: string
   readonly message?: string
 }
 

@@ -17,7 +17,12 @@ import { createWriteStream } from 'node:fs'
 import { spawn as detachedSpawn } from 'node:child_process'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import type { DesktopUpdateBackend, DesktopUpdateDownload, DesktopUpdateIntegrity } from '../../desktop/src/update-backend.ts'
+import type {
+  DesktopUpdateBackend,
+  DesktopUpdateDownload,
+  DesktopUpdateIntegrity,
+  DesktopUpdateOffer,
+} from '../../desktop/src/update-backend.ts'
 import {
   RELEASE_SOURCES,
   USER_AGENT,
@@ -30,8 +35,39 @@ import { isNewer, releaseVersion } from './version.ts'
 /** Longest total download time, which bounds a transfer that trickles rather than stalls. */
 const DOWNLOAD_TOTAL_MS = 30 * 60_000
 
+/**
+ * Longest gap between two chunks, which bounds a connection that stopped delivering.
+ *
+ * The total time above cannot tell a slow transfer from a dead one: a socket that has gone quiet
+ * without being closed keeps the download open until the total budget expires, and the window then
+ * shows a bar that has not moved for half an hour. This is the bound that turns that into an error
+ * the user can act on.
+ */
+const DOWNLOAD_STALL_MS = 60_000
+
 /** Silent switch of the NSIS installer, which then replaces the previous installation in place. */
 const NSIS_SILENT_SWITCH = '/S'
+
+/**
+ * Marker in the message of an update the user cancelled.
+ *
+ * The window tells a cancellation apart from a failure by this prefix rather than by comparing
+ * whole sentences, so the sentence itself stays free to change.
+ */
+export const UPDATE_CANCELLED = 'update cancelled'
+
+/**
+ * Exact failure for one aborted download.
+ *
+ * A `fetch` rejection caused by an abort carries the abort's own reason, which for a user pressing
+ * cancel is a plain `Error` with no marker. Translating it here is what keeps "you cancelled this"
+ * from arriving at the window as "this failed".
+ * @param reason - the abort reason, or anything else the transfer rejected with.
+ * @returns the error the download should fail with.
+ */
+function cancelled(reason: unknown): Error {
+  return new Error(`${UPDATE_CANCELLED}: ${reason instanceof Error ? reason.message : String(reason)}`)
+}
 
 /** The file this channel installs, from whatever name a host gave it. */
 function pickInstaller(assets: readonly ReleaseAsset[]): ReleaseAsset | undefined {
@@ -53,6 +89,10 @@ export interface VerifiedDownloadRequest {
   readonly sha256: string
   /** Completed fraction of the transfer, from 0 through 1. */
   readonly progress?: ((fraction: number) => void) | undefined
+  /** Bytes received and the total they are measured against. */
+  readonly bytes?: ((downloaded: number, total: number) => void) | undefined
+  /** Aborted when the user cancels; the partial file is removed before this rejects. */
+  readonly signal?: AbortSignal | undefined
   /** Request implementation. */
   readonly fetch: typeof globalThis.fetch
 }
@@ -62,6 +102,8 @@ export interface VerifiedDownload {
   readonly path: string
   readonly bytes: number
   readonly integrity: DesktopUpdateIntegrity
+  /** Published size the host stated, or zero when it stated none. */
+  readonly total: number
 }
 
 /** Turn a published name into something safe to use as a file name. */
@@ -84,11 +126,24 @@ export async function downloadVerified(request: VerifiedDownloadRequest): Promis
   await mkdir(request.directory, { recursive: true })
   const target = `${request.directory}\\${safeFileName(request.name)}`
   await rm(target, { force: true })
+  // Two bounds, one controller: the total time caps the whole transfer, and the stall timer is
+  // re-armed on every chunk, so only a transfer that actually stops trips it.
+  const abort = new AbortController()
+  const totalTimer = setTimeout(() => { abort.abort(new Error('the download did not finish in time')) }, DOWNLOAD_TOTAL_MS)
+  totalTimer.unref()
+  let stallTimer: ReturnType<typeof setTimeout> | undefined
+  const armStall = (): void => {
+    if (stallTimer !== undefined) clearTimeout(stallTimer)
+    stallTimer = setTimeout(() => { abort.abort(new Error('the download stopped delivering data')) }, DOWNLOAD_STALL_MS)
+    stallTimer.unref()
+  }
+  const cancel = (): void => { abort.abort(request.signal?.reason) }
+  request.signal?.addEventListener('abort', cancel, { once: true })
   try {
     const response = await request.fetch(request.url, {
       headers: { 'user-agent': USER_AGENT },
       redirect: 'follow',
-      signal: AbortSignal.timeout(DOWNLOAD_TOTAL_MS),
+      signal: abort.signal,
     })
     if (!response.ok || response.body === null) {
       throw new Error(`download failed with ${String(response.status)}`)
@@ -96,10 +151,14 @@ export async function downloadVerified(request: VerifiedDownloadRequest): Promis
     const total = Number(response.headers.get('content-length')) || request.size || 0
     const hash = createHash('sha256')
     let received = 0
+    request.bytes?.(0, total)
+    armStall()
     const body = Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0])
     body.on('data', (chunk: Buffer) => {
       hash.update(chunk)
       received += chunk.byteLength
+      armStall()
+      request.bytes?.(received, total)
       if (total > 0) request.progress?.(Math.min(1, received / total))
     })
     await pipeline(body, createWriteStream(target))
@@ -113,10 +172,18 @@ export async function downloadVerified(request: VerifiedDownloadRequest): Promis
       path: target,
       bytes: (await stat(target)).size,
       integrity: request.sha256 === '' ? 'unverified' : 'verified',
+      total,
     }
   } catch (error) {
     await rm(target, { force: true }).catch(() => undefined)
+    // A cancellation is the user's own instruction and has to arrive as itself: reporting it as a
+    // failed transfer would leave the window offering to retry something the user just stopped.
+    if (request.signal?.aborted === true) throw cancelled(request.signal.reason)
     throw error instanceof Error ? error : new Error(String(error))
+  } finally {
+    clearTimeout(totalTimer)
+    if (stallTimer !== undefined) clearTimeout(stallTimer)
+    request.signal?.removeEventListener('abort', cancel)
   }
 }
 
@@ -144,7 +211,7 @@ export function createReleaseChannel(options: ReleaseChannelOptions): DesktopUpd
   let offeredAsset: ReleaseAsset | undefined
   let downloaded: string | undefined
 
-  const check = async (): Promise<string | undefined> => {
+  const check = async (): Promise<DesktopUpdateOffer | undefined> => {
     const answers = await readReleaseAnswers(request, RELEASE_SOURCES)
     const readable = answers.filter(
       (answer): answer is (typeof answer) & { facts: ReleaseFacts } => answer.facts !== undefined,
@@ -173,7 +240,13 @@ export function createReleaseChannel(options: ReleaseChannelOptions): DesktopUpd
     const version = releaseVersion(chosen.facts.tag)
     if (version === undefined || !isNewer(version, options.currentVersion)) return undefined
     if (offeredAsset === undefined) throw new Error(`release ${chosen.facts.tag} publishes no installer`)
-    return version
+    return {
+      version,
+      notes: chosen.facts.notes,
+      publishedAt: chosen.facts.publishedAt,
+      page: chosen.facts.page,
+      size: offeredAsset.size,
+    }
   }
 
   const download = async (request_: DesktopUpdateDownload): Promise<DesktopUpdateIntegrity> => {
@@ -189,6 +262,8 @@ export function createReleaseChannel(options: ReleaseChannelOptions): DesktopUpd
       size: asset.size,
       sha256: asset.sha256,
       progress: request_.progress,
+      bytes: request_.bytes,
+      signal: request_.signal,
       fetch: request,
     })
     downloaded = result.path

@@ -4,7 +4,7 @@ import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs'
 import { dirname } from 'node:path'
 
 /** Which desktop process produced one log line. */
-export type DesktopLogSource = 'shell' | 'host-out' | 'host-err'
+export type DesktopLogSource = 'shell' | 'host-out' | 'host-err' | 'warn'
 
 /** One retained log line addressed by its monotonic sequence number. */
 export interface DesktopLogEntry {

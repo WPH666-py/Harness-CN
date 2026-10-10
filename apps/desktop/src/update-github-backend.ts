@@ -9,7 +9,13 @@ import { spawn as detachedSpawn } from 'node:child_process'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { gt, valid } from 'semver'
-import type { DesktopUpdateBackend, DesktopUpdateDownload, DesktopUpdateIntegrity } from './update-backend.ts'
+import type {
+  DesktopUpdateBackend,
+  DesktopUpdateBytes,
+  DesktopUpdateDownload,
+  DesktopUpdateIntegrity,
+  DesktopUpdateOffer,
+} from './update-backend.ts'
 
 /**
  * Repository whose releases are this fork's update channel.
@@ -80,6 +86,12 @@ export interface GithubRelease {
   readonly draft: boolean
   /** Assets attached to the release. */
   readonly assets: readonly GithubReleaseAsset[]
+  /** Release body, as the release page publishes it. */
+  readonly notes: string
+  /** When the release was published, empty when the API omitted the field. */
+  readonly publishedAt: string
+  /** Release page a person can open instead of installing. */
+  readonly page: string
 }
 
 /**
@@ -94,6 +106,9 @@ function releaseOf(value: unknown): GithubRelease | undefined {
   const draft = record.draft
   const assets = record.assets
   if (typeof tagName !== 'string' || typeof draft !== 'boolean' || !Array.isArray(assets)) return undefined
+  const body = record.body
+  const publishedAt = record.published_at
+  const page = record.html_url
   return {
     tagName,
     draft,
@@ -101,8 +116,19 @@ function releaseOf(value: unknown): GithubRelease | undefined {
       const entry = assetOf(asset)
       return entry === undefined ? [] : [entry]
     }),
+    notes: typeof body === 'string' ? body.trim().slice(0, NOTES_LIMIT) : '',
+    publishedAt: typeof publishedAt === 'string' ? publishedAt : '',
+    page: typeof page === 'string' ? page : '',
   }
 }
+
+/**
+ * Longest release body this channel carries into the update window.
+ *
+ * A release page is written for a browser and the update window is not one; the cap is in
+ * characters so a Chinese body is cut at a readable length rather than at a byte boundary.
+ */
+const NOTES_LIMIT = 4_000
 
 /**
  * Read one asset from a GitHub API response.
@@ -219,7 +245,7 @@ export class DesktopGithubUpdateBackend implements DesktopUpdateBackend {
   }
 
   /** Check the fork's release channel for a newer installed version. */
-  async check(): Promise<string | undefined> {
+  async check(): Promise<DesktopUpdateOffer | undefined> {
     this.checkedRelease = undefined
     this.checkedVersion = undefined
     const controller = new AbortController()
@@ -247,26 +273,33 @@ export class DesktopGithubUpdateBackend implements DesktopUpdateBackend {
     }
     if (!response.ok) throw new Error(requestFailure(response.status, response.statusText))
     const releases = this.releaseList(await response.json())
-    let newest: { readonly version: string; readonly release: GithubRelease } | undefined
+    let newest: { readonly version: string; readonly release: GithubRelease; readonly asset: GithubReleaseAsset } | undefined
     for (const release of releases) {
       const version = releaseVersion(release.tagName)
       if (version === undefined || release.draft) continue
-      if (findInstallerAsset(release.assets, version) === undefined) continue
+      const asset = findInstallerAsset(release.assets, version)
+      if (asset === undefined) continue
       if (newest !== undefined && !gt(version, newest.version)) continue
-      newest = { version, release }
+      newest = { version, release, asset }
     }
     if (newest === undefined || !gt(newest.version, this.options.currentVersion)) return undefined
     this.checkedRelease = newest.release
     this.checkedVersion = newest.version
-    return newest.version
+    return {
+      version: newest.version,
+      notes: newest.release.notes,
+      publishedAt: newest.release.publishedAt,
+      page: newest.release.page,
+      size: undefined,
+    }
   }
 
   /**
    * Download and verify the installer for the version the last check retained.
-   * @param request - version the last check retained and the progress sink for this download.
+   * @param request - version the last check retained and the sinks this download reports through.
    * @returns `verified` when the release declared a digest that the bytes matched, `unverified` otherwise.
    */
-  async download({ version, progress }: DesktopUpdateDownload): Promise<DesktopUpdateIntegrity> {
+  async download({ version, progress, bytes, signal }: DesktopUpdateDownload): Promise<DesktopUpdateIntegrity> {
     const release = this.checkedRelease
     if (release === undefined || this.checkedVersion !== version) {
       throw new Error(`desktop update: version ${version} was not the version the last check retained`)
@@ -280,7 +313,14 @@ export class DesktopGithubUpdateBackend implements DesktopUpdateBackend {
     const expectedDigest = sha256DigestOf(asset)
     // Hashing while the bytes are written verifies the installer with one pass over ~200 MB.
     const hash = createHash('sha256')
-    await this.transfer(asset.browserDownloadUrl, file, progress, expectedDigest === undefined ? undefined : hash)
+    await this.transfer(
+      asset.browserDownloadUrl,
+      file,
+      progress,
+      bytes ?? (() => {}),
+      signal ?? new AbortController().signal,
+      expectedDigest === undefined ? undefined : hash,
+    )
     if (expectedDigest === undefined) {
       // GitHub has exposed `digest` only since 2025; a release published before that, or created
       // through a path that omits it, arrives hashless, and this download is installed unverified.
@@ -330,17 +370,29 @@ export class DesktopGithubUpdateBackend implements DesktopUpdateBackend {
    * @param url - asset download URL.
    * @param file - destination path, replaced when it already exists.
    * @param progress - sink for the downloaded fraction.
+   * @param bytes - sink for how much of the file is on disk.
+   * @param signal - cancellation from the caller, honored alongside this transfer's own deadlines.
    * @param hash - SHA-256 accumulator to feed, or undefined when the release declares no digest.
    */
   private async transfer(
     url: string,
     file: string,
     progress: (fraction: number) => void,
+    bytes: DesktopUpdateBytes,
+    signal: AbortSignal,
     hash: Hash | undefined,
   ): Promise<void> {
     const controller = new AbortController()
     let failure: Error | undefined
     let stall: NodeJS.Timeout | undefined
+    // A cancellation is the user's own instruction, so it is translated into a failure this
+    // download reports as itself rather than as a stalled or failed transfer.
+    const cancelled = (): void => {
+      failure = new Error(`update cancelled: ${String(signal.reason instanceof Error ? signal.reason.message : '')}`)
+      controller.abort(failure)
+    }
+    signal.addEventListener('abort', cancelled, { once: true })
+    if (signal.aborted) cancelled()
     const stalled = (): void => {
       failure = new Error(
         `desktop update: the download stalled for ${String(this.stallTimeoutMs / 1000)} seconds and was aborted`,
@@ -366,6 +418,7 @@ export class DesktopGithubUpdateBackend implements DesktopUpdateBackend {
       if (response.body === null) throw new Error('desktop update: installer download carried no body')
       const expected = declaredLength(response.headers)
       let received = 0
+      bytes(0, expected ?? 0)
       // The platform's ReadableStream and the one `node:stream` converts describe the same object;
       // their declared read signatures differ, which is the only reason for the cast.
       const body = Readable.fromWeb(response.body as unknown as Parameters<typeof Readable.fromWeb>[0])
@@ -376,6 +429,7 @@ export class DesktopGithubUpdateBackend implements DesktopUpdateBackend {
         received += chunk.length
         restartStallTimer()
         hash?.update(chunk)
+        bytes(received, expected ?? 0)
         progress(expected === undefined ? 0 : Math.min(1, received / expected))
       })
       const destination = createWriteStream(file)
@@ -391,12 +445,14 @@ export class DesktopGithubUpdateBackend implements DesktopUpdateBackend {
           `desktop update: the download ended after ${String(received)} of ${String(expected)} bytes`,
         )
       }
+      bytes(received, expected ?? received)
       progress(1)
     } catch (error) {
       // A stall or overall timeout aborts the request, which surfaces as the transport's own
       // abort error; the recorded cause is the failure the user and the log need to see.
       throw failure ?? error
     } finally {
+      signal.removeEventListener('abort', cancelled)
       clearTimeout(stall)
       clearTimeout(total)
     }

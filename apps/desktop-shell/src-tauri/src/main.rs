@@ -19,6 +19,7 @@ use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -31,6 +32,14 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWind
 /// product for as long as the application runs. The sidecar has no use for a console — its
 /// stdout and stderr are pipes this shell reads — so the window is suppressed at creation.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// How long the sidecar is given to stop the Host and exit on its own before it is killed.
+///
+/// The Host's own stop allows 20 seconds for a graceful shutdown, but waiting that long past the
+/// last window would read as a product that will not close. The sidecar stops the Host first and
+/// only then exits, so this window is the Host's stop plus the two file flushes after it; a Host
+/// that genuinely needs longer is exactly the one the job object is there for.
+const GRACEFUL_STOP: Duration = Duration::from_secs(12);
 
 /// Window label of the launch progress window.
 const SPLASH: &str = "splash";
@@ -186,7 +195,16 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
             }
         }
         Handshake::Update { state } => {
-            if state.phase != "available" {
+            // The prompt exists to offer a release or to report one being installed. An `idle` or
+            // `error` check has its own answers — the menu item reports both through a dialog —
+            // and opening a window for those would put a dialog about nothing on the user's
+            // desktop. A prompt already on screen is left alone: the page renders every later
+            // state from the control surface's own event stream, so reopening it would only
+            // discard the download progress it is showing.
+            if state.phase != "available" && state.phase != "installing" {
+                return;
+            }
+            if app.get_webview_window(UPDATE).is_some() {
                 return;
             }
             let port = app.state::<Shell>().port.lock().ok().and_then(|value| *value);
@@ -197,8 +215,8 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
                 UPDATE,
                 format!("{}/shell/update.html?v={version}", origin(port)),
                 "发现新版本",
-                540.0,
-                380.0,
+                620.0,
+                620.0,
                 false,
             );
         }
@@ -295,12 +313,19 @@ fn start_sidecar(app: AppHandle) {
     let node = resource_dir.join("runtime").join("node").join("node.exe");
     let script = resource_dir.join("sidecar").join("shell.mjs");
     let version = app.package_info().version.to_string();
+    // The sidecar finds the platform uninstaller here. It cannot derive this directory: the only
+    // executable path it knows is the Node runtime inside the installation.
+    let install_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+        .unwrap_or_else(|| resource_dir.clone());
     eprintln!(
-        "Harness-CN: node={} script={} resource_dir={} log_dir={}",
+        "Harness-CN: node={} script={} resource_dir={} log_dir={} install_dir={}",
         node.display(),
         script.display(),
         resource_dir.display(),
         log_dir.display(),
+        install_dir.display(),
     );
     let spawned = Command::new(&node)
         .arg(&script)
@@ -310,6 +335,12 @@ fn start_sidecar(app: AppHandle) {
         .arg(&version)
         .arg("--log-dir")
         .arg(&log_dir)
+        .arg("--install-dir")
+        .arg(&install_dir)
+        // `CREATE_NO_WINDOW` because `node.exe` would otherwise allocate the console this shell
+        // has no use for. The sidecar is contained in a job immediately after it is spawned —
+        // before it can load its own entry point, let alone start the Host — so no separate
+        // suspended start is needed to close that window.
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -328,6 +359,9 @@ fn start_sidecar(app: AppHandle) {
             return;
         }
     };
+    // Everything the product starts — the Host, the pnpm transactions, and every process an agent
+    // spawns under them — ends with this process, including when this process is killed outright.
+    platform::contain_process_tree(&child);
     let Some(stdout) = child.stdout.take() else {
         platform::show_error("Harness-CN 启动失败", "内置运行时没有可读的输出。");
         app.exit(1);
@@ -389,15 +423,48 @@ fn start_sidecar(app: AppHandle) {
 }
 
 /// Stop the sidecar, which stops the Host it owns.
+///
+/// Exiting is a handshake rather than a kill. The Host is a child of the sidecar and owns the
+/// profile directory, the session logs, and every process an agent started; it needs the seconds
+/// `DesktopHostProcess::stop` takes to close them. A shell that terminates the sidecar first is
+/// what leaves that Host behind, holding the files the next launch has to replace — and a Host
+/// still running is a Host whose stale port and half-written session the new one then contends
+/// with. So the sidecar is asked to quit and given a bounded window to do it in, and only a
+/// sidecar that misses that window is killed. The job object remains the backstop for everything
+/// that reaches this path not at all.
 fn stop_sidecar(app: &AppHandle) {
+    static STOPPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STOPPING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     let state = app.state::<Shell>();
     let Ok(mut guard) = state.child.lock() else { return };
-    if let Some(mut child) = guard.take() {
-        // Dropping the stdin pipe is what the sidecar watches for; the kill is the backstop.
-        drop(child.stdin.take());
-        let _ = child.kill();
-        let _ = child.wait();
+    let Some(mut child) = guard.take() else { return };
+    let pid = child.id();
+    // The same command the menu's own quit path sends: the sidecar stops the Host, closes the
+    // control surface, flushes the run log, and exits.
+    if let Some(stdin) = child.stdin.as_mut() {
+        let _ = writeln!(stdin, "{{\"command\":\"quit\"}}");
+        let _ = stdin.flush();
     }
+    drop(child.stdin.take());
+    let deadline = Instant::now() + GRACEFUL_STOP;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                eprintln!("Harness-CN: the sidecar exited cleanly ({status})");
+                return;
+            }
+            // A failed poll is not evidence the child is alive, so it falls through to the kill
+            // rather than spinning out the whole window first.
+            Err(_) => break,
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    eprintln!("Harness-CN: the sidecar did not stop within {GRACEFUL_STOP:?}; killing the process tree");
+    platform::terminate(pid);
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn main() {

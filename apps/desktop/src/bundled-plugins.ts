@@ -44,6 +44,35 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
   },
   { name: '@jieai/dsh-plugin-vet', version: '0.3.12', active: true },
   { name: '@liustack/modlens', version: '3.26.1', active: true },
+  {
+    // Long-term project memory for coding agents, backed by a Hindsight server. Its bundle
+    // patch mounts one host row (`@vectorize-io/hindsight-coding-agents/dsh`) that reaches
+    // every session through the layered tools registry — the same wiring the package's own
+    // `install dsh` writes into a profile. Memory itself is configured outside the product,
+    // in `~/.hindsight/coding-agent.json`; with no server configured the row resolves its
+    // bank and stays inert.
+    name: '@vectorize-io/hindsight-coding-agents',
+    version: '0.8.0',
+    active: true,
+  },
+  {
+    // Model-driven context management: the model decides when the window is worth
+    // reclaiming and writes the summary itself, instead of a fixed threshold summarising on
+    // its own. Its bundle patch disables the host's `compaction-basic` row, which is what
+    // makes room for a second CompactionEngine backend in one realm.
+    //
+    // Pinned below the newest release on purpose. From 0.2.27 the package also pins
+    // `@deepseek-ai/dsh-brand`, `dsh-timeout`, `dsh-util-crypto`, `dsh-util-values`,
+    // `dsh-session-format` and its migrations to exactly 0.2.0-rc.2 — a line this product
+    // does not carry, because its baseline is upstream `dsh-v0.1.5-rc.1`. pnpm would satisfy
+    // those peers by installing a second copy of the session-format chain beside the Host's
+    // own, and an engine reading a different format generation than the Host writes is not a
+    // version skew worth discovering at runtime. 0.2.26 declares the same six runtime seams
+    // the profile already provides, at ranges 0.1.5-rc.8 satisfies.
+    name: 'billion-context-dsh',
+    version: '0.2.26',
+    active: true,
+  },
   { name: 'dsh-chat-import', version: '0.17.1', active: true },
   { name: 'dsh-cost-meter', version: '1.7.28', active: true },
   { name: 'dsh-rule-engine', version: '0.6.4', active: true },
@@ -55,6 +84,14 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     name: 'dsh-rule-engine-client',
     version: '0.1.0',
     active: false,
+  },
+  {
+    // An encrypted credential vault (AES-256-GCM with TOTP) exposing model tools and a
+    // Settings page. It ships its own bundle patch, so it activates itself; an empty vault
+    // exposes the tools and nothing else.
+    name: 'dsh-vault',
+    version: '1.10.74',
+    active: true,
   },
 ]
 

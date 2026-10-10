@@ -123,6 +123,26 @@ export function installUpdate() {
   return request('/updates/install', { method: 'POST' })
 }
 
+/**
+ * Stop a download that is still running.
+ *
+ * The download's own request then rejects with its cancellation, so nothing is installed and the
+ * partial file is removed by the shell before this answers.
+ * @returns {Promise<{cancelled: boolean}>} whether a download was actually running.
+ */
+export function cancelUpdate() {
+  return request('/updates/cancel', { method: 'POST' })
+}
+
+/**
+ * Record one release the user chose not to install on this launch.
+ * @param {string} version - release version being deferred.
+ * @returns {Promise<object>} an empty object once the shell recorded it.
+ */
+export function skipUpdate(version) {
+  return request('/updates/skip', { json: { version } })
+}
+
 /** @returns {Promise<object>} whether a credential is bound, as `{configured, source?}`. */
 export function getApiKeyStatus() {
   return request('/api-key')

@@ -1,79 +1,419 @@
+/*
+ * The update window's own stylesheet.
+ *
+ * The card is DeepAhead's update modal, carried over whole: the blue gradient hero with its round
+ * emoji tile, the old-version/new-version chips, the pill meta row, the seven-pixel bar that turns
+ * green and pulses while the installer starts, and the right-aligned footer. It is a page rather
+ * than a modal because this shell opens it as its own window.
+ *
+ * Everything here is self-contained: this page is served from disk by the sidecar and shares no
+ * stylesheet with the workspace, so nothing below can leak into the product's own UI.
+ */
+
 :root {
   color-scheme: light dark;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: Canvas;
-  color: CanvasText;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
   margin: 0;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  background: #f5f6f8;
+  color: #1f2329;
 }
 
-main {
-  max-width: 520px;
-  margin: 0 auto;
-  padding: 44px 28px;
+.update {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100vh;
+  overflow: hidden;
+  background: #fff;
 }
 
-h1,
-p {
-  margin-top: 0;
+/* ─── Hero ─────────────────────────────────────────────────────────────── */
+
+.update-hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.1rem 1.2rem 1.15rem;
+  background: linear-gradient(135deg, #1a73e8 0%, #4f8ef7 45%, #6aa9ff 100%);
+  color: #fff;
 }
 
-h1 {
-  font-size: 1.25rem;
+.update-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 88% 12%, rgba(255, 255, 255, 0.28), transparent 55%);
+  pointer-events: none;
 }
 
-.update__body {
-  color: GrayText;
-  line-height: 1.6;
+.update-hero-icon {
+  flex-shrink: 0;
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
-.update__status {
-  min-height: 1.5em;
-  margin-top: 18px;
-  color: GrayText;
-  overflow-wrap: anywhere;
+.update-hero-text {
+  flex: 1;
+  min-width: 0;
 }
 
-.update__progress {
-  height: 6px;
-  margin-top: 6px;
-  border-radius: 3px;
-  background: color-mix(in srgb, CanvasText 12%, transparent);
+.update-hero-title {
+  font-size: 1.06rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.update-hero-sub {
+  font-size: 0.73rem;
+  opacity: 0.88;
+  margin-top: 0.15rem;
+}
+
+/* ─── Body ─────────────────────────────────────────────────────────────── */
+
+.update-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.05rem 1.2rem 0.4rem;
+}
+
+.update-versions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  margin-bottom: 0.85rem;
+}
+
+.update-ver-chip {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 10px;
+  border: 1px solid #e6e9ec;
+  background: #fafbfd;
+}
+
+.update-ver-chip.new {
+  border-color: #b7e3c4;
+  background: linear-gradient(180deg, #f2fbf5, #e8f7ef);
+}
+
+.update-ver-label {
+  font-size: 0.66rem;
+  color: #8a919f;
+}
+
+.update-ver-num {
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: #4e5969;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.update-ver-chip.new .update-ver-num {
+  color: #067647;
+}
+
+.update-arrow {
+  flex-shrink: 0;
+  color: #b8bfc6;
+  font-size: 1.1rem;
+}
+
+.update-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.7rem;
+}
+
+.update-chip {
+  font-size: 0.69rem;
+  color: #55606b;
+  background: #f2f5f8;
+  border: 1px solid #e4e9ee;
+  border-radius: 999px;
+  padding: 0.14rem 0.55rem;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-chip.ok {
+  color: #067647;
+  background: #eefaf2;
+  border-color: #c6e9d3;
+}
+
+/* ─── Progress ─────────────────────────────────────────────────────────── */
+
+.update-progress {
+  margin: 0.7rem 0 0.2rem;
+}
+
+.update-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 0.76rem;
+  color: #4e5969;
+  margin-bottom: 0.35rem;
+}
+
+.update-progress-phase {
+  font-weight: 600;
+}
+
+.update-progress-pct {
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #1a73e8;
+}
+
+.update-progress-bar {
+  height: 7px;
+  border-radius: 4px;
+  background: #eceff3;
   overflow: hidden;
 }
 
-.update__progress span {
-  display: block;
-  width: 0;
+.update-progress-fill {
   height: 100%;
-  background: AccentColor;
-  transition: width 160ms linear;
+  border-radius: 4px;
+  width: 4%;
+  transition: width 0.25s ease;
+  background: linear-gradient(90deg, #1a73e8, #6aa9ff);
 }
 
-.update__actions {
+.update-progress-fill.installing {
+  background: linear-gradient(90deg, #067647, #4bbf7a);
+  animation: update-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes update-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.update-progress-note {
+  font-size: 0.7rem;
+  color: #8a919f;
+  margin-top: 0.35rem;
+  line-height: 1.5;
+}
+
+/* ─── Notes and hint ───────────────────────────────────────────────────── */
+
+.update-notes {
+  margin-top: 0.75rem;
+}
+
+.update-notes-title {
+  font-size: 0.76rem;
+  color: #4e5969;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+
+.update-notes-body {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  background: #f8f9fb;
+  border: 1px solid #e8ebef;
+  border-radius: 10px;
+  font-size: 0.73rem;
+  line-height: 1.72;
+  color: #414a55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow-y: auto;
+  font-family: inherit;
+}
+
+.update-hint {
+  margin-top: 0.7rem;
+  padding: 0.45rem 0.6rem;
+  background: #f6f9fc;
+  border: 1px solid #e2ecf5;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: #55606b;
+}
+
+/* ─── Actions ──────────────────────────────────────────────────────────── */
+
+.update-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 24px;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  align-items: stretch;
+  padding: 0.85rem 1.2rem 1.05rem;
+  border-top: 1px solid #f0f2f5;
+  background: #fcfdfe;
 }
 
-.update__button {
-  padding: 9px 15px;
-  border: 1px solid ButtonBorder;
-  border-radius: 7px;
-  background: ButtonFace;
-  color: ButtonText;
+.update-btn {
+  min-width: 116px;
+  height: 38px;
+  padding: 0 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  font-size: 0.84rem;
+  font-weight: 600;
+  font-family: inherit;
+  line-height: 1;
   cursor: pointer;
+  transition: all 0.16s ease;
+  white-space: nowrap;
 }
 
-.update__button--primary {
-  background: AccentColor;
-  color: AccentColorText;
+.update-btn.ghost {
+  background: #fff;
+  border-color: #dfe3e8;
+  color: #5b6470;
 }
 
-.update__button:disabled {
+.update-btn.ghost:hover:not(:disabled) {
+  border-color: #b9c0c9;
+  color: #333;
+  background: #fafbfc;
+}
+
+.update-btn.primary {
+  background: linear-gradient(180deg, #2f80ed, #1a73e8);
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(26, 115, 232, 0.28);
+}
+
+.update-btn.primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #1a73e8, #155fc4);
+}
+
+.update-btn:disabled {
   opacity: 0.55;
-  cursor: wait;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.update-btn:focus-visible {
+  outline: 2px solid rgba(26, 115, 232, 0.45);
+  outline-offset: 1px;
+}
+
+/* ─── Dark theme ───────────────────────────────────────────────────────── */
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #1b1c1f;
+    color: #e8eaed;
+  }
+
+  .update {
+    background: #24262a;
+  }
+
+  .update-ver-chip {
+    border-color: #3a3d42;
+    background: #2b2d31;
+  }
+
+  .update-ver-chip.new {
+    border-color: #2f6b46;
+    background: linear-gradient(180deg, #22392c, #1d3326);
+  }
+
+  .update-ver-num {
+    color: #c3c8d0;
+  }
+
+  .update-ver-chip.new .update-ver-num {
+    color: #6fd39a;
+  }
+
+  .update-chip {
+    color: #b6bcc6;
+    background: #2b2d31;
+    border-color: #3a3d42;
+  }
+
+  .update-chip.ok {
+    color: #6fd39a;
+    background: #1f3328;
+    border-color: #2f6b46;
+  }
+
+  .update-progress-head {
+    color: #c3c8d0;
+  }
+
+  .update-progress-bar {
+    background: #33363b;
+  }
+
+  .update-notes-title {
+    color: #c3c8d0;
+  }
+
+  .update-notes-body {
+    background: #2b2d31;
+    border-color: #3a3d42;
+    color: #c3c8d0;
+  }
+
+  .update-hint {
+    background: #2b2d31;
+    border-color: #3a3d42;
+    color: #b6bcc6;
+  }
+
+  .update-actions {
+    border-top-color: #33363b;
+    background: #24262a;
+  }
+
+  .update-btn.ghost {
+    background: #2b2d31;
+    border-color: #3a3d42;
+    color: #c3c8d0;
+  }
+
+  .update-btn.ghost:hover:not(:disabled) {
+    border-color: #4a4e55;
+    color: #fff;
+    background: #33363b;
+  }
 }

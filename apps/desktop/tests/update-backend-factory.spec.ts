@@ -85,8 +85,8 @@ describe('desktop update backend selection', () => {
       () => { exits += 1 },
     )
 
-    await expect(coordinator.check()).resolves.toEqual({ phase: 'available', version: '1.1.0' })
-    await expect(coordinator.install()).resolves.toEqual({ phase: 'ready', version: '1.1.0' })
+    await expect(coordinator.check()).resolves.toEqual(availableState('1.1.0'))
+    await expect(coordinator.install()).resolves.toEqual(readyState('1.1.0'))
 
     expect(downloadUpdate).toHaveBeenCalledOnce()
     expect(beforeRestart).toHaveBeenCalledOnce()
@@ -98,3 +98,22 @@ describe('desktop update backend selection', () => {
     expect(updater.autoInstallOnAppQuit).toBe(false)
   })
 })
+
+
+/**
+ * The state a coordinator publishes for one available release.
+ * @param version - version the release channel offered.
+ * @returns that state, spelled out so a changed field fails this expectation.
+ */
+function availableState(version: string): DesktopUpdateState {
+  return { phase: 'available', current: '', version, notes: '', publishedAt: '' }
+}
+
+/**
+ * The state a coordinator publishes once one release is downloaded and ready to install.
+ * @param version - version that was installed from.
+ * @returns that state, spelled out so a changed field fails this expectation.
+ */
+function readyState(version: string): DesktopUpdateState {
+  return { phase: 'ready', current: '', version, notes: '', publishedAt: '', progress: 1 }
+}

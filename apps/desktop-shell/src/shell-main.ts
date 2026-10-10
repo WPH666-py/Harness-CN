@@ -45,6 +45,23 @@ import { createReleaseChannel } from './release-channel.ts'
 /** Delay after the workspace opens before the launch's automatic update check runs. */
 const AUTOMATIC_UPDATE_CHECK_MS = 10_000
 
+/**
+ * How often a session that stays open re-asks the release channel.
+ *
+ * A launch checks once, and a session can outlive a release by days; re-checking is what makes a
+ * long-running window offer the version published while it was open, without polling anything.
+ */
+const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1000
+
+/**
+ * How long the installer is given before this process exits.
+ *
+ * The installer is a separate process that replaces files this one holds open, so the exit has to
+ * follow the spawn rather than race it. The delay is what lets the child reach its own startup
+ * before the parent's files disappear from under it.
+ */
+const INSTALL_EXIT_DELAY_MS = 800
+
 /** Interval one coalesced batch of run-log lines is published on. */
 const LOG_FLUSH_MS = 150
 
@@ -54,6 +71,34 @@ const API_KEY_FAILURE_MESSAGES = {
   unreachable: 'apiKeyUnreachable',
   rejected: 'apiKeyRejected',
 } as const satisfies Readonly<Record<ApiKeyFailureReason, keyof DesktopMessages>>
+
+/** Longest this process waits for the backend to stop before it exits regardless. */
+const HOST_STOP_BUDGET_MS = 18_000
+
+/** How long the run log is given to flush after the backend is gone. */
+const LOG_FLUSH_BUDGET_MS = 2_000
+
+/**
+ * Resolve after `work` settles or after `milliseconds`, whichever comes first.
+ *
+ * A stop that never returns is the failure this bounds: the shell kills a sidecar that is still
+ * waiting, and the Host it was stopping survives the launch it belonged to.
+ * @param work - the operation being bounded.
+ * @param milliseconds - longest time to wait.
+ * @returns whether the operation settled inside the budget.
+ */
+async function within(work: Promise<unknown>, milliseconds: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const expired = new Promise<false>((resolve) => {
+    timer = setTimeout(() => { resolve(false) }, milliseconds)
+    timer.unref()
+  })
+  try {
+    return await Promise.race([work.then(() => true, () => true), expired])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
 
 function errorOf(reason: unknown, fallback: string): Error {
   return reason instanceof Error ? reason : new Error(fallback)
@@ -74,13 +119,15 @@ function parseArguments(argv: readonly string[]): ShellArguments & { readonly lo
   const resourceDir = readArgument(argv, 'resource-dir', true)
   const version = readArgument(argv, 'version', true)
   const logDirectory = readArgument(argv, 'log-dir', true)
-  if (resourceDir === undefined || version === undefined || logDirectory === undefined) {
-    throw new Error('dsh shell: resource directory, version, and log directory are all required')
+  const installDir = readArgument(argv, 'install-dir', true)
+  if (resourceDir === undefined || version === undefined || logDirectory === undefined || installDir === undefined) {
+    throw new Error('dsh shell: resource directory, install directory, version, and log directory are all required')
   }
   return {
     resourceDir,
     version,
     logDirectory,
+    installDir,
     locale: readArgument(argv, 'locale', false) ?? 'zh-CN',
     node: join(resourceDir, 'runtime', 'node', 'node.exe'),
     pnpm: join(resourceDir, 'runtime', 'pnpm', 'bin', 'pnpm.mjs'),
@@ -96,7 +143,12 @@ function handshake(message: ShellHandshake): void {
  * End this sidecar, which is also how the Host and the pnpm children end.
  *
  * The Host is a child of this process and the profile it runs from is replaced on the next
- * launch, so leaving it behind would hold the profile's files open against that replacement.
+ * launch, so leaving it behind would hold the profile's files open against that replacement. It
+ * is a child, but it is not the whole tree: the agent loop an exit interrupts lives in the Host,
+ * and every command, subagent, and background job it started lives below it. Stopping the Host is
+ * therefore what stops all of them, and this process does not exit until that stop has either
+ * finished or spent its whole budget — exiting first is what turns "the user quit" into a launch
+ * whose work is still running.
  * @param code - process exit code.
  */
 let shutdown: (code: number) => Promise<void> = async (code: number) => { process.exit(code) }
@@ -120,6 +172,8 @@ async function main(): Promise<void> {
   let updateState: DesktopUpdateState = { phase: 'idle' }
   let host: DesktopHostProcess | undefined
   let stopping = false
+  /** Periodic release-channel re-check, owned here so the stop that ends this process clears it. */
+  let recheck: ReturnType<typeof setInterval> | undefined
 
   function publishStatus(next: ShellStatus): void {
     status = next
@@ -222,9 +276,16 @@ async function main(): Promise<void> {
       currentVersion: options.version,
       downloadDirectory: join(paths.root, 'update'),
     }),
-    () => { void shutdown(0) },
+    // The installer replaces the files this process has open, so this process ends as part of the
+    // same operation that started it — after `beforeRestart` has already stopped the Host and
+    // everything below it. The delay is what lets the spawned installer begin before the exit.
+    () => {
+      const timer = setTimeout(() => { void shutdown(0) }, INSTALL_EXIT_DELAY_MS)
+      timer.unref()
+    },
     skipped,
     logShell,
+    options.version,
   )
 
   const runApiKeyStep = async <T>(step: () => Promise<T>): Promise<T> => {
@@ -257,6 +318,23 @@ async function main(): Promise<void> {
     updateState: () => updateState,
     checkUpdates: async () => await updates.check(true),
     installUpdates: async () => await updates.install(),
+    cancelUpdates: () => {
+      const cancelled = updates.cancel()
+      if (cancelled) logShell('the user cancelled the installer download')
+      return cancelled
+    },
+    uninstall: () => {
+      // Uninstalling is the user taking the product off this machine, so it ends the same way an
+      // installation does: the Host and everything it started stop first, and the platform
+      // uninstaller removes the files only after this process is gone. It is detached because it
+      // deletes the very executable running it, which is why the uninstaller copies itself out
+      // before removing the installation directory.
+      const uninstaller = join(options.installDir, 'uninstall.exe')
+      logShell(`the user asked to uninstall; starting ${uninstaller}`)
+      spawn(uninstaller, ['/S'], { detached: true, stdio: 'ignore' }).unref()
+      const timer = setTimeout(() => { void shutdown(0) }, INSTALL_EXIT_DELAY_MS)
+      timer.unref()
+    },
     skipUpdate: (version: string) => { skipped.remember(version) },
     apiKeyStatus: async (): Promise<DesktopApiKeyStatus> =>
       await runApiKeyStep(async () => await describeApiKey(requireHost())),
@@ -290,13 +368,23 @@ async function main(): Promise<void> {
     if (stopping) return
     stopping = true
     clearInterval(logTimer)
+    if (recheck !== undefined) clearInterval(recheck)
+    logShell('stopping: closing the workspace and every task it started')
     const active = host
     host = undefined
-    await active?.stop().catch((error: unknown) => {
-      logShell(`backend stop failed: ${errorOf(error, 'backend stop failed').message}`)
-    })
+    if (active !== undefined) {
+      const stopped = await within(active.stop().catch((error: unknown) => {
+        logShell(`backend stop failed: ${errorOf(error, 'backend stop failed').message}`)
+      }), HOST_STOP_BUDGET_MS)
+      // One host left running would be a second copy holding this profile, so a stop that ran out
+      // its budget is reported rather than passed over; the shell's own containment ends it.
+      if (!stopped) {
+        logShell(`backend stop did not finish within ${String(HOST_STOP_BUDGET_MS)} ms; ending the process`)
+        process.exit(code)
+      }
+    }
     await running.close().catch(() => undefined)
-    await logs.close().catch(() => undefined)
+    await within(logs.close().catch(() => undefined), LOG_FLUSH_BUDGET_MS)
     process.exit(code)
   }
 
@@ -391,6 +479,12 @@ async function main(): Promise<void> {
 
     const timer = setTimeout(() => { void updates.check(false) }, AUTOMATIC_UPDATE_CHECK_MS)
     timer.unref()
+    // A window that stays open for days outlives the release channel it checked at launch, so the
+    // check repeats. A skipped version stays skipped here as it does on the first check; only the
+    // menu's own check overrides that, because only that one is the user asking.
+    const recheckPeriod = setInterval(() => { void updates.check(false) }, UPDATE_RECHECK_MS)
+    recheckPeriod.unref()
+    recheck = recheckPeriod
 
     // The Rust shell's menu bar has no other way to reach an operation that only this process
     // can perform, so the commands it raises arrive here, where the release channel lives. A
@@ -407,6 +501,13 @@ async function main(): Promise<void> {
         void updates.check(true).then((state) => {
           if (state.phase === 'idle') {
             handshake({ type: 'message', title: messages.updateCheckTitle, body: messages.updateCurrent })
+          } else if (state.phase === 'available') {
+            // A manual check is answered even when the release was already offered: the menu item
+            // promises an answer, and the state sink alone is only visible to a window that is
+            // already open. An available release also opens the prompt through the handshake the
+            // state sink publishes, so this line reports what that window is about to show.
+            const version = state.version ?? ''
+            logShell(`release channel offers ${version}; opening the update prompt`)
           } else if (state.phase === 'error') {
             handshake({
               type: 'message',

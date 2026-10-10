@@ -34,6 +34,38 @@ export interface ReleaseFacts {
   readonly tag: string
   readonly page: string
   readonly assets: readonly ReleaseAsset[]
+  /** Body the host published for this release, empty when it published none readable. */
+  readonly notes: string
+  /** When the host published it, empty when it did not say. */
+  readonly publishedAt: string
+}
+
+/**
+ * Longest release body the prompt shows.
+ *
+ * A release body is written for a release page, and the update window is neither scrollable to
+ * arbitrary length nor the place to read a changelog. The cap is in characters rather than bytes
+ * because the body is Chinese as often as it is English, and a byte cap would cut it into a
+ * different number of readable lines depending on which.
+ */
+const NOTES_LIMIT = 4_000
+
+/**
+ * Reduce a published body to text this product is willing to display.
+ *
+ * Mojibake is dropped rather than guessed back: a host that answered in the wrong encoding
+ * produces a body a person cannot read, and showing it would be worse than showing nothing. Every
+ * other body is kept, trimmed to the cap.
+ * @param body - raw release body.
+ * @returns readable notes, or an empty string when the body cannot be shown.
+ */
+function readableNotes(body: unknown): string {
+  if (typeof body !== 'string') return ''
+  const cleaned = body.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/gu, '')
+  // Two or more of these on one page mean the bytes were decoded with the wrong charset; one on
+  // its own is ordinary text in a Chinese release that happens to mention such a character.
+  if ((cleaned.match(/锟斤拷|烫烫烫|屯屯屯/gu) ?? []).length >= 2) return ''
+  return cleaned.trim().slice(0, NOTES_LIMIT)
 }
 
 /** One host's answer, or the reason it did not answer. */
@@ -96,6 +128,8 @@ async function readGithub(source: ReleaseSource, fetchImpl: typeof globalThis.fe
   return {
     tag: newest.tag,
     page: typeof newest.release.html_url === 'string' ? newest.release.html_url : '',
+    notes: readableNotes(newest.release.body),
+    publishedAt: typeof newest.release.published_at === 'string' ? newest.release.published_at : '',
     assets: assets.filter(isRecord).map((asset): ReleaseAsset => ({
       name: typeof asset.name === 'string' ? asset.name : '',
       url: typeof asset.browser_download_url === 'string' ? asset.browser_download_url : '',
@@ -123,6 +157,8 @@ async function readGitee(source: ReleaseSource, fetchImpl: typeof globalThis.fet
     return {
       assets: Array.isArray(release.assets) ? release.assets.filter(isRecord) : [],
       id: typeof release.id === 'number' ? release.id : undefined,
+      notes: readableNotes(release.body),
+      publishedAt: typeof release.created_at === 'string' ? release.created_at : '',
       tag,
       version: releaseVersion(tag),
     }
@@ -168,6 +204,8 @@ async function readGitee(source: ReleaseSource, fetchImpl: typeof globalThis.fet
   return {
     tag: newest.tag,
     page: `https://gitee.com/${source.owner}/${source.repo}/releases/tag/${newest.tag}`,
+    notes: newest.notes,
+    publishedAt: newest.publishedAt,
     assets,
   }
 }

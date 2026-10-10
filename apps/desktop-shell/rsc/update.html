@@ -8,94 +8,60 @@
   </head>
   <body>
     <main class="update">
-      <h1 class="update__title">发现新版本</h1>
-      <p class="update__body">
-        Harness-CN 已发布 <strong id="version">新版本</strong>。<br />
-        “立刻更新”会自动下载安装包，静默卸载旧版本并安装新版本，然后退出当前程序。
-      </p>
-      <p class="update__status" id="status" role="status"></p>
-      <div class="update__progress" id="progress" hidden><span id="bar"></span></div>
-      <div class="update__actions">
-        <button type="button" class="update__button" id="skip">暂不更新</button>
-        <button type="button" class="update__button update__button--primary" id="install">立刻更新</button>
+      <header class="update-hero">
+        <div class="update-hero-icon" aria-hidden="true">🎉</div>
+        <div class="update-hero-text">
+          <div class="update-hero-title">发现新版本</div>
+          <div class="update-hero-sub">从 Gitee 一键升级，全程无窗口</div>
+        </div>
+      </header>
+
+      <div class="update-body">
+        <div class="update-versions">
+          <div class="update-ver-chip cur">
+            <span class="update-ver-label">当前</span>
+            <span class="update-ver-num" id="current">—</span>
+          </div>
+          <div class="update-arrow" aria-hidden="true">→</div>
+          <div class="update-ver-chip new">
+            <span class="update-ver-label">最新</span>
+            <span class="update-ver-num" id="version">—</span>
+          </div>
+        </div>
+
+        <div class="update-meta">
+          <span class="update-chip" id="size" hidden></span>
+          <span class="update-chip" id="published" hidden></span>
+          <span class="update-chip ok">🔒 退出即自动卸载旧版 → 静默安装 → 自动重启</span>
+        </div>
+
+        <div class="update-progress" id="progress" hidden>
+          <div class="update-progress-head">
+            <span class="update-progress-phase" id="phase">正在从 Gitee 下载</span>
+            <span class="update-progress-pct" id="percent"></span>
+          </div>
+          <div class="update-progress-bar">
+            <div class="update-progress-fill" id="bar"></div>
+          </div>
+          <div class="update-progress-note" id="note"></div>
+        </div>
+
+        <div class="update-notes" id="notes-block" hidden>
+          <div class="update-notes-title">📋 更新内容</div>
+          <pre class="update-notes-body" id="notes"></pre>
+        </div>
+
+        <div class="update-hint" id="hint">
+          选择「暂不更新」后本次启动不再提示；下次打开还会再问一次。
+        </div>
       </div>
+
+      <footer class="update-actions">
+        <button type="button" class="update-btn ghost" id="skip">暂不更新</button>
+        <button type="button" class="update-btn primary" id="install">立即更新</button>
+      </footer>
     </main>
-    <script type="module">
-      const version = new URLSearchParams(location.search).get('v') ?? ''
-      const versionLabel = document.getElementById('version')
-      const status = document.getElementById('status')
-      const progress = document.getElementById('progress')
-      const bar = document.getElementById('bar')
-      const skip = document.getElementById('skip')
-      const install = document.getElementById('install')
-      let finished = false
-      if (version !== '') versionLabel.textContent = version
 
-      /** One control call. The server returns a localized message on refusal. */
-      async function call(path, body) {
-        const response = await fetch(path, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(body ?? {}),
-        })
-        const payload = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(payload.error ?? `请求失败（${response.status}）`)
-        return payload
-      }
-
-      /** Render one release-channel state. */
-      function render(state) {
-        if (state.phase === 'installing') {
-          const fraction = typeof state.progress === 'number' ? state.progress : 0
-          progress.hidden = false
-          bar.style.width = `${Math.round(fraction * 100)}%`
-          status.textContent = `正在下载 ${version} … ${Math.round(fraction * 100)}%`
-          install.disabled = true
-          skip.disabled = true
-          return
-        }
-        if (state.phase === 'ready') {
-          status.textContent = '下载完成，正在启动安装程序 …'
-          finished = true
-          return
-        }
-        if (state.phase === 'error') {
-          status.textContent = state.message ?? '更新失败'
-          install.disabled = false
-          skip.disabled = false
-        }
-      }
-
-      skip.addEventListener('click', async () => {
-        // The record is what keeps the next automatic check quiet, so it is written before the
-        // window closes; a failed write only costs the user the question again.
-        await call('/shell-api/updates/skip', { version }).catch(() => {})
-        window.close()
-      })
-
-      install.addEventListener('click', async () => {
-        install.disabled = true
-        skip.disabled = true
-        status.textContent = '正在下载 …'
-        try {
-          render(await call('/shell-api/updates/install'))
-        } catch (error) {
-          status.textContent = error.message
-          install.disabled = false
-          skip.disabled = false
-        }
-      })
-
-      // The download is driven by this window's own request, so its progress arrives on the
-      // shared event stream rather than from the response, which only resolves at the end.
-      const events = new EventSource('/shell-api/events')
-      events.addEventListener('update', (event) => {
-        if (!finished) render(JSON.parse(event.data))
-      })
-      events.addEventListener('status', (event) => {
-        const state = JSON.parse(event.data)
-        if (state.phase === 'error') status.textContent = state.message ?? '启动失败'
-      })
-    </script>
+    <script type="module" src="./update.js"></script>
   </body>
 </html>

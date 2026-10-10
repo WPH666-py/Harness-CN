@@ -1,7 +1,7 @@
 /** `electron-updater` release stream, used by a build that ships `app-update.yml`. */
 
 import type { AppUpdater } from 'electron-updater'
-import type { DesktopUpdateBackend, DesktopUpdateIntegrity } from './update-backend.ts'
+import type { DesktopUpdateBackend, DesktopUpdateOffer } from './update-backend.ts'
 
 /**
  * Update channel backed by the `electron-updater` stream this build was
@@ -21,18 +21,35 @@ export class DesktopElectronUpdaterBackend implements DesktopUpdateBackend {
     this.updater.autoInstallOnAppQuit = false
   }
 
-  /** Ask the packaged update channel which version it offers. */
-  async check(): Promise<string | undefined> {
+  /**
+   * Ask the packaged update channel which version it offers.
+   *
+   * The channel's metadata already names the artifact, so the offer carries the version and
+   * nothing a person would read: `app-update.yml` publishes no release notes, and inventing an
+   * empty notes box for a build that reads its metadata from a file is worse than omitting it.
+   */
+  async check(): Promise<DesktopUpdateOffer | undefined> {
     const result = await this.updater.checkForUpdates()
-    return result?.isUpdateAvailable === true ? result.updateInfo.version : undefined
+    if (result?.isUpdateAvailable !== true) return undefined
+    return {
+      version: result.updateInfo.version,
+      notes: typeof result.updateInfo.releaseNotes === 'string' ? result.updateInfo.releaseNotes : '',
+      publishedAt: result.updateInfo.releaseDate ?? '',
+      page: '',
+      size: undefined,
+    }
   }
 
   /**
    * Download the release the channel offered.
+   *
+   * `electron-updater` owns the transfer and reports no byte counts of its own, so the state the
+   * window renders while this runs is the one the coordinator published at its start; the progress
+   * sinks are deliberately unused rather than approximated from no measurement.
    * @returns `verified`, because electron-updater validates the artifact against the signature
    * metadata in `app-update.yml` before it reports a completed download.
    */
-  async download(): Promise<DesktopUpdateIntegrity> {
+  async download(): Promise<'verified'> {
     await this.updater.downloadUpdate()
     return 'verified'
   }

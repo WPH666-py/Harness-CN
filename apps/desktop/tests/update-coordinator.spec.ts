@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DESKTOP_HOST_PROTOCOL_VERSION } from '../src/host-protocol.ts'
 import { parseDesktopRelease } from '../src/release.ts'
 import type { DesktopUpdateState } from '../src/ipc.ts'
-import type { DesktopUpdateBackend } from '../src/update-backend.ts'
+import type { DesktopUpdateBackend, DesktopUpdateOffer } from '../src/update-backend.ts'
 
 vi.mock('electron', () => ({ app: { isPackaged: false } }))
 
@@ -27,7 +27,7 @@ function stubBackend(
   readonly check: ReturnType<typeof vi.fn>
 } {
   const backend = {
-    check: vi.fn(async () => version),
+    check: vi.fn(async () => (version === undefined ? undefined : offerOf(version))),
     download: vi.fn(async () => 'verified' as const),
     install: vi.fn(async () => {}),
     ...overrides,
@@ -51,7 +51,14 @@ function pendingBackend(): {
   const settled = Promise.withResolvers<string | undefined>()
   const download = vi.fn(async () => 'verified' as const)
   return {
-    backend: { check: () => settled.promise, download, install: vi.fn(async () => {}) },
+    backend: {
+      check: async () => {
+        const version = await settled.promise
+        return version === undefined ? undefined : offerOf(version)
+      },
+      download,
+      install: vi.fn(async () => {}),
+    },
     settled,
     download,
   }
@@ -148,11 +155,16 @@ describe('desktop update coordinator', () => {
     const backend = stubBackend('1.1.0')
     const { coordinator, states, order, requestExit, beforeRestart } = coordinatorOver(backend)
 
-    await expect(coordinator.check()).resolves.toEqual({ phase: 'available', version: '1.1.0' })
-    await expect(coordinator.install()).resolves.toEqual({ phase: 'ready', version: '1.1.0' })
+    await expect(coordinator.check()).resolves.toEqual(availableState('1.1.0'))
+    await expect(coordinator.install()).resolves.toEqual(readyState('1.1.0'))
 
     expect(order).toEqual(['download', 'beforeRestart', 'install', 'exit'])
-    expect(backend.download).toHaveBeenCalledWith({ version: '1.1.0', progress: expect.any(Function) })
+    expect(backend.download).toHaveBeenCalledWith({
+      version: '1.1.0',
+      progress: expect.any(Function),
+      bytes: expect.any(Function),
+      signal: expect.any(AbortSignal),
+    })
     expect(beforeRestart).toHaveBeenCalledOnce()
     expect(requestExit).toHaveBeenCalledOnce()
     expect(states.map(state => state.phase)).toEqual(['checking', 'available', 'installing', 'ready'])
@@ -174,7 +186,10 @@ describe('desktop update coordinator', () => {
     await coordinator.check()
     await expect(coordinator.install()).resolves.toEqual({
       phase: 'error',
+      current: '',
       version: '1.1.0',
+      notes: '',
+      publishedAt: '',
       message: 'download refused',
     })
 
@@ -206,8 +221,10 @@ describe('desktop update coordinator', () => {
     await coordinator.install()
 
     expect(states.filter(state => state.progress !== undefined)).toEqual([
-      { phase: 'installing', version: '1.1.0', progress: 0.25 },
-      { phase: 'installing', version: '1.1.0', progress: 1 },
+      { phase: 'installing', current: '', version: '1.1.0', notes: '', publishedAt: '', downloaded: 0, progress: 0 },
+      { phase: 'installing', current: '', version: '1.1.0', notes: '', publishedAt: '', progress: 0.25 },
+      { phase: 'installing', current: '', version: '1.1.0', notes: '', publishedAt: '', progress: 1 },
+      { phase: 'ready', current: '', version: '1.1.0', notes: '', publishedAt: '', progress: 1 },
     ])
   })
 
@@ -218,15 +235,18 @@ describe('desktop update coordinator', () => {
     const { coordinator, notes } = coordinatorOver(backend)
 
     await coordinator.check()
-    await expect(coordinator.install()).resolves.toEqual({ phase: 'ready', version: '1.1.0' })
+    await expect(coordinator.install()).resolves.toEqual(readyState('1.1.0'))
 
-    expect(notes).toEqual(['desktop update 1.1.0 downloaded (unverified)'])
+    expect(notes).toEqual([
+      'release channel offers 1.1.0',
+      'desktop update 1.1.0 downloaded (unverified)',
+    ])
   })
 
   it('reports no update when the channel offers none', async () => {
     const { coordinator, states } = coordinatorOver(stubBackend(undefined))
 
-    await expect(coordinator.check()).resolves.toEqual({ phase: 'idle' })
+    await expect(coordinator.check()).resolves.toEqual({ phase: 'idle', current: '' })
     expect(states.map(state => state.phase)).toEqual(['checking', 'idle'])
   })
 
@@ -234,7 +254,7 @@ describe('desktop update coordinator', () => {
     const backend = stubBackend(undefined, { check: async () => { throw new Error('offline') } })
     const { coordinator } = coordinatorOver(backend)
 
-    await expect(coordinator.check()).resolves.toEqual({ phase: 'error', message: 'offline' })
+    await expect(coordinator.check()).resolves.toEqual({ phase: 'error', current: '', message: 'offline' })
   })
 
   it('queues install behind an in-flight check instead of returning the check result', async () => {
@@ -246,8 +266,8 @@ describe('desktop update coordinator', () => {
     expect(pending.download).not.toHaveBeenCalled()
     pending.settled.resolve('1.2.0')
 
-    await expect(checking).resolves.toEqual({ phase: 'available', version: '1.2.0' })
-    await expect(installing).resolves.toEqual({ phase: 'ready', version: '1.2.0' })
+    await expect(checking).resolves.toEqual(availableState('1.2.0'))
+    await expect(installing).resolves.toEqual(readyState('1.2.0'))
     expect(pending.download).toHaveBeenCalledOnce()
   })
 })
@@ -280,7 +300,7 @@ describe('desktop update skip state', () => {
     expect(coordinator).toBeDefined()
     await store.remember('1.1.0')
 
-    await expect(skipping.check()).resolves.toEqual({ phase: 'idle' })
+    await expect(skipping.check()).resolves.toEqual({ phase: 'idle', current: '' })
     await expect(skipping.install()).rejects.toThrow(/no verified update is available/u)
   })
 
@@ -293,7 +313,7 @@ describe('desktop update skip state', () => {
     }
     const manual = new DesktopUpdateCoordinator(state => state, async () => {}, stubBackend('1.1.0'), () => {}, skipped)
 
-    await expect(manual.check(true)).resolves.toEqual({ phase: 'available', version: '1.1.0' })
+    await expect(manual.check(true)).resolves.toEqual(availableState('1.1.0'))
   })
 
   it('prompts for a version newer than the skipped one', async () => {
@@ -305,7 +325,7 @@ describe('desktop update skip state', () => {
     }
     const newer = new DesktopUpdateCoordinator(state => state, async () => {}, stubBackend('1.2.0'), () => {}, skipped)
 
-    await expect(newer.check()).resolves.toEqual({ phase: 'available', version: '1.2.0' })
+    await expect(newer.check()).resolves.toEqual(availableState('1.2.0'))
   })
 
   it('records the skipped version as one JSON file and reads it back', async () => {
@@ -342,3 +362,31 @@ describe('desktop update skip state', () => {
     await expect(store.read()).resolves.toBe('1.1.0')
   })
 })
+
+
+/**
+ * One release offer, as a channel answers when it has a version to install.
+ * @param version - version the offer installs.
+ * @returns an offer with nothing published about it beyond the version.
+ */
+function offerOf(version: string): DesktopUpdateOffer {
+  return { version, notes: '', publishedAt: '', page: '', size: undefined }
+}
+
+/**
+ * The state a coordinator publishes for one available release.
+ * @param version - version the release channel offered.
+ * @returns that state, spelled out so a changed field fails this expectation.
+ */
+function availableState(version: string): DesktopUpdateState {
+  return { phase: 'available', current: '', version, notes: '', publishedAt: '' }
+}
+
+/**
+ * The state a coordinator publishes once one release is downloaded and ready to install.
+ * @param version - version that was installed from.
+ * @returns that state, spelled out so a changed field fails this expectation.
+ */
+function readyState(version: string): DesktopUpdateState {
+  return { phase: 'ready', current: '', version, notes: '', publishedAt: '', progress: 1 }
+}

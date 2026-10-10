@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+﻿import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -278,7 +278,7 @@ describe('desktop GitHub release channel check', () => {
       currentVersion: '0.1.5-rc.1',
     })
 
-    await expect(backend.check()).resolves.toBe('0.2.0')
+    await expect(backend.check()).resolves.toMatchObject({ version: '0.2.0' })
   })
 
   it('orders prereleases below their release and skips drafts', async () => {
@@ -291,7 +291,7 @@ describe('desktop GitHub release channel check', () => {
       currentVersion: '0.1.5-rc.1',
     })
 
-    await expect(backend.check()).resolves.toBe('0.1.5')
+    await expect(backend.check()).resolves.toMatchObject({ version: '0.1.5' })
   })
 
   it('offers a prerelease to a build on a stable version', async () => {
@@ -300,7 +300,7 @@ describe('desktop GitHub release channel check', () => {
       currentVersion: '0.1.5',
     })
 
-    await expect(backend.check()).resolves.toBe('0.1.6-rc.1')
+    await expect(backend.check()).resolves.toMatchObject({ version: '0.1.6-rc.1' })
   })
 
   it('treats an equal, older, unversioned, or renamed-asset release as current', async () => {
@@ -327,7 +327,7 @@ describe('desktop GitHub release channel check', () => {
       currentVersion: '0.1.5-rc.1',
     })
 
-    await expect(backend.check()).resolves.toBe('0.2.0')
+    await expect(backend.check()).resolves.toMatchObject({ version: '0.2.0' })
   })
 
   it('reports the build current when no release carries an installer', async () => {
@@ -389,7 +389,7 @@ describe('desktop GitHub release channel check', () => {
       currentVersion: '0.1.5-rc.1',
     })
 
-    await expect(backend.check()).resolves.toBe('0.6.0')
+    await expect(backend.check()).resolves.toMatchObject({ version: '0.6.0' })
   })
 
   it('bounds a releases request that never answers', async () => {
@@ -503,7 +503,7 @@ describe('desktop GitHub release channel download', () => {
       downloadDirectory: join(directory, 'downloads'),
       fetch: api.fetch,
     })
-    await expect(backend.check()).resolves.toBe('0.1.5')
+    await expect(backend.check()).resolves.toMatchObject({ version: '0.1.5' })
     const retained = (backend as unknown as { checkedRelease: { assets: unknown[] } }).checkedRelease
     retained.assets = []
 
