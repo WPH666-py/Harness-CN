@@ -222,30 +222,36 @@ export function createReleaseChannel(options: ReleaseChannelOptions): DesktopUpd
         answers.map(answer => answer.error?.message ?? 'release check failed').join('; '),
       )
     }
-    // The newest tag across the hosts, so a stale mirror cannot pin this build to an old release.
-    const newest = readable.reduce((best, answer) => {
-      const left = releaseVersion(answer.facts.tag)
-      const right = releaseVersion(best.facts.tag)
-      if (left === undefined) return best
-      if (right === undefined) return answer
-      return isNewer(left, right) ? answer : best
-    })
-    // Among the hosts offering that same release, prefer one that can actually supply the
-    // installer: a host that reports a version but publishes no file would otherwise offer an
-    // update the same screen then refuses to download.
-    const tied = readable.filter(answer => releaseVersion(answer.facts.tag) === releaseVersion(newest.facts.tag))
-    const chosen = tied.find(answer => pickInstaller(answer.facts.assets) !== undefined) ?? newest
-    offered = chosen.facts
-    offeredAsset = pickInstaller(chosen.facts.assets)
-    const version = releaseVersion(chosen.facts.tag)
+    // Every release either host published, newest first. An offer has to be installable, so a
+    // release with no installer is skipped rather than chosen: telling the user a version exists
+    // and then refusing to download it is worse than offering the previous one that works.
+    const candidates = readable
+      .flatMap(answer => answer.facts.assets.map(asset => ({ facts: answer.facts, asset })))
+      .filter((candidate): candidate is { facts: ReleaseFacts; asset: ReleaseAsset } => (
+        pickInstaller([candidate.asset]) !== undefined
+      ))
+      .sort((left, right) => {
+        const leftVersion = releaseVersion(left.facts.tag)
+        const rightVersion = releaseVersion(right.facts.tag)
+        if (leftVersion === undefined) return 1
+        if (rightVersion === undefined) return -1
+        return isNewer(rightVersion, leftVersion) ? 1 : -1
+      })
+    // Gitee leads `RELEASE_SOURCES`, so among releases that carry an installer the first one seen
+    // for a version is the host preferred for it. That is what keeps the download on the host
+    // that answers from inside China when both publish the same file.
+    const newest = candidates[0]
+    offered = newest?.facts
+    offeredAsset = newest?.asset
+    if (newest === undefined) return undefined
+    const version = releaseVersion(newest.facts.tag)
     if (version === undefined || !isNewer(version, options.currentVersion)) return undefined
-    if (offeredAsset === undefined) throw new Error(`release ${chosen.facts.tag} publishes no installer`)
     return {
       version,
-      notes: chosen.facts.notes,
-      publishedAt: chosen.facts.publishedAt,
-      page: chosen.facts.page,
-      size: offeredAsset.size,
+      notes: newest.facts.notes,
+      publishedAt: newest.facts.publishedAt,
+      page: newest.facts.page,
+      size: newest.asset.size,
     }
   }
 
