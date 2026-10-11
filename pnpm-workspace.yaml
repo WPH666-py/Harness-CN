@@ -21,6 +21,13 @@ linkWorkspacePackages: true
 overrides:
   '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:vendor/schemastery'
+  # Markdown parsing pins two copies of this type-only package (2.0.2 for
+  # mdast-util-from-markdown and micromark-extension-gfm, 2.0.3 for the rest).
+  # Their exported types are structurally incompatible under
+  # exactOptionalPropertyTypes, so `tsc -b tsconfig.client.json` rejects
+  # ui-primitives/src/markdown/parse.ts with TS2769. Every dependent declares
+  # ^2.0.0 or ^2.0.3, so one version satisfies them all.
+  micromark-util-types: '2.0.3'
 
 peerDependencyRules:
   allowedVersions:

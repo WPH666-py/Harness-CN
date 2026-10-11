@@ -93,6 +93,7 @@ The package is one separation: presentational React atoms with zero Cordis and z
 | File | Role |
 |---|---|
 | [`src/index.ts`](src/index.ts) | Public atom exports |
+| [`src/code-highlighting.ts`](src/code-highlighting.ts) | Filename-suffix to grammar-id selection (`languageForPath`, `CODE_HIGHLIGHT_EXTENSIONS`) and the React binding over the shared Shiki highlighter (`useCodeHighlighter`) |
 | [`src/markdown/`](src/markdown/) | Markdown and math pipeline: micromark parsing, KaTeX typesetting, incremental streaming renderer, `CodeBlock`/`JsonBlock` |
 | [`src/TerminalBlock.tsx`](src/TerminalBlock.tsx) | ANSI escape parsing (`anser`) and terminal card rendering |
 | [`src/ReadBlock.tsx`](src/ReadBlock.tsx) / [`src/DiffBlock.tsx`](src/DiffBlock.tsx) | Read and diff cards |

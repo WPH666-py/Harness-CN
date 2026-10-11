@@ -6,16 +6,14 @@
  * dark blocks), never here — the repo's tokens-only styling rule.
  *
  * Only the three markdown-fence and `run_code` grammars (TypeScript, shell,
- * JSON) load into the singleton at boot — the set every session renders. The
- * read card's wider extension set (the file-extension language hints the read
- * tool's `langFromPath` emits — `packages/fs/tool-fs`: python, rust, yaml,
- * markup, …) is imported lazily and registered the first time such a language
- * is requested, so a session that never opens a read card in one of those
- * languages pays neither the ~1.6 MB of grammar modules nor their synchronous
- * init. The first render of a lazy language falls back to plain text while its
- * grammar loads, then {@link onGrammarLoaded} notifies subscribers to re-render
- * with highlighting. An unknown or absent language falls back to plain text (no
- * highlighting, still monospace) — never an error.
+ * JSON) load into the singleton at boot — the set every session renders. Every
+ * other grammar in the extension table is imported lazily and registered the
+ * first time such a language is requested, so a session that never opens a code
+ * surface in one of those languages pays neither the grammar modules nor their
+ * synchronous init. The first render of a lazy language falls back to plain text
+ * while its grammar loads, then {@link subscribeGrammarLoaded} notifies
+ * subscribers to re-render with highlighting. An unknown or absent language
+ * falls back to plain text (no highlighting, still monospace) — never an error.
  */
 
 import { createHighlighterCoreSync, createCssVariablesTheme } from 'shiki/core'
@@ -42,8 +40,8 @@ type LangModule = { default: typeof langTs }
 const LANGS = [langTs, langBash, langJson]
 
 /**
- * The read card's extension grammars, each behind a dynamic import so its
- * module stays out of the boot chunk until a read of that language renders.
+ * The non-boot extension grammars, each behind a dynamic import so its module
+ * stays out of the boot chunk until a code surface renders that language.
  * Keyed by the grammar id (`LanguageRegistration.name`) the aliases resolve to.
  * `@shikijs/langs`' default export is a `LanguageRegistration[]`; the loader
  * hands the whole array to `loadLanguageSync`, which registers each entry
@@ -74,18 +72,54 @@ const LAZY_GRAMMARS = new Map<string, () => Promise<LangModule>>([
   ['sql', () => import('@shikijs/langs/sql')],
   ['xml', () => import('@shikijs/langs/xml')],
   ['lua', () => import('@shikijs/langs/lua')],
+  ['bat', () => import('@shikijs/langs/bat')],
+  ['powershell', () => import('@shikijs/langs/powershell')],
+  ['fish', () => import('@shikijs/langs/fish')],
+  ['dotenv', () => import('@shikijs/langs/dotenv')],
+  ['log', () => import('@shikijs/langs/log')],
+  ['csv', () => import('@shikijs/langs/csv')],
+  ['diff', () => import('@shikijs/langs/diff')],
+  ['http', () => import('@shikijs/langs/http')],
+  ['rst', () => import('@shikijs/langs/rst')],
+  ['latex', () => import('@shikijs/langs/latex')],
+  ['bibtex', () => import('@shikijs/langs/bibtex')],
+  ['asciidoc', () => import('@shikijs/langs/asciidoc')],
+  ['r', () => import('@shikijs/langs/r')],
+  ['julia', () => import('@shikijs/langs/julia')],
+  ['dart', () => import('@shikijs/langs/dart')],
+  ['scala', () => import('@shikijs/langs/scala')],
+  ['clojure', () => import('@shikijs/langs/clojure')],
+  ['erlang', () => import('@shikijs/langs/erlang')],
+  ['elixir', () => import('@shikijs/langs/elixir')],
+  ['haskell', () => import('@shikijs/langs/haskell')],
+  ['fsharp', () => import('@shikijs/langs/fsharp')],
+  ['vb', () => import('@shikijs/langs/vb')],
+  ['perl', () => import('@shikijs/langs/perl')],
+  ['verilog', () => import('@shikijs/langs/verilog')],
+  ['system-verilog', () => import('@shikijs/langs/system-verilog')],
+  ['graphql', () => import('@shikijs/langs/graphql')],
+  ['proto', () => import('@shikijs/langs/proto')],
+  ['hcl', () => import('@shikijs/langs/hcl')],
+  ['nix', () => import('@shikijs/langs/nix')],
+  ['vue', () => import('@shikijs/langs/vue')],
+  ['svelte', () => import('@shikijs/langs/svelte')],
+  ['make', () => import('@shikijs/langs/make')],
+  ['cmake', () => import('@shikijs/langs/cmake')],
+  ['groovy', () => import('@shikijs/langs/groovy')],
 ])
 
 /**
  * Language ids (and aliases) the highlighter accepts; everything else renders
  * plain. A Map, not an object: fence info strings are assistant-authored, so
  * a label like `constructor` or `__proto__` must miss instead of resolving an
- * inherited property and crashing the renderer inside shiki. Keys cover both
- * the markdown-fence aliases `CodeBlock` uses and the file-extension hint ids
- * the read tool's `langFromPath` emits, so both callers resolve the same
- * grammars. The JS family maps to the TypeScript grammar (see {@link LANGS} for
- * the JSX/TSX approximation). A value not in {@link LANGS} names a
- * {@link LAZY_GRAMMARS} entry loaded on first use.
+ * inherited property and crashing the renderer inside shiki. Keys cover the
+ * markdown-fence aliases `CodeBlock` uses, the file-extension hint ids the read
+ * tool's `langFromPath` emits, and the canonical ids `languageForPath` returns
+ * (`./code-highlighting.ts`), so those callers resolve the same grammars. Every
+ * value here has a supplier: a boot grammar or a {@link LAZY_GRAMMARS} entry,
+ * never a missing one — `ensureGrammar` treats an absent entry as loaded and
+ * would hand shiki an unregistered language. The JS family maps to the
+ * TypeScript grammar (see {@link LANGS} for the JSX/TSX approximation).
  */
 const LANG_ALIASES = new Map<string, string>([
   ['typescript', 'typescript'],
@@ -130,6 +164,72 @@ const LANG_ALIASES = new Map<string, string>([
   ['sql', 'sql'],
   ['xml', 'xml'],
   ['lua', 'lua'],
+  ['bat', 'bat'],
+  ['batch', 'bat'],
+  ['powershell', 'powershell'],
+  ['ps1', 'powershell'],
+  ['ps', 'powershell'],
+  ['fish', 'fish'],
+  ['properties', 'ini'],
+  ['dotenv', 'dotenv'],
+  ['env', 'dotenv'],
+  ['log', 'log'],
+  ['csv', 'csv'],
+  ['diff', 'diff'],
+  ['patch', 'diff'],
+  ['http', 'http'],
+  ['rst', 'rst'],
+  ['latex', 'latex'],
+  ['tex', 'latex'],
+  ['bibtex', 'bibtex'],
+  ['bib', 'bibtex'],
+  ['asciidoc', 'asciidoc'],
+  ['adoc', 'asciidoc'],
+  ['r', 'r'],
+  ['julia', 'julia'],
+  ['jl', 'julia'],
+  ['dart', 'dart'],
+  ['scala', 'scala'],
+  ['clojure', 'clojure'],
+  ['clj', 'clojure'],
+  ['erlang', 'erlang'],
+  ['erl', 'erlang'],
+  ['elixir', 'elixir'],
+  ['ex', 'elixir'],
+  ['exs', 'elixir'],
+  ['haskell', 'haskell'],
+  ['hs', 'haskell'],
+  ['fsharp', 'fsharp'],
+  ['fs', 'fsharp'],
+  ['fsi', 'fsharp'],
+  ['fsx', 'fsharp'],
+  ['vb', 'vb'],
+  ['vbnet', 'vb'],
+  ['perl', 'perl'],
+  ['pl', 'perl'],
+  ['pm', 'perl'],
+  ['verilog', 'verilog'],
+  ['v', 'verilog'],
+  ['system-verilog', 'system-verilog'],
+  ['systemverilog', 'system-verilog'],
+  ['sv', 'system-verilog'],
+  ['svh', 'system-verilog'],
+  ['graphql', 'graphql'],
+  ['gql', 'graphql'],
+  ['proto', 'proto'],
+  ['protobuf', 'proto'],
+  ['hcl', 'hcl'],
+  ['tf', 'hcl'],
+  ['tfvars', 'hcl'],
+  ['nix', 'nix'],
+  ['vue', 'vue'],
+  ['svelte', 'svelte'],
+  ['make', 'make'],
+  ['makefile', 'make'],
+  ['mk', 'make'],
+  ['cmake', 'cmake'],
+  ['groovy', 'groovy'],
+  ['gradle', 'groovy'],
 ])
 
 /**

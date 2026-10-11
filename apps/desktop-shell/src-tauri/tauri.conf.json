@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Harness-CN",
-  "version": "0.1.5-rc.10",
+  "version": "0.1.5-rc.11",
   "identifier": "com.harnesscn.desktop",
   "build": {
     "frontendDist": "../dist"

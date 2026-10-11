@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-node-vision",
   "description": "Model-facing image inspection and pixel operations over sharp, whose results are returned to the model as images",
-  "version": "0.1.5-rc.10",
+  "version": "0.1.5-rc.11",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",

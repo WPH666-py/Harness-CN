@@ -125,6 +125,26 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     version: '0.1.22',
     active: true,
   },
+  {
+    // An IDE-style Git panel in the Web GUI: branch and history overview, uncommitted changes
+    // with commit and amend, diff stats, and a branch marker in the input bar.
+    //
+    // Its declared peers name `@deepseek-ai/dsh >=0.1.7-rc.2` and `@deepseek-ai/schemastery
+    // >=3.18.4`, neither of which this baseline satisfied as published: the host half called
+    // `Schema.boolean(...).default(...).volatile()`, a method schemastery only gained in 3.18.3,
+    // so the row threw at load. The vendored schemastery was raised to 3.18.4 for it.
+    //
+    // The client half is the other half of that gap, and it is why this baseline carries
+    // `languageForPath` and `useCodeHighlighter`: its bundle requires both from
+    // `@deepseek-ai/dsh-client-ui-primitives`, which upstream added to that package after this
+    // line was cut. Without them the bundle materializes and throws on the missing export,
+    // taking the whole panel down. It also registers into `plugins.bundle.config`, a slot this
+    // baseline does not declare, so its settings pane stays absent — `slots.inject` waits for a
+    // declaration rather than failing, so the panel itself is unaffected.
+    name: '@xbzbing/dsh-git-panel',
+    version: '1.4.0',
+    active: true,
+  },
 ]
 
 /**
