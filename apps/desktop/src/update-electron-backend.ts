@@ -54,8 +54,17 @@ export class DesktopElectronUpdaterBackend implements DesktopUpdateBackend {
     return 'verified'
   }
 
-  /** Install the downloaded release and restart the application into it. */
-  async install(): Promise<void> {
+  /**
+   * Install the downloaded release and restart the application into it.
+   *
+   * `electron-updater` owns both steps here, so there is no separate installer file to
+   * report. That is also why this backend never had the update-does-nothing failure the
+   * Harness-CN shell hit: its installer is started by the updater, outside this process's
+   * kill-on-close job.
+   * @returns an empty path, because no installer file is handed to a caller.
+   */
+  async install(): Promise<string> {
     this.updater.quitAndInstall(false, true)
+    return ''
   }
 }

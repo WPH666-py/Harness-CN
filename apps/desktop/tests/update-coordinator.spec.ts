@@ -29,7 +29,7 @@ function stubBackend(
   const backend = {
     check: vi.fn(async () => (version === undefined ? undefined : offerOf(version))),
     download: vi.fn(async () => 'verified' as const),
-    install: vi.fn(async () => {}),
+    install: vi.fn(async () => 'C:\\temp\\Harness-CN-setup.exe'),
     ...overrides,
   }
   return backend as DesktopUpdateBackend & {
@@ -57,7 +57,7 @@ function pendingBackend(): {
         return version === undefined ? undefined : offerOf(version)
       },
       download,
-      install: vi.fn(async () => {}),
+      install: vi.fn(async () => 'C:\\temp\\Harness-CN-setup.exe'),
     },
     settled,
     download,
@@ -96,7 +96,7 @@ function coordinatorOver(backend: DesktopUpdateBackend): {
     },
     install: async () => {
       order.push('install')
-      await backend.install()
+      return await backend.install()
     },
   }
   return {
@@ -159,6 +159,9 @@ describe('desktop update coordinator', () => {
     await expect(coordinator.install()).resolves.toEqual(readyState('1.1.0'))
 
     expect(order).toEqual(['download', 'beforeRestart', 'install', 'exit'])
+    // The exit step is handed the installer, because starting it is the shell's job: only the
+    // shell's own process creation can leave the kill-on-close job the installer must outlive.
+    expect(requestExit).toHaveBeenCalledWith('C:\\temp\\Harness-CN-setup.exe')
     expect(backend.download).toHaveBeenCalledWith({
       version: '1.1.0',
       progress: expect.any(Function),

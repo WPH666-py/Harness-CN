@@ -5,7 +5,6 @@ import { once } from 'node:events'
 import { createWriteStream } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { spawn as detachedSpawn } from 'node:child_process'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { gt, valid } from 'semver'
@@ -28,9 +27,6 @@ export const DESKTOP_UPDATE_RELEASE_REPOSITORY = 'WPH666-py/Harness-CN'
 
 /** One request timeout's worth of GitHub's documented unauthenticated ceiling: 60 requests per hour per address. */
 const RELEASES_PER_PAGE = 30
-
-/** Silent `/S` switch of the NSIS installer, which then replaces the previous installation. */
-const NSIS_SILENT_SWITCH = '/S'
 
 /** Platform and architecture token this channel publishes installers for. */
 const PLATFORM_TARGET = 'win-x64'
@@ -199,8 +195,6 @@ export interface DesktopGithubUpdateBackendOptions {
   readonly downloadDirectory: string
   /** JSON request implementation; tests inject one that never reaches the network. */
   readonly fetch: typeof globalThis.fetch
-  /** Installer launcher; tests inject one that starts no process. */
-  readonly spawn?: typeof detachedSpawn
   /** Overall deadline for the releases request; tests shorten it to bound a request that never settles. */
   readonly checkTimeoutMs?: number
   /** Longest gap between download bytes; tests shorten it to bound a stalled transfer. */
@@ -228,7 +222,6 @@ export interface DesktopGithubUpdateBackendOptions {
  * such a download is installed unverified.
  */
 export class DesktopGithubUpdateBackend implements DesktopUpdateBackend {
-  private readonly spawn: typeof detachedSpawn
   private readonly checkTimeoutMs: number
   private readonly stallTimeoutMs: number
   private checkedRelease: GithubRelease | undefined
@@ -239,7 +232,6 @@ export class DesktopGithubUpdateBackend implements DesktopUpdateBackend {
    * @param options - application version, download directory, and injectable request, spawn, and timeout implementations.
    */
   constructor(private readonly options: DesktopGithubUpdateBackendOptions) {
-    this.spawn = options.spawn ?? detachedSpawn
     this.checkTimeoutMs = options.checkTimeoutMs ?? CHECK_TIMEOUT_MS
     this.stallTimeoutMs = options.stallTimeoutMs ?? DOWNLOAD_STALL_MS
   }
@@ -336,12 +328,22 @@ export class DesktopGithubUpdateBackend implements DesktopUpdateBackend {
   }
 
   /** Start the verified installer silently and let it replace this installation. */
-  async install(): Promise<void> {
+  /**
+   * Report the installer this channel downloaded, for the shell to start outside its job.
+   *
+   * The file is deliberately not started here. Windows terminates a child that is in the
+   * shell's kill-on-close job when that job closes, and this process exits as part of the
+   * update, so an installer spawned from here dies in its own setup phase — which is how a
+   * downloaded-and-verified update ends up never applied. Only the shell's own process
+   * creation can set `CREATE_BREAKAWAY_FROM_JOB`, so it does the starting.
+   * @returns absolute path of the verified installer.
+   */
+  async install(): Promise<string> {
     const downloadable = this.downloadable
     if (downloadable === undefined) {
       throw new Error('desktop update: no verified installer has been downloaded')
     }
-    this.spawn(downloadable.file, [NSIS_SILENT_SWITCH], { detached: true, stdio: 'ignore' }).unref()
+    return downloadable.file
   }
 
   /**

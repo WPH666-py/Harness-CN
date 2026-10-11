@@ -84,6 +84,17 @@ enum Handshake {
     },
     /// The release channel changed state.
     Update { state: UpdateState },
+    /// The updater downloaded an installer and needs it started outside this process's job.
+    ///
+    /// Only the shell can do this: leaving a job needs `CREATE_BREAKAWAY_FROM_JOB` at
+    /// `CreateProcess` time, and the sidecar's own `spawn` cannot set it. The sidecar exits right
+    /// after sending this, so the installer is what continues the update.
+    LaunchInstaller {
+        #[serde(rename = "installer")]
+        installer: String,
+        #[serde(rename = "silentSwitch")]
+        silent_switch: String,
+    },
     /// A fact the user has to be told about, raised by a menu action.
     Message { title: String, body: String },
     /// The launch failed and there is no window that could report it.
@@ -219,6 +230,33 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
                 620.0,
                 false,
             );
+        }
+        Handshake::LaunchInstaller { installer, silent_switch } => {
+            // The path comes over the sidecar's stdout, so it is validated rather than trusted: an
+            // absolute existing `.exe` is the whole shape an installer has, and anything else is
+            // refused with a dialog instead of being spawned.
+            let path = PathBuf::from(installer.replace('/', "\\"));
+            let usable = path.is_absolute()
+                && path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"));
+            if !usable {
+                platform::show_error(
+                    "Harness-CN 更新失败",
+                    &format!("安装程序路径不可用：\n{}", path.display()),
+                );
+                return;
+            }
+            if !platform::spawn_installer(&path, &silent_switch) {
+                platform::show_error(
+                    "Harness-CN 更新失败",
+                    &format!(
+                        "无法启动安装程序：\n{}\n\n安装包仍在下载目录中，可以手动运行它完成更新。",
+                        path.display(),
+                    ),
+                );
+            }
         }
         Handshake::Message { title, body } => platform::show_error(&title, &body),
         Handshake::Fatal { message } => {

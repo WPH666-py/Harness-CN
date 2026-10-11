@@ -1,9 +1,9 @@
-﻿import { createHash } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   DESKTOP_UPDATE_RELEASE_REPOSITORY,
   DesktopGithubUpdateBackend,
@@ -456,33 +456,21 @@ describe('desktop GitHub release channel download', () => {
     await expect(readFile(join(directory, 'downloads', expectedAssetName(version)))).resolves.toEqual(installer)
   })
 
-  it('runs the verified installer silently in its own process group', async () => {
-    const unref = vi.fn()
-    const spawn = vi.fn(() => ({ unref })) as unknown as typeof import('node:child_process').spawn
+  it('reports the verified installer path without starting it', async () => {
+    // The shell starts the installer from its own process creation, because leaving the
+    // kill-on-close job needs CREATE_BREAKAWAY_FROM_JOB, which a spawn from here cannot set.
     const transfer = downloadFetch(installer)
-    const { backend } = await checkedBackend({ transfer: transfer.fetch, digest: digestOf(installer), spawn })
+    const { backend } = await checkedBackend({ transfer: transfer.fetch, digest: digestOf(installer) })
     await backend.download({ version, progress: () => {} })
 
-    await backend.install()
-
-    expect(spawn).toHaveBeenCalledWith(
-      join(directory, 'downloads', expectedAssetName(version)),
-      ['/S'],
-      { detached: true, stdio: 'ignore' },
-    )
-    expect(unref).toHaveBeenCalledOnce()
+    await expect(backend.install()).resolves.toBe(join(directory, 'downloads', expectedAssetName(version)))
   })
 
   it('refuses to install before a download completed', async () => {
-    const spawn = vi.fn()
     const transfer = downloadFetch(installer)
-    const { backend } = await checkedBackend({
-      transfer: transfer.fetch,
-      spawn: spawn as unknown as typeof import('node:child_process').spawn,
-    })
+    const { backend } = await checkedBackend({ transfer: transfer.fetch })
 
     await expect(backend.install()).rejects.toThrow(/no verified installer has been downloaded/u)
-    expect(spawn).not.toHaveBeenCalled()
   })
 
   it('refuses a version the last check did not retain', async () => {

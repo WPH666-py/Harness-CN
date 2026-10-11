@@ -41,7 +41,7 @@ export class DesktopUpdateCoordinator {
    * @param publish - state sink for every desktop window.
    * @param beforeRestart - stop application-owned processes before replacement.
    * @param backend - release channel to check, download from, and install through.
-   * @param requestExit - end this process so the installer can replace its files.
+   * @param requestExit - start the downloaded installer, then end this process.
    * @param skipped - versions the user deferred, which only an automatic check honors.
    * @param note - run-log sink for facts the user-facing state does not carry.
    * @param currentVersion - version this installation runs, named in every offered state.
@@ -50,7 +50,7 @@ export class DesktopUpdateCoordinator {
     private readonly publish: DesktopUpdatePublish,
     private readonly beforeRestart: () => Promise<void> = async () => {},
     private readonly backend: DesktopUpdateBackend,
-    private readonly requestExit: () => void = () => {},
+    private readonly requestExit: (installer: string) => void = () => {},
     private readonly skipped: DesktopUpdateSkipState = REMEMBER_NOTHING,
     private readonly note: (text: string) => void = () => {},
     private readonly currentVersion = '',
@@ -145,8 +145,8 @@ export class DesktopUpdateCoordinator {
       // The installer replaces files this process has open, so every application-owned process is
       // stopped first — which is also what ends every agent and task still running.
       await this.beforeRestart()
-      await this.backend.install()
-      this.requestExit()
+      const installer = await this.backend.install()
+      this.requestExit(installer)
       return ready
     } catch (error) {
       return this.publish({

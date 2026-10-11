@@ -14,7 +14,6 @@
 import { createHash } from 'node:crypto'
 import { mkdir, rm, stat } from 'node:fs/promises'
 import { createWriteStream } from 'node:fs'
-import { spawn as detachedSpawn } from 'node:child_process'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type {
@@ -44,9 +43,6 @@ const DOWNLOAD_TOTAL_MS = 30 * 60_000
  * the user can act on.
  */
 const DOWNLOAD_STALL_MS = 60_000
-
-/** Silent switch of the NSIS installer, which then replaces the previous installation in place. */
-const NSIS_SILENT_SWITCH = '/S'
 
 /**
  * Marker in the message of an update the user cancelled.
@@ -195,8 +191,6 @@ export interface ReleaseChannelOptions {
   readonly downloadDirectory: string
   /** Request implementation; replaceable for tests. */
   readonly fetch?: typeof globalThis.fetch
-  /** Process spawner; replaceable for tests. */
-  readonly spawn?: typeof detachedSpawn
 }
 
 /**
@@ -206,7 +200,6 @@ export interface ReleaseChannelOptions {
  */
 export function createReleaseChannel(options: ReleaseChannelOptions): DesktopUpdateBackend {
   const request = options.fetch ?? globalThis.fetch
-  const spawnInstaller = options.spawn ?? detachedSpawn
   let offered: ReleaseFacts | undefined
   let offeredAsset: ReleaseAsset | undefined
   let downloaded: string | undefined
@@ -276,16 +269,23 @@ export function createReleaseChannel(options: ReleaseChannelOptions): DesktopUpd
     return result.integrity
   }
 
-  const install = async (): Promise<void> => {
+  /**
+   * Report the verified installer for the shell to start.
+   *
+   * The installer is deliberately not started here. It has to replace this application's own
+   * files, so it must outlive this process — and this process, together with everything it
+   * spawns, lives in the shell's kill-on-close job. A `spawn` from here sets only
+   * `CREATE_NEW_PROCESS_GROUP`, which does not leave a job, so the installer would be
+   * terminated during its own setup the moment the shell exits. Only the shell's own process
+   * creation can set `CREATE_BREAKAWAY_FROM_JOB`, which is why the shell does the starting.
+   * @returns absolute path of the downloaded installer.
+   */
+  const install = async (): Promise<string> => {
     const target = downloaded
     if (target === undefined) throw new Error('desktop update: nothing has been downloaded')
     const size = await stat(target).then(entry => entry.size, () => 0)
     if (size === 0) throw new Error('desktop update: the downloaded installer is empty')
-    // `/S` is the NSIS silent switch, and a `currentUser` install needs no elevation. The installer
-    // upgrades in place, so nothing uninstalls first: doing that would leave a window with nothing
-    // installed, and a failure inside it would take the application away.
-    const child = spawnInstaller(target, [NSIS_SILENT_SWITCH], { detached: true, stdio: 'ignore' })
-    child.unref()
+    return target
   }
 
   return { check, download, install }

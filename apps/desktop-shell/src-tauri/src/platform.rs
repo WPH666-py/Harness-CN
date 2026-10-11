@@ -6,14 +6,16 @@
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use std::process::Child;
+use std::os::windows::process::CommandExt;
+use std::path::Path;
+use std::process::{Child, Command};
 use std::sync::Mutex;
 
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, SetLastError, ERROR_ALREADY_EXISTS};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
     JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
     CreateMutexW, OpenProcess, TerminateProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
@@ -45,6 +47,13 @@ static JOB: Mutex<isize> = Mutex::new(0);
 /// on every exit that does not reach the graceful path: they keep their ports, their file handles,
 /// and their half-finished work while the next launch contends with them.
 ///
+/// `JOB_OBJECT_LIMIT_BREAKAWAY_OK` is also set, and it is not optional. One process this product
+/// starts must outlive the shell: the NSIS installer the updater launches. Without breakaway the
+/// installer is a member of this job like any other child, so the shell's own exit closes the job
+/// and terminates it — which is exactly how an in-product update ends up downloaded, verified, and
+/// never applied. The flag only permits breakaway; a child still has to request it, so every other
+/// process an agent starts stays contained.
+///
 /// The job is created once and reused, and the sidecar is spawned suspended by the caller so it
 /// cannot start a child before it is inside the job.
 /// @param child - the suspended sidecar process.
@@ -58,7 +67,8 @@ pub fn contain_process_tree(child: &Child) -> bool {
                 return false;
             }
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            limits.BasicLimitInformation.LimitFlags =
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
             let applied = SetInformationJobObject(
                 job,
                 JobObjectExtendedLimitInformation,
@@ -113,6 +123,36 @@ pub fn terminate(pid: u32) {
     unsafe {
         TerminateProcess(handle, 1);
         CloseHandle(handle);
+    }
+}
+
+/// Start the downloaded installer outside this process's job object.
+///
+/// The updater cannot do this itself. Node's `spawn(..., { detached: true })` sets only
+/// `CREATE_NEW_PROCESS_GROUP` on Windows, which does not leave a job, so an installer started that
+/// way dies with the shell that started it — the update is downloaded, verified, reported as
+/// installed, and never applied. `CREATE_BREAKAWAY_FROM_JOB` is the flag that actually leaves, and
+/// it can only be set by the process calling `CreateProcess`, which is this one.
+///
+/// The caller is expected to exit immediately afterwards. Nothing here waits on the installer: it
+/// is the installer's own job to replace the files, and this process holds the very executable it
+/// replaces.
+/// @param installer - absolute path of the installer executable.
+/// @param silent_switch - argument that makes the installer run unattended (NSIS `/S`).
+/// @returns whether the installer started.
+pub fn spawn_installer(installer: &Path, silent_switch: &str) -> bool {
+    /// `CREATE_BREAKAWAY_FROM_JOB`: start outside the job this process is contained in.
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    match Command::new(installer)
+        .arg(silent_switch)
+        .creation_flags(CREATE_BREAKAWAY_FROM_JOB)
+        .spawn()
+    {
+        Ok(_child) => true,
+        Err(error) => {
+            eprintln!("Harness-CN: the installer could not be started: {error}");
+            false
+        }
     }
 }
 

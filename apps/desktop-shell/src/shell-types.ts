@@ -49,6 +49,13 @@ export type ShellHandshake =
   | { readonly type: 'status'; readonly status: ShellStatus }
   | { readonly type: 'ready'; readonly port: number; readonly needsApiKey: boolean }
   | { readonly type: 'update'; readonly state: DesktopUpdateState }
+  /**
+   * Ask the shell to start the downloaded installer, which must run outside the shell's
+   * process-tree job so it survives the exit that follows. Left to the sidecar, the installer is
+   * a job member and is terminated the moment this process ends, which leaves an update
+   * downloaded, verified, and never applied.
+   */
+  | { readonly type: 'launchinstaller'; readonly installer: string; readonly silentSwitch: string }
   | { readonly type: 'message'; readonly title: string; readonly body: string }
   | { readonly type: 'fatal'; readonly message: string }
 

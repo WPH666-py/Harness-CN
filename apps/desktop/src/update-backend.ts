@@ -70,6 +70,14 @@ export interface DesktopUpdateBackend {
    * @returns how the channel vouched for the downloaded bytes.
    */
   download(request: DesktopUpdateDownload): Promise<DesktopUpdateIntegrity>
-  /** Start the downloaded installer so it replaces this installation. */
-  install(): Promise<void>
+  /**
+   * Path of the installer this channel has downloaded and verified.
+   *
+   * Starting it is the caller's job, not the channel's: the Harness-CN shell can only
+   * leave its process-tree job through a flag its own Win32 process creation sets, so
+   * an installer started here through `spawn` would be terminated the moment the shell
+   * exits. The channel reports which file to run and the shell runs it.
+   * @returns absolute path of the downloaded installer.
+   */
+  install(): Promise<string>
 }

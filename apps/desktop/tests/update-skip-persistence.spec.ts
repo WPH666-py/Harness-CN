@@ -164,7 +164,7 @@ describe('desktop update skip wiring', () => {
     const unverified: DesktopUpdateBackend = {
       check: async () => offerOf('0.1.6'),
       download: async () => 'unverified',
-      install: async () => {},
+      install: async () => 'C:\\temp\\Harness-CN-setup.exe',
     }
     const coordinator = coordinatorOver(unverified, store, remembered)
 

@@ -54,13 +54,17 @@ const AUTOMATIC_UPDATE_CHECK_MS = 10_000
 const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1000
 
 /**
- * How long the installer is given before this process exits.
+ * How long the handover line is given to reach the shell before this process exits.
  *
- * The installer is a separate process that replaces files this one holds open, so the exit has to
- * follow the spawn rather than race it. The delay is what lets the child reach its own startup
- * before the parent's files disappear from under it.
+ * The installer is started by the shell, not here, so what this delay covers is the trip of the
+ * `launchinstaller` line up the stdout pipe while the process is still alive to flush it. The
+ * shell spawns the installer as soon as it reads the line, and that process is already outside
+ * this one's job object, so nothing here has to wait for the installer itself.
  */
 const INSTALL_EXIT_DELAY_MS = 800
+
+/** Silent switch of the NSIS installer, which then replaces the previous installation in place. */
+const NSIS_SILENT_SWITCH = '/S'
 
 /** Interval one coalesced batch of run-log lines is published on. */
 const LOG_FLUSH_MS = 150
@@ -276,10 +280,13 @@ async function main(): Promise<void> {
       currentVersion: options.version,
       downloadDirectory: join(paths.root, 'update'),
     }),
-    // The installer replaces the files this process has open, so this process ends as part of the
-    // same operation that started it — after `beforeRestart` has already stopped the Host and
-    // everything below it. The delay is what lets the spawned installer begin before the exit.
-    () => {
+    // The installer must outlive this process, and it can only do that if the shell starts it:
+    // this process and every child it spawns live in the shell's kill-on-close job, so an
+    // installer started here would be terminated as part of the same exit that is supposed to
+    // hand over to it. The shell sets `CREATE_BREAKAWAY_FROM_JOB` on that one process, and the
+    // delay below is what lets the line reach the shell's reader before this process ends.
+    (installer: string) => {
+      handshake({ type: 'launchinstaller', installer, silentSwitch: NSIS_SILENT_SWITCH })
       const timer = setTimeout(() => { void shutdown(0) }, INSTALL_EXIT_DELAY_MS)
       timer.unref()
     },
