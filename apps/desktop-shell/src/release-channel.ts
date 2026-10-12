@@ -25,6 +25,7 @@ import type {
 import {
   RELEASE_SOURCES,
   USER_AGENT,
+  readableReleases,
   readReleaseAnswers,
   type ReleaseAsset,
   type ReleaseFacts,
@@ -206,9 +207,7 @@ export function createReleaseChannel(options: ReleaseChannelOptions): DesktopUpd
 
   const check = async (): Promise<DesktopUpdateOffer | undefined> => {
     const answers = await readReleaseAnswers(request, RELEASE_SOURCES)
-    const readable = answers.filter(
-      (answer): answer is (typeof answer) & { facts: ReleaseFacts } => answer.facts !== undefined,
-    )
+    const readable = readableReleases(answers)
     if (readable.length === 0) {
       throw new AggregateError(
         answers.map(answer => answer.error ?? new Error('release check failed')),
@@ -219,7 +218,7 @@ export function createReleaseChannel(options: ReleaseChannelOptions): DesktopUpd
     // release with no installer is skipped rather than chosen: telling the user a version exists
     // and then refusing to download it is worse than offering the previous one that works.
     const candidates = readable
-      .flatMap(answer => answer.facts.assets.map(asset => ({ facts: answer.facts, asset })))
+      .flatMap(entry => entry.facts.assets.map(asset => ({ facts: entry.facts, asset })))
       .filter((candidate): candidate is { facts: ReleaseFacts; asset: ReleaseAsset } => (
         pickInstaller([candidate.asset]) !== undefined
       ))

@@ -144,6 +144,12 @@ fn plain_path(path: PathBuf) -> PathBuf {
 /// Every window is loaded from the sidecar's own loopback origin, and navigation away from that
 /// origin is refused: the pages the shell owns are the only ones it can render, and an external
 /// link inside the product must not be able to replace the workspace with a foreign page.
+///
+/// A page asking for a new window is a different request, and the snack shop is the page that makes
+/// it: every product it lists is a link to a Pinduoduo product page marked `target="_blank"`. The
+/// webview has no second window to put those in, so the request is answered by handing the address
+/// to the platform's own browser — which is where a shop link belongs anyway, since the purchase
+/// happens there. Refusing the request instead is what made a click on a product do nothing at all.
 fn open_window(
     app: &AppHandle,
     label: &str,
@@ -167,8 +173,33 @@ fn open_window(
         .center()
         .visible(true)
         .on_navigation(|target| target.host_str() == Some("127.0.0.1"))
+        .on_new_window(|target, _features| {
+            open_in_browser(&target);
+            // The page keeps rendering in the window it was loaded in; the address was either
+            // handed to the browser or reported, and neither outcome leaves a window to show.
+            tauri::webview::NewWindowResponse::Deny
+        })
         .build()
         .ok()
+}
+
+/// Hand one address a page asked to open to the platform's own browser.
+///
+/// Only the two browser schemes are passed on, and a loopback address is refused: it names a
+/// listener on this machine, which the shell already renders in its own windows, and on Windows it
+/// is the shape that makes a shell execute association look like a harmless link. Anything else is
+/// reported to the user rather than swallowed, because a link that does nothing is the failure this
+/// exists to remove.
+/// @param target - address the page asked for a new window for.
+fn open_in_browser(target: &tauri::Url) {
+    let allowed = matches!(target.scheme(), "http" | "https")
+        && !target.host_str().is_some_and(|host| host == "127.0.0.1" || host == "localhost");
+    if !allowed || !platform::open_external(target.as_str()) {
+        platform::show_error(
+            "Harness-CN",
+            &format!("无法在浏览器中打开这个链接：\n{}", target.as_str()),
+        );
+    }
 }
 
 /// Apply one fact the sidecar reported.

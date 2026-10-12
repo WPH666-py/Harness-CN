@@ -71,7 +71,15 @@ function readableNotes(body: unknown): string {
 /** One host's answer, or the reason it did not answer. */
 export interface ReleaseAnswer {
   readonly source: ReleaseSource
-  readonly facts: ReleaseFacts | undefined
+  /**
+   * Every release this host published, newest first, or undefined when it could not be read.
+   *
+   * One release is not enough for a caller that needs a specific file: an archive is published
+   * once, by the release it belongs to, so a build whose own release did not carry it is served by
+   * an older one. What the user is offered to install is a separate question, answered from the
+   * newest entry of each host.
+   */
+  readonly releases: readonly ReleaseFacts[] | undefined
   readonly error: Error | undefined
 }
 
@@ -112,47 +120,52 @@ function newestFirst<T extends { readonly version: string | undefined }>(entries
 }
 
 /** GitHub publishes an asset digest alongside every upload, which is what makes its files verifiable. */
-async function readGithub(source: ReleaseSource, fetchImpl: typeof globalThis.fetch): Promise<ReleaseFacts> {
+async function readGithub(source: ReleaseSource, fetchImpl: typeof globalThis.fetch): Promise<ReleaseFacts[]> {
   const releases = await getJson(
     `https://api.github.com/repos/${source.owner}/${source.repo}/releases?per_page=30`,
     'application/vnd.github+json',
     fetchImpl,
   )
   if (!Array.isArray(releases)) throw new Error('GitHub answered with an unexpected release list')
-  const newest = newestFirst(releases.filter(isRecord).map((release) => {
+  const read = newestFirst(releases.filter(isRecord).map((release) => {
     const tag = typeof release.tag_name === 'string' ? release.tag_name : ''
     return { release, tag, version: releaseVersion(tag) }
-  }))[0]
-  if (newest === undefined) throw new Error('GitHub published no release this channel can read')
-  const assets = Array.isArray(newest.release.assets) ? newest.release.assets : []
-  return {
-    tag: newest.tag,
-    page: typeof newest.release.html_url === 'string' ? newest.release.html_url : '',
-    notes: readableNotes(newest.release.body),
-    publishedAt: typeof newest.release.published_at === 'string' ? newest.release.published_at : '',
-    assets: assets.filter(isRecord).map((asset): ReleaseAsset => ({
-      name: typeof asset.name === 'string' ? asset.name : '',
-      url: typeof asset.browser_download_url === 'string' ? asset.browser_download_url : '',
-      size: typeof asset.size === 'number' ? asset.size : undefined,
-      // "sha256:abc..." -> "abc..."; older releases carry no digest at all.
-      sha256: typeof asset.digest === 'string' ? asset.digest.replace(/^sha256:/iu, '') : '',
-    })),
-  }
+  }))
+  if (read.length === 0) throw new Error('GitHub published no release this channel can read')
+  return read.map((entry) => {
+    const assets = Array.isArray(entry.release.assets) ? entry.release.assets : []
+    return {
+      tag: entry.tag,
+      page: typeof entry.release.html_url === 'string' ? entry.release.html_url : '',
+      notes: readableNotes(entry.release.body),
+      publishedAt: typeof entry.release.published_at === 'string' ? entry.release.published_at : '',
+      assets: assets.filter(isRecord).map((asset): ReleaseAsset => ({
+        name: typeof asset.name === 'string' ? asset.name : '',
+        url: typeof asset.browser_download_url === 'string' ? asset.browser_download_url : '',
+        size: typeof asset.size === 'number' ? asset.size : undefined,
+        // "sha256:abc..." -> "abc..."; older releases carry no digest at all.
+        sha256: typeof asset.digest === 'string' ? asset.digest.replace(/^sha256:/iu, '') : '',
+      })),
+    }
+  })
 }
 
 /**
  * Gitee answers the same question with a different shape.
  *
- * Its `assets` array holds only the auto-generated source archives, so an uploaded attachment has
- * to be requested separately; and because a prerelease is a normal release there, the whole list is
- * read and compared with the version comparator rather than trusting a "latest" endpoint that
- * orders prereleases differently from this product.
+ * Its `assets` array holds the published files, and it also offers a per-release attachment
+ * endpoint that names the same files; the list read here is the cheaper answer of the two, and the
+ * attachment endpoint is consulted only when the list named nothing this product can compare,
+ * which is how a release whose attachment record exists but whose asset records do not is still
+ * read. Because a prerelease is a normal release there, the whole list is read and compared with
+ * the version comparator rather than trusting a "latest" endpoint that orders prereleases
+ * differently from this product.
  */
-async function readGitee(source: ReleaseSource, fetchImpl: typeof globalThis.fetch): Promise<ReleaseFacts> {
+async function readGitee(source: ReleaseSource, fetchImpl: typeof globalThis.fetch): Promise<ReleaseFacts[]> {
   const base = `https://gitee.com/api/v5/repos/${source.owner}/${source.repo}`
   const releases = await getJson(`${base}/releases?per_page=100`, 'application/json', fetchImpl)
   if (!Array.isArray(releases)) throw new Error('Gitee answered with an unexpected release list')
-  const newest = newestFirst(releases.filter(isRecord).map((release) => {
+  const read = newestFirst(releases.filter(isRecord).map((release) => {
     const tag = typeof release.tag_name === 'string' ? release.tag_name : ''
     return {
       assets: Array.isArray(release.assets) ? release.assets.filter(isRecord) : [],
@@ -162,56 +175,52 @@ async function readGitee(source: ReleaseSource, fetchImpl: typeof globalThis.fet
       tag,
       version: releaseVersion(tag),
     }
-  }))[0]
-  if (newest === undefined) throw new Error('Gitee published no release this channel can read')
+  }))
+  if (read.length === 0) throw new Error('Gitee published no release this channel can read')
 
-  const assets: ReleaseAsset[] = []
-  // A release also lists `/releases/download/` links; they are the fallback when the attachment
-  // endpoint refuses, which it does for a repository that has none.
-  for (const asset of newest.assets) {
-    const url = typeof asset.browser_download_url === 'string' ? asset.browser_download_url : ''
-    if (!url.includes('/releases/download/')) continue
-    assets.push({
-      name: typeof asset.name === 'string' ? asset.name : '',
-      url,
-      size: typeof asset.size === 'number' ? asset.size : undefined,
-      sha256: '',
-    })
-  }
-  if (newest.id !== undefined) {
-    try {
-      const files = await getJson(`${base}/releases/${String(newest.id)}/attach_files`, 'application/json', fetchImpl)
-      if (Array.isArray(files)) {
-        for (const file of files.filter(isRecord)) {
-          const name = typeof file.title === 'string' ? file.title : (typeof file.name === 'string' ? file.name : '')
-          if (name === '') continue
-          // Gitee has answered this endpoint with a URL under more than one field name, and with no
-          // URL at all. The canonical download path is derivable from facts this function already
-          // holds, so a release whose attachment record carries only a title is still downloadable.
-          const published = [file.download_url, file.browser_download_url, file.url]
-            .find(candidate => typeof candidate === 'string' && candidate !== '')
-          const url = typeof published === 'string'
-            ? published
-            : `https://gitee.com/${source.owner}/${source.repo}/releases/download/${newest.tag}/${encodeURIComponent(name)}`
-          assets.push({ name, url, size: typeof file.size === 'number' ? file.size : undefined, sha256: '' })
-        }
-      }
-    } catch {
-      // The version is still usable without an attachment list, and the caller falls through to
-      // the next source for a download URL.
+  return await Promise.all(read.map(async (release): Promise<ReleaseFacts> => {
+    const assets: ReleaseAsset[] = []
+    for (const asset of release.assets) {
+      const url = typeof asset.browser_download_url === 'string' ? asset.browser_download_url : ''
+      const name = typeof asset.name === 'string' ? asset.name : ''
+      if (url === '' || name === '') continue
+      assets.push({ name, url, size: typeof asset.size === 'number' ? asset.size : undefined, sha256: '' })
     }
-  }
-  return {
-    tag: newest.tag,
-    page: `https://gitee.com/${source.owner}/${source.repo}/releases/tag/${newest.tag}`,
-    notes: newest.notes,
-    publishedAt: newest.publishedAt,
-    assets,
-  }
+    if (assets.length === 0 && release.id !== undefined) {
+      try {
+        const files = await getJson(`${base}/releases/${String(release.id)}/attach_files`, 'application/json', fetchImpl)
+        if (Array.isArray(files)) {
+          for (const file of files.filter(isRecord)) {
+            const name = typeof file.title === 'string' ? file.title : (typeof file.name === 'string' ? file.name : '')
+            if (name === '') continue
+            // Gitee has answered this endpoint with a URL under more than one field name, and with no
+            // URL at all. The canonical download path is derivable from facts this function already
+            // holds, so a release whose attachment record carries only a title is still downloadable.
+            const published = [file.download_url, file.browser_download_url, file.url]
+              .find(candidate => typeof candidate === 'string' && candidate !== '')
+            const url = typeof published === 'string'
+              ? published
+              : `https://gitee.com/${source.owner}/${source.repo}/releases/download/${release.tag}/${encodeURIComponent(name)}`
+            assets.push({ name, url, size: typeof file.size === 'number' ? file.size : undefined, sha256: '' })
+          }
+        }
+      } catch {
+        // The version is still usable without an attachment list, and the caller falls through to
+        // the next source for a download URL.
+      }
+    }
+    return {
+      tag: release.tag,
+      page: `https://gitee.com/${source.owner}/${source.repo}/releases/tag/${release.tag}`,
+      notes: release.notes,
+      publishedAt: release.publishedAt,
+      assets,
+    }
+  }))
 }
 
 /**
- * Ask every source, keeping each answer separate.
+ * Read every release each host published.
  *
  * Every source is tried even when an earlier one already answered, because the hosts carry
  * different things and a caller may need one fact from a host that cannot supply the file.
@@ -225,14 +234,14 @@ export async function readReleaseAnswers(
 ): Promise<readonly ReleaseAnswer[]> {
   return await Promise.all(sources.map(async (source) => {
     try {
-      const facts = source.kind === 'gitee'
+      const releases = source.kind === 'gitee'
         ? await readGitee(source, fetchImpl)
         : await readGithub(source, fetchImpl)
-      return { source, facts, error: undefined }
+      return { source, releases, error: undefined }
     } catch (error) {
       return {
         source,
-        facts: undefined,
+        releases: undefined,
         error: error instanceof Error ? error : new Error(String(error)),
       }
     }
@@ -240,26 +249,44 @@ export async function readReleaseAnswers(
 }
 
 /**
- * Find one published file by name across every host that has it.
+ * The releases this channel could read, sources in preference order.
+ *
+ * A caller offering an update compares whole hosts: the newest release of the first host that
+ * answered wins a tie, and a host that could not be read contributes nothing rather than an error
+ * the other host's answer would have to overcome.
+ * @param answers - what each host answered.
+ * @returns one entry per readable release, grouped by source.
+ */
+export function readableReleases(
+  answers: readonly ReleaseAnswer[],
+): { readonly source: ReleaseSource; readonly facts: ReleaseFacts }[] {
+  return answers.flatMap(answer => (answer.releases ?? []).map(facts => ({ source: answer.source, facts })))
+}
+
+/**
+ * Find one published file by name in any release either host published.
+ *
+ * The search goes newest release first, across both sources, so a version's own release is read
+ * before any older one. A file a release published is reachable even when that release is not the
+ * newest: an offline package is published once, with the version it belongs to, and the build that
+ * needs it may well be newer than the host it is fetched from.
  *
  * The result keeps the URL out of the caller's reach only in the sense that it never leaves this
  * process: a page cannot nominate a file for the shell to fetch and then run, because the only
  * names this returns came from a release this product published.
  * @param fetchImpl - request implementation.
  * @param matches - predicate over the published file name.
- * @returns the first published match, with the release tag that carries it.
+ * @returns the newest published match, with the release tag that carries it.
  */
 export async function findPublishedAsset(
   fetchImpl: typeof globalThis.fetch,
   matches: (name: string) => boolean,
 ): Promise<{ readonly tag: string; readonly asset: ReleaseAsset } | undefined> {
   const answers = await readReleaseAnswers(fetchImpl)
-  const candidates = answers
-    .filter((answer): answer is ReleaseAnswer & { facts: ReleaseFacts } => answer.facts !== undefined)
-    .sort((left, right) => (isNewer(left.facts.tag, right.facts.tag) ? -1 : 1))
-  for (const answer of candidates) {
-    const asset = answer.facts.assets.find(candidate => candidate.url !== '' && matches(candidate.name))
-    if (asset !== undefined) return { tag: answer.facts.tag, asset }
+  const candidates = readableReleases(answers).sort((left, right) => (isNewer(left.facts.tag, right.facts.tag) ? -1 : 1))
+  for (const candidate of candidates) {
+    const asset = candidate.facts.assets.find(asset => asset.url !== '' && matches(asset.name))
+    if (asset !== undefined) return { tag: candidate.facts.tag, asset }
   }
   return undefined
 }

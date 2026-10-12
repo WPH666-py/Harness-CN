@@ -30,3 +30,24 @@ export function unclaimedRequestOwner(input: UnclaimedRequestInput): UnclaimedRe
   if (input.status !== 404) return 'webserver'
   return input.method === 'GET' || input.method === 'HEAD' ? 'assets' : 'webserver'
 }
+
+/**
+ * Copy one request's headers, pointing any `Origin` at the authority the copy is addressed to.
+ *
+ * The pages the WebView loads come from the desktop transport's own origin, so a write they make
+ * carries an `Origin` naming that origin rather than this listener. A route that fences writes by
+ * comparing `Origin` against the authority it was reached on reads the untouched header as a
+ * cross-origin caller and answers `403` — vet's runtime-guard toggle, shield tier, and profile
+ * routes all do — which reaches the user as a write that failed for no stated reason. Re-targeting
+ * the header keeps that fence meaningful: the rebuilt request is addressed to this listener, so
+ * naming it as the origin is what the request now is. The browser context it came from is recorded
+ * by the desktop transport, not by this header.
+ * @param headers - headers of the request being rebuilt for another listener.
+ * @param authority - origin the rebuilt request is addressed to.
+ * @returns headers for the rebuilt request.
+ */
+export function headersForAuthority(headers: Headers, authority: string): Headers {
+  const copy = new Headers(headers)
+  if (copy.has('origin')) copy.set('origin', authority)
+  return copy
+}

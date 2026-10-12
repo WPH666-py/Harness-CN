@@ -21,6 +21,7 @@ use windows_sys::Win32::System::Threading::{
     CreateMutexW, GetCurrentProcessId, OpenProcess, TerminateProcess,
     PROCESS_SET_QUOTA, PROCESS_TERMINATE,
 };
+use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FindWindowW, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
     SetForegroundWindow, ShowWindow, MB_ICONERROR, MB_OK, SW_RESTORE,
@@ -126,6 +127,43 @@ pub fn terminate(pid: u32) {
         TerminateProcess(handle, 1);
         CloseHandle(handle);
     }
+}
+
+/// Largest value `ShellExecuteW` returns when it refused the request.
+///
+/// The call is declared to return an `HINSTANCE` and is documented to return an error code instead:
+/// anything above this bound is a handle to the program that was started.
+const SHELL_EXECUTE_ERROR_LIMIT: isize = 32;
+
+/// Open one address in the platform's default browser.
+///
+/// `ShellExecuteW` is the shell's own "open this" call, so the address lands in whatever the user
+/// has set as their browser rather than in a program this build would have to choose. The shell
+/// process is a GUI-subsystem binary with no console, which is why this goes through the shell
+/// rather than a command line: a console-subsystem fallback would flash a window on every click.
+/// @param address - absolute http/https address to open.
+/// @returns whether the platform accepted the request.
+pub fn open_external(address: &str) -> bool {
+    /// `SW_SHOWNORMAL`: show the target in the state it was last left in.
+    const SW_SHOWNORMAL: i32 = 1;
+    let operation = wide("open");
+    let file = wide(address);
+    let opened = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = opened as isize;
+    if code <= SHELL_EXECUTE_ERROR_LIMIT {
+        eprintln!("Harness-CN: opening {address} in the browser failed (ShellExecuteW code {code})");
+        return false;
+    }
+    true
 }
 
 /// Start the downloaded installer outside this process's job object.

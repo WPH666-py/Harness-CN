@@ -1,6 +1,6 @@
 [package]
 name = "harness-cn"
-version = "0.1.5-rc.17"
+version = "0.1.5-rc.18"
 description = "Harness-CN desktop shell"
 authors = ["水哥"]
 edition = "2021"
@@ -22,12 +22,14 @@ serde_json = "1"
 [target.'cfg(windows)'.dependencies]
 # `Win32_Security` is not optional here even though nothing in this crate names a security type:
 # `CreateMutexW` takes a `SECURITY_ATTRIBUTES` pointer, and windows-sys gates the whole function
-# behind that feature rather than behind the threading module it is declared in.
+# behind that feature rather than behind the threading module it is declared in. `Win32_UI_Shell`
+# supplies `ShellExecuteW`, which is how a product link in a shell page reaches the user's browser.
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_Security",
   "Win32_System_JobObjects",
   "Win32_System_Threading",
+  "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
 

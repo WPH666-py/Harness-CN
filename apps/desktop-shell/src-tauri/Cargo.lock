@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "harness-cn"
-version = "0.1.5-rc.17"
+version = "0.1.5-rc.18"
 dependencies = [
  "serde",
  "serde_json",

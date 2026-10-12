@@ -42,6 +42,15 @@ export const SEED_ARCHIVE_EXTENSIONS = ['.tar.zst', '.tar.gz'] as const
 const SEED_INTEGRITY_FILE = 'integrity.json'
 
 /**
+ * Directory under the cache root that holds seed archives.
+ *
+ * Every message that tells a user how to supply the archive by hand names this directory, and the
+ * launch reads it before it asks any host, so the two are one fact rather than a string repeated
+ * where they could drift apart.
+ */
+const SEED_DOWNLOADS_DIRECTORY = 'downloads'
+
+/**
  * The published names of one release's seed archive, best first.
  * @param version - release version the seed belongs to.
  * @returns the file names the release may publish.
@@ -51,7 +60,7 @@ export function seedArchiveNames(version: string): readonly string[] {
 }
 
 /** Where a seed came from, for the run log. */
-export type SeedOrigin = 'bundled' | 'cache' | 'download'
+export type SeedOrigin = 'bundled' | 'cache' | 'download' | 'manual'
 
 /** A seed that is present on disk and ready to be installed from. */
 export interface SeedPackage {
@@ -170,13 +179,39 @@ async function extractSeed(
 }
 
 /**
+ * The archive a user put in the download directory by hand, when one is there.
+ *
+ * The failure message every unavailable network path ends with tells the user to fetch the archive
+ * from a release page and drop it in this directory, so this is the other half of that instruction:
+ * the directory is read, by the exact published names, before any host is asked. A machine that
+ * cannot reach either release host at all still installs from a file that is already on the disk.
+ * @param cacheRoot - directory the fetched seed is kept under; the download directory is inside it.
+ * @param version - release version this build binds its profile to.
+ * @returns the archive's absolute path, or undefined when the directory holds none.
+ */
+export function findSeedArchiveInDownloads(cacheRoot: string, version: string): string | undefined {
+  const directory = join(cacheRoot, SEED_DOWNLOADS_DIRECTORY)
+  const names = seedArchiveNames(version)
+  for (const name of names) {
+    const candidate = join(directory, name)
+    try {
+      if (statSync(candidate).isFile()) return candidate
+    } catch {
+      // The next published extension may still be there; a directory that does not exist at all
+      // reports ENOENT for every name, which is the ordinary first-launch case.
+    }
+  }
+  return undefined
+}
+
+/**
  * Produce a seed directory for this version, fetching it when it is not already at hand.
  *
- * The three sources are checked in the order that costs the user least: a seed shipped beside the
- * application (an offline or full installer), then one an earlier launch already fetched, and only
- * then the network. The result is always a directory carrying the seed's own inventory file; what
- * that inventory says about the bytes is checked by the caller, which is the same check regardless
- * of where the seed came from.
+ * The four sources are checked in the order that costs the user least: a seed shipped beside the
+ * application (an offline or full installer), one an earlier launch already fetched, an archive the
+ * user downloaded by hand into the download directory, and only then the network. The result is
+ * always a directory carrying the seed's own inventory file; what that inventory says about the
+ * bytes is checked by the caller, which is the same check regardless of where the seed came from.
  * @param options - version to obtain, where to look, and how to report progress.
  * @returns the seed directory and where it came from.
  */
@@ -189,42 +224,53 @@ export async function ensureSeedPackage(options: SeedPackageOptions): Promise<Se
 
   const request = options.fetch ?? globalThis.fetch
   const names = seedArchiveNames(options.version)
-  options.onProgress?.('正在查找离线包…', undefined, '查找离线包')
-  const published = await findPublishedAsset(request, candidate => names.includes(candidate))
-  if (published === undefined) {
-    throw new Error(
-      `找不到离线包 ${names[0] ?? ''}。\n\n`
-      + '请确认网络可用后重试；也可以手动从发布页下载该文件，'
-      + `放进 ${join(options.cacheRoot, 'downloads')} 后重新启动。`,
-    )
+  // A file the user placed by hand is used as it is: the names it is looked up by are this
+  // product's own, and the seed's own inventory is verified before anything is installed from it,
+  // so "downloaded" and "hand-copied" are vouched for by the same check.
+  const manual = findSeedArchiveInDownloads(options.cacheRoot, options.version)
+  let archive = manual
+  const origin = manual === undefined ? 'download' : 'manual'
+  if (archive === undefined) {
+    options.onProgress?.('正在查找离线包…', undefined, '查找离线包')
+    const published = await findPublishedAsset(request, candidate => names.includes(candidate))
+    if (published === undefined) {
+      throw new Error(
+        `找不到离线包 ${names[0] ?? ''}。\n\n`
+        + '请确认网络可用后重试；也可以手动从发布页下载该文件，'
+        + `放进 ${join(options.cacheRoot, SEED_DOWNLOADS_DIRECTORY)} 后重新启动。`,
+      )
+    }
+
+    const downloaded = await downloadVerified({
+      directory: join(options.cacheRoot, SEED_DOWNLOADS_DIRECTORY),
+      name: published.asset.name,
+      url: published.asset.url,
+      size: published.asset.size,
+      sha256: published.asset.sha256,
+      fetch: request,
+      progress: (fraction) => {
+        options.onProgress?.(
+          `正在下载离线包… ${String(Math.round(fraction * 100))}%（${published.tag}）`,
+          fraction,
+          '下载离线包',
+        )
+      },
+    })
+    archive = downloaded.path
   }
 
-  const result = await downloadVerified({
-    directory: join(options.cacheRoot, 'downloads'),
-    name: published.asset.name,
-    url: published.asset.url,
-    size: published.asset.size,
-    sha256: published.asset.sha256,
-    fetch: request,
-    progress: (fraction) => {
-      options.onProgress?.(
-        `正在下载离线包… ${String(Math.round(fraction * 100))}%（${published.tag}）`,
-        fraction,
-        '下载离线包',
-      )
-    },
-  })
-
   options.onProgress?.('正在解包离线包… 0%', 0, '解包离线包')
-  await extractSeed(result.path, cached, `${cached}.partial`, (fraction) => {
+  await extractSeed(archive, cached, `${cached}.partial`, (fraction) => {
     options.onProgress?.(
       `正在解包离线包… ${String(Math.round(fraction * 100))}%`,
       fraction,
       '解包离线包',
     )
   })
-  // The archive is only useful once; keeping it would cost more than re-fetching it is worth.
-  await rm(result.path, { force: true }).catch(() => undefined)
+  // A fetched archive is only useful once, and keeping it would cost more than re-fetching it is
+  // worth. The user's own file is left where they put it: they chose that directory, and it is
+  // theirs to keep or delete.
+  if (manual === undefined) await rm(archive, { force: true }).catch(() => undefined)
   options.onProgress?.('', 1, '解包离线包')
-  return { directory: cached, origin: 'download' }
+  return { directory: cached, origin }
 }

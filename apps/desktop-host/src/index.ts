@@ -25,7 +25,7 @@ import type {} from '@deepseek-ai/dsh-api-gateway'
 import type { ConnectionFetchHandler } from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-client-modules'
 import { renderIndexInjections, type IndexInjection } from '@deepseek-ai/dsh-host-webserver'
-import { unclaimedRequestOwner } from './request-routing.ts'
+import { headersForAuthority, unclaimedRequestOwner } from './request-routing.ts'
 import {
   DESKTOP_HOST_PROTOCOL_VERSION,
   DESKTOP_PIPE_CHUNK_BYTES,
@@ -328,7 +328,7 @@ export async function runDesktopHost(
     const url = new URL(request.url)
     const init: NodeRequestInit = {
       method: request.method,
-      headers: new Headers(request.headers),
+      headers: headersForAuthority(request.headers, `http://127.0.0.1:${String(port)}`),
       signal: request.signal,
       // A request body is a stream that can be read once, so it is forwarded rather than
       // rebuilt; `duplex: 'half'` is what Node requires to send a streaming body.
