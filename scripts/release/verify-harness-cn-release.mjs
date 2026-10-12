@@ -47,7 +47,13 @@ async function localAssets() {
 
 /** Download one address and describe the bytes that arrived. */
 async function describeDownload(url, headers) {
-  const response = await fetch(url, { headers: { 'user-agent': USER_AGENT, ...headers }, redirect: 'follow' })
+  const response = await fetch(url, {
+    headers: { 'user-agent': USER_AGENT, ...headers },
+    redirect: 'follow',
+    // A host that accepts the connection and then stops delivering must not hang the job: the point
+    // of this script is to answer, and an unanswered check is worse than a reported failure.
+    signal: AbortSignal.timeout(120_000),
+  })
   if (!response.ok) throw new Error(`${url} -> ${String(response.status)} ${response.statusText}`)
   const body = Buffer.from(await response.arrayBuffer())
   return { bytes: body.byteLength, digest: createHash('sha256').update(body).digest('hex') }
@@ -76,6 +82,26 @@ async function downloadGithubAsset(asset) {
   }
 }
 
+/**
+ * Check one GitHub asset against the local bytes.
+ *
+ * GitHub records the SHA-256 it computed when the upload arrived, and that record is the stronger
+ * check of the two: it is computed by the host from the bytes it stored, so comparing it with the
+ * local digest proves the stored object is the local one without moving 78 MB back down. A download
+ * is the fallback for an asset old enough to carry no digest.
+ * @param asset - asset record from the release.
+ * @param local - the bytes this machine produced.
+ * @returns the digest that was compared, and where the comparison came from.
+ */
+async function checkGithubAsset(asset, local) {
+  const published = typeof asset.digest === 'string' ? asset.digest.replace(/^sha256:/iu, '') : ''
+  if (published !== '') {
+    return { digest: published, bytes: asset.size, source: 'uploaded digest' }
+  }
+  const downloaded = await downloadGithubAsset(asset)
+  return { digest: downloaded.digest, bytes: downloaded.bytes, source: downloaded.source }
+}
+
 const assets = await localAssets()
 let failures = 0
 
@@ -95,7 +121,7 @@ for (const asset of assets) {
     console.log('github    MISSING from the release')
     failures += 1
   } else {
-    const published = await downloadGithubAsset(githubAsset)
+    const published = await checkGithubAsset(githubAsset, asset)
     const same = published.bytes === asset.bytes && published.digest === asset.digest
     console.log(`github    ${String(published.bytes)} bytes  ${published.digest}  ${same ? 'OK' : 'MISMATCH'} (${published.source})`)
     if (!same) failures += 1
