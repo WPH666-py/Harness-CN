@@ -41,6 +41,12 @@ export const PRODUCTS = [
     url: 'https://mobile.yangkeduo.com/goods2.html?ps=Xt9qw1Tc0P',
   },
   {
+    image: 'biscuit-calcium-mini.jpg',
+    name: '青食精制/铁锌/特制钙奶饼干（迷你包装）',
+    detail: '精致 · 铁锌 · 钙奶 三种口味 · 48g 迷你装',
+    url: 'https://mobile.yangkeduo.com/goods2.html?ps=fptDgcMjqA',
+  },
+  {
     image: 'biscuit-truffle.jpg',
     name: '青食黑松露火腿苏打饼干',
     detail: '黑松露风味 × 火腿风味 · 90g 装',
