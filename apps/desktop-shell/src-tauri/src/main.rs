@@ -165,6 +165,10 @@ fn open_window(
         return Some(existing);
     }
     let parsed = tauri::Url::parse(&url).ok()?;
+    // Every window this shell opens is recorded before it is built: a window that renders the wrong
+    // thing is then diagnosable from the run log, which is where a user can look, rather than only
+    // from a console no build carries.
+    eprintln!("Harness-CN: opening window {label} at {url}");
     WebviewWindowBuilder::new(app, label, WebviewUrl::External(parsed))
         .title(title)
         .inner_size(width, height)

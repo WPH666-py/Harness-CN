@@ -372,7 +372,11 @@ async function main(): Promise<void> {
     },
   }
 
-  const running = await startShellServer({ resourceDir: options.resourceDir, api })
+  const running = await startShellServer({
+    resourceDir: options.resourceDir,
+    api,
+    note: (text) => { logShell(text) },
+  })
   logShell(`Harness-CN ${options.version} starting; control surface on ${running.origin}`)
   handshake({ type: 'listen', port: running.port })
 

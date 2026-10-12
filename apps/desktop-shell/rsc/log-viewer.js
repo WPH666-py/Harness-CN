@@ -6,6 +6,9 @@ import { clearLogs, getLocale, getLogs, revealLogs, subscribeEvents } from './sh
 // how far back the viewer can scroll.
 const RENDER_LIMIT = 2000
 
+/** The snapshot the viewer last read, kept so the status line can still name the log file. */
+let logFile = ''
+
 let entries = []
 let dropped = 0
 let paused = false
@@ -15,6 +18,30 @@ let summaryFormat = ''
 let sourceLabels = {}
 let pauseLabel = ''
 let resumeLabel = ''
+let fallbackLabel = ''
+
+/**
+ * Report a failure where the user can see it.
+ *
+ * This page has one job — showing what the shell and the Host said — and a failure it swallows
+ * looks exactly like a run that logged nothing. Every step that can fail therefore says so, in the
+ * same place, instead of leaving an empty list that means the opposite of what it appears to mean.
+ * @param text - what failed, with whatever detail the failure carried.
+ */
+function reportBootFailure(text) {
+  const boot = document.querySelector('#boot')
+  if (boot === null) return
+  boot.textContent = text
+  boot.hidden = false
+}
+
+/** The most specific message an unknown rejection carries. */
+function messageOf(reason) {
+  if (reason instanceof Error) return reason.message
+  const nested = reason?.cause
+  if (nested instanceof Error) return nested.message
+  return String(reason)
+}
 
 function pad(value, width = 2) {
   return String(value).padStart(width, '0')
@@ -72,13 +99,19 @@ function merge(incoming) {
 
 function updateStatus() {
   const shown = listElement().childElementCount
-  document.querySelector('#status').textContent = summaryFormat
+  const template = summaryFormat === '' ? '{shown}/{total}' : summaryFormat
+  const line = template
     .replaceAll(/\{([^{}]+)\}/gu, (placeholder, name) => ({
       shown: String(shown),
       total: String(entries.length),
       dropped: String(dropped),
     })[name] ?? placeholder)
-  document.querySelector('#empty').hidden = shown !== 0
+  // The file is the one place these lines survive the process, so it is worth naming even when
+  // the ring is empty: a reader who sees no lines here can go and look for them there.
+  document.querySelector('#status').textContent = logFile === '' ? line : `${line}  ${logFile}`
+  const empty = document.querySelector('#empty')
+  empty.textContent = entries.length === 0 && fallbackLabel !== '' ? `${fallbackLabel}  ${logFile}` : ''
+  empty.hidden = shown !== 0
 }
 
 function renderAll() {
@@ -115,9 +148,12 @@ function setPaused(next) {
 }
 
 async function main() {
+  // The boot guard stops waiting the moment this runs, so a module that starts is never reported as
+  // one that did not.
+  window.__dshLogViewerStarted = true
+
   const locale = await getLocale()
   const messages = locale.messages
-  const message = (key, values = {}) => messages[key].replaceAll(/\{([^{}]+)\}/gu, (placeholder, name) => values[name] ?? placeholder)
   document.documentElement.lang = locale.id
   document.querySelector('#page-title').textContent = messages.logViewerTitle
   document.querySelector('#title').textContent = messages.logViewerTitle
@@ -127,6 +163,7 @@ async function main() {
   document.querySelector('#reveal').textContent = messages.logReveal
   document.querySelector('#clear').textContent = messages.logClear
   summaryFormat = messages.logSummary
+  fallbackLabel = messages.logEmpty
 
   sourceLabels = {
     shell: messages.logSourceShell,
@@ -146,20 +183,30 @@ async function main() {
   }
   document.querySelector('#toggle').textContent = messages.logPause
 
-  // The stream is opened before the snapshot is read so no line can slip between the two:
-  // a line that also appears in the snapshot is dropped by its sequence number in merge().
-  subscribeEvents({
-    logs: (update) => {
-      dropped = update.dropped
-      applyIncoming(update.entries)
-    },
-  })
+  // The snapshot is read on its own and first: it is what this window exists to show, and it has to
+  // survive a live stream that cannot be opened. The stream is attached before the wiring below, so
+  // a line arriving while the snapshot is read is kept — `merge` drops it by sequence number when
+  // the snapshot turns out to carry it too.
+  let liveAttached = false
+  try {
+    subscribeEvents({
+      logs: (update) => {
+        dropped = update.dropped
+        applyIncoming(update.entries)
+      },
+    })
+    liveAttached = true
+  } catch (error) {
+    reportBootFailure(`实时日志流不可用，仅显示已读取的记录：${messageOf(error)}`)
+  }
 
   const snapshot = await getLogs()
   entries = []
   dropped = snapshot.dropped
+  logFile = snapshot.file
   merge(snapshot.entries)
   renderAll()
+  if (!liveAttached) updateStatus()
 
   document.querySelector('#source').addEventListener('change', (event) => {
     filter = event.target.value
@@ -176,8 +223,16 @@ async function main() {
       entries = []
       dropped = cleared.dropped
       renderAll()
-    })
+    }).catch((error) => { reportBootFailure(`清空失败：${messageOf(error)}`) })
   })
 }
 
-void main()
+// Both handlers are attached before the first await: a rejection that arrives while `main` is still
+// running would otherwise reach only the shell's own console, which is the window nobody has open
+// when this window is the one that looks wrong.
+window.addEventListener('unhandledrejection', (event) => {
+  reportBootFailure(`日志页面脚本出错：${messageOf(event.reason)}`)
+})
+void main().catch((error) => {
+  reportBootFailure(`日志页面无法读取运行日志：${messageOf(error)}`)
+})

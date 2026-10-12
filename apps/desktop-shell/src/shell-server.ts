@@ -34,6 +34,7 @@ const MIME: Readonly<Record<string, string>> = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
   '.mp4': 'video/mp4',
   '.svg': 'image/svg+xml',
 }
@@ -98,6 +99,15 @@ export interface ShellServerOptions {
   readonly resourceDir: string
   /** Control surface the pages and the Rust shell drive. */
   readonly api: ShellApi
+  /**
+   * Record one line in the run log the shell pages read.
+   *
+   * A shell page is the one window whose failure cannot be reported by the page itself: if its
+   * script never runs, the window paints markup and says nothing. This process serves that page, so
+   * it is the only participant that can record which one was requested, and the run log is where a
+   * user can go and look.
+   */
+  readonly note?: ((text: string) => void) | undefined
 }
 
 /** One running loopback server. */
@@ -368,6 +378,9 @@ export async function startShellServer(options: ShellServerOptions): Promise<She
           return
         }
         if (url.pathname.startsWith(SHELL_ASSET_PREFIX)) {
+          // Only page loads are recorded: they are the entry points a window is opened for, and one
+          // line per page beats one line per stylesheet in a ring that a reader scrolls.
+          if (url.pathname.endsWith('.html')) options.note?.(`window page requested: ${url.pathname}`)
           await serveShellAsset(response, options.resourceDir, url.pathname)
           return
         }

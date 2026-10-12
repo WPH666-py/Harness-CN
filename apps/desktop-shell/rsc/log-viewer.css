@@ -80,6 +80,19 @@ select:disabled {
   color: GrayText;
 }
 
+/* A window whose own script failed to boot. Loud on purpose: this line exists to be noticed,
+   because the alternative is a page that looks like an empty log. */
+#boot {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 45%, crimson);
+  border-radius: 8px;
+  background: color-mix(in srgb, Canvas 88%, crimson);
+  color: CanvasText;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
 #entries {
   flex: 1;
   min-height: 0;
