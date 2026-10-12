@@ -62,3 +62,21 @@
 - **没有 macOS / ARM64 发行版。**
 - 发布链路依赖上面两个仓库与对应凭据；发布流程已移入 `.github/workflows/harness-cn-release.yml`，用仓库 Secrets 而不是某台机器的固定路径。
 - `release/` 下的打包脚本仍要求 Windows 环境（Tauri + NSIS + MSVC）。
+
+## 发布流程（维护者）
+
+发布走 `.github/workflows/harness-cn-release.yml`，它取代了原先依赖本机固定路径的临时脚本：
+
+1. **一次性设置**：仓库 Settings → Secrets and variables → Actions
+   - Secrets：`GH_TOKEN`（GitHub，`repo` 权限）、`GITEE_TOKEN`（Gitee，`projects` 权限）
+   - Variables（可选）：`HARNESS_CN_GITHUB_REPOSITORY`、`HARNESS_CN_GITEE_REPOSITORY`
+2. **升版并推送**：`pnpm run release:dsh <版本>`，然后单独处理 Tauri 三处配置
+   （`tauri.conf.json`、`Cargo.toml`、`Cargo.lock`）以及 `packages/client/resources/package.json`——
+   `release:dsh` 不覆盖它们，而 `pnpm run release:verify --family dsh` 会因版本不一致直接拒绝。
+   推 main **之后**再打 tag，避免 tag 落在 main 之前。
+3. **先干跑**：手动 dispatch，`publish` 保持 false。这一步只打包并上传 artifact，不碰发布源。
+4. **再发布**：确认 artifact 的字节数与 sha256 无误后，重新 dispatch 并勾选 `publish`，或直接推送 `v*` tag。
+5. **自动校验**：`publish` job 在结束前会把两个文件从两个源读回并与本地字节比对，
+   不一致就让 job 失败。GitHub 侧优先用它记录的 sha256（上传时由它计算），
+   取不到摘要才真正下载；Gitee 侧始终下载比对——Gitee 不提供摘要。
+
