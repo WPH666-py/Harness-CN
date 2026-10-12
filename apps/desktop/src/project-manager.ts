@@ -198,7 +198,128 @@ const WORKSPACE_SETTINGS = 'nodeLinker: hoisted\nautoInstallPeers: false\nstrict
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)$/u
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/u
 const MAX_PNPM_DIAGNOSTIC_BYTES = 64 * 1024
-const DESKTOP_REGISTRY = 'https://registry.npmjs.org/'
+
+/**
+ * Registry this product installs plugins from when the machine names none.
+ *
+ * It is a fallback rather than the policy: a user behind a mirror or a proxy states their own
+ * registry, and an installation that ignored that would refuse to install anything on the machines
+ * that need it most. What still holds is the shape — the value this product acts on is a registry
+ * origin it validated, never something a page or a package spec can name.
+ */
+const DEFAULT_REGISTRY = 'https://registry.npmjs.org/'
+
+/**
+ * Environment names that carry a registry choice, in the order npm itself prefers them.
+ *
+ * npm and pnpm read both spellings, so this product does too; the order decides which one wins when
+ * a machine sets both.
+ */
+const REGISTRY_ENVIRONMENT_NAMES = ['npm_config_registry', 'NPM_CONFIG_REGISTRY'] as const
+
+/** Environment names that carry a user configuration file npm and pnpm would read. */
+const USERCONFIG_ENVIRONMENT_NAMES = ['npm_config_userconfig', 'NPM_CONFIG_USERCONFIG'] as const
+
+/**
+ * Environment names that decide whether this machine reaches the registry through a proxy.
+ *
+ * Node only honours these for its own `fetch` and `http` when `NODE_USE_ENV_PROXY` is set, so the
+ * child is given that switch too — a user who configured a proxy for npm has already said how this
+ * machine reaches the internet, and an installer that ignores it fails with a bare network error.
+ */
+const PROXY_ENVIRONMENT_NAMES = ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'no_proxy', 'NO_PROXY'] as const
+
+/** Environment names for a TLS trust anchor this product must add, not replace. */
+const CA_ENVIRONMENT_NAMES = ['NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE'] as const
+
+/**
+ * Read one environment value through every spelling npm accepts.
+ * @param names - names to look up, most specific first.
+ * @returns the value, or undefined when none is set to a non-empty string.
+ */
+function environmentValue(names: readonly string[]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name]
+    if (typeof value === 'string' && value.trim() !== '') return value.trim()
+  }
+  return undefined
+}
+
+/**
+ * Reduce one registry answer to the origin this product will install from.
+ *
+ * A registry is an origin: `registry.npmjs.org` and `https://registry.npmjs.org/` name the same
+ * service, while a value carrying a path, credentials, or a non-HTTP scheme is either a typo or a
+ * package-spec injection, and both are refused rather than guessed at.
+ * @param value - registry as the machine stated it.
+ * @returns the normalized origin, or undefined when the value is not a registry origin.
+ */
+function registryOrigin(value: string): string | undefined {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+    if (url.username !== '' || url.password !== '') return undefined
+    if (url.pathname !== '/' && url.pathname !== '') return undefined
+    if (url.search !== '' || url.hash !== '') return undefined
+    return url.origin + '/'
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The registry this machine names, when it names one.
+ *
+ * Kept separate from {@link resolveRegistrySettings} because "which registry" and "may pnpm read the
+ * file that named it" are two different questions: a caller that has to decide whether to override
+ * pnpm at all needs the first one on its own.
+ * @returns the normalized registry origin, or undefined when the machine names none.
+ */
+export function statedRegistry(): string | undefined {
+  const stated = environmentValue(REGISTRY_ENVIRONMENT_NAMES)
+  return stated === undefined ? undefined : registryOrigin(stated)
+}
+
+/**
+ * The registry and configuration file one pnpm run should use.
+ *
+ * A mirror is only usable when pnpm is allowed to read the file that names it, so the two answers
+ * travel together: this returns the user's configuration file when there is one, and only falls
+ * back to this product's own registry when the machine names none.
+ * @param fallbackUserConfig - path of this product's own npmrc, used when the machine has no file.
+ * @returns the registry for this run and the configuration file pnpm should read.
+ */
+export function resolveRegistrySettings(fallbackUserConfig: string): {
+  readonly registry: string
+  readonly userConfig: string
+} {
+  const configured = environmentValue(USERCONFIG_ENVIRONMENT_NAMES)
+  return {
+    registry: statedRegistry() ?? DEFAULT_REGISTRY,
+    userConfig: configured ?? fallbackUserConfig,
+  }
+}
+
+/**
+ * Environment additions that let a configured proxy and a private trust anchor reach pnpm.
+ *
+ * A machine that reaches the registry through a proxy has already said so in these variables; npm
+ * and pnpm read them directly, but Node's own `fetch` and `http` only do so under
+ * `NODE_USE_ENV_PROXY`, which is not set by default. Both are reported here rather than copied
+ * blindly, so the run log can say which one was in play when an install fails.
+ * @returns environment entries to add for one pnpm run, and whether a proxy was found.
+ */
+export function registryTransportEnvironment(): {
+  readonly environment: Readonly<Record<string, string>>
+  readonly proxy: string | undefined
+  readonly caFile: string | undefined
+} {
+  const environment: Record<string, string> = {}
+  const proxy = environmentValue(PROXY_ENVIRONMENT_NAMES)
+  if (proxy !== undefined) environment.NODE_USE_ENV_PROXY = '1'
+  const caFile = environmentValue(CA_ENVIRONMENT_NAMES)
+  return { environment, proxy, caFile }
+}
 
 function errorOf(reason: unknown, fallback: string): Error {
   return reason instanceof Error ? reason : new Error(fallback)
@@ -533,6 +654,15 @@ function inspectPlugin(projectDir: string, requestedName: string): DesktopPlugin
 /** Transactional desktop npm project manager. */
 export class DesktopProjectManager {
   private lockDescriptor: number | undefined
+  /**
+   * Run-log sink for the transaction in flight, set where the hooks are known.
+   *
+   * The package runner is reached from two entry points that hold different things: `install` has
+   * the hooks in scope, and `mutate` receives them per call. Recording the sink here is what lets
+   * the runner report how a machine reaches the registry without threading hooks through every
+   * layer between them.
+   */
+  private note: ((message: string) => void) | undefined
 
   /**
    * @param paths - Electron-owned package state and reserved desktop profile paths.
@@ -648,6 +778,7 @@ export class DesktopProjectManager {
   /** Install or reconcile the active project to the Electron package's exact release. */
   async applyRelease(seedDir: string, electronVersion: string, hooks: DesktopProjectHooks): Promise<boolean> {
     const note = (message: string): void => { hooks.note?.(message) }
+    this.note = note
     const progress = (fraction: number): void => { hooks.progress?.(fraction) }
     // Each step owns a band of the overall bar, so a step can publish its own fraction
     // without knowing how the launch is weighted as a whole. The same call names the step, which
@@ -824,20 +955,25 @@ export class DesktopProjectManager {
 
   /** Apply one exact dependency mutation through a staging project. */
   async mutate(mutation: DesktopProjectMutation, hooks: DesktopProjectHooks): Promise<void> {
-    await this.withLock(async () => {
-      this.recover()
-      if (!existsSync(this.paths.profile)) throw new Error('desktop project: active profile is not installed')
-      verifyDesktopCorePackageSet(this.paths.profile, this.releaseVersion())
-      const stagingProfile = this.newStagingProfile()
-      try {
-        copyMetadata(this.paths.profile, stagingProfile)
-        await this.applyMutation(stagingProfile, mutation)
-        await hooks.healthCheck(stagingProfile)
-        await this.activate(stagingProfile, hooks)
-      } catch (error) {
-        this.discardStaging(stagingProfile, error)
-      }
-    })
+    this.note = (message) => { hooks.note?.(message) }
+    try {
+      await this.withLock(async () => {
+        this.recover()
+        if (!existsSync(this.paths.profile)) throw new Error('desktop project: active profile is not installed')
+        verifyDesktopCorePackageSet(this.paths.profile, this.releaseVersion())
+        const stagingProfile = this.newStagingProfile()
+        try {
+          copyMetadata(this.paths.profile, stagingProfile)
+          await this.applyMutation(stagingProfile, mutation)
+          await hooks.healthCheck(stagingProfile)
+          await this.activate(stagingProfile, hooks)
+        } catch (error) {
+          this.discardStaging(stagingProfile, error)
+        }
+      })
+    } finally {
+      this.note = undefined
+    }
   }
 
   private newStagingProfile(): string {
@@ -975,26 +1111,47 @@ export class DesktopProjectManager {
     }
     const npmrc = join(this.paths.pnpm.config, 'npmrc')
     if (!existsSync(npmrc)) writeFileSync(npmrc, '', { mode: 0o600 })
+    // A machine that names its own registry is installed from it, and pnpm reaches it through the
+    // file that named it — overriding either would break exactly the mirrors this has to work on.
+    const registry = resolveRegistrySettings(npmrc)
+    const registryArguments = [
+      // The flag is what makes pnpm ignore the configuration file, so it is passed only when this
+      // product's own default is the registry in play.
+      ...(registry.registry === DEFAULT_REGISTRY ? [`--config.registry=${registry.registry}`] : []),
+      ...(registry.userConfig === npmrc ? [`--config.userconfig=${npmrc}`] : []),
+    ]
+    const transport = registryTransportEnvironment()
+    const report = (message: string): void => {
+      if (this.note === undefined) return
+      this.note(message)
+      // One line per transaction: a plugin install runs pnpm once, and a first launch runs it once
+      // as well, so the reader sees where packages came from without the log repeating it.
+      this.note = undefined
+    }
+    if (transport.proxy !== undefined) report(`package installs use the configured proxy (${transport.proxy})`)
+    if (transport.caFile !== undefined) {
+      report(`package installs trust the configured certificate file (${transport.caFile})`)
+    }
     const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => (
       !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
     )))
     await new Promise<void>((settle, reject) => {
       const child = spawn(this.runtime.node, [
         this.runtime.pnpm,
-        `--config.registry=${DESKTOP_REGISTRY}`,
+        ...registryArguments,
         `--config.store-dir=${this.paths.pnpm.store}`,
         '--config.enable-global-virtual-store=false',
-        `--config.userconfig=${npmrc}`,
         command,
         ...commandArgs,
       ], {
         cwd: projectDir,
         env: {
           ...inherited,
+          ...transport.environment,
           COREPACK_HOME: this.paths.pnpm.home,
-          NPM_CONFIG_REGISTRY: DESKTOP_REGISTRY,
+          NPM_CONFIG_REGISTRY: registry.registry,
           NPM_CONFIG_STORE_DIR: this.paths.pnpm.store,
-          NPM_CONFIG_USERCONFIG: npmrc,
+          ...(registry.userConfig === npmrc ? { NPM_CONFIG_USERCONFIG: npmrc } : {}),
           PATH: `${dirname(this.runtime.node)}${delimiter}${process.env.PATH ?? ''}`,
           PNPM_HOME: this.paths.pnpm.home,
           XDG_CACHE_HOME: this.paths.pnpm.cache,

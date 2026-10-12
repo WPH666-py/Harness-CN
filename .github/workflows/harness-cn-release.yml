@@ -1,0 +1,171 @@
+# Package and publish one Harness-CN desktop release.
+#
+# This is the product's own release path, kept in the repository so publishing does not depend on one
+# maintainer's machine: the two scripts it replaces read fixed paths under D:\projects-py and tokens
+# out of probe scripts, which meant nobody else could ship a version and an upgrade of the build
+# tools could silently stop the next release from happening.
+#
+# Manual-only, like the dsh publish workflow: publication is an explicit act, from a dispatch, and it
+# never appears as a pull-request check. `publish` defaults to false, so the first run of this
+# workflow proves the build without touching either release feed; the packaged files are uploaded as
+# workflow artifacts either way.
+#
+# Secrets it needs (Settings → Secrets and variables → Actions):
+#   GH_TOKEN             a token with `repo` scope on the GitHub repository below
+#   GITEE_TOKEN          a Gitee personal access token with `projects` scope
+#   HARNESS_CN_GITEE_USER  the Gitee account that token belongs to (only used to push the tag)
+# Variables it reads (Settings → Secrets and variables → Actions → Variables), all optional:
+#   HARNESS_CN_GITHUB_REPOSITORY  default WPH666-py/Harness-CN
+#   HARNESS_CN_GITEE_REPOSITORY   default ph-wang/Harness-CN
+name: Harness-CN release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Upload the packaged files to GitHub and Gitee'
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v0.1.5-rc.*'
+
+permissions:
+  contents: read
+
+env:
+  PRIMARY_NODE_VERSION: '24'
+  DSH_TELEMETRY_DISABLED: '1'
+  # The desktop shell is published unsigned; the signing path needs a certificate this workflow
+  # does not have, and the installer is documented as unsigned in every release note.
+  DSH_DESKTOP_UNSIGNED: '1'
+  DSH_DESKTOP_APP_ID: com.harnesscn.desktop
+  HARNESS_CN_GITHUB_REPOSITORY: ${{ vars.HARNESS_CN_GITHUB_REPOSITORY || 'WPH666-py/Harness-CN' }}
+  HARNESS_CN_GITEE_REPOSITORY: ${{ vars.HARNESS_CN_GITEE_REPOSITORY || 'ph-wang/Harness-CN' }}
+
+jobs:
+  package:
+    name: Package the installer and the offline package
+    runs-on: windows-2022
+    # The version is decided by the tree, not by the tag alone: tauri.conf.json is what the
+    # installer reports and what the asset names carry, and a mismatch is a release nobody receives.
+    outputs:
+      version: ${{ steps.collect.outputs.version }}
+    steps:
+      # The version this release publishes is read from tauri.conf.json, so the tag has to sit on a
+      # commit that carries it; a shallow checkout is enough because nothing here reads history.
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+
+      # The Rust shell is compiled by this workflow, and the Windows runner already carries the
+      # MSVC toolchain Tauri links against.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Configure the pnpm store
+        shell: pwsh
+        run: |
+          $store = Join-Path $env:RUNNER_TEMP 'pnpm-store'
+          "PNPM_CONFIG_STORE_DIR=$store" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install (immutable)
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify the release version
+        run: pnpm run release:verify --family dsh
+
+      - name: Package the desktop payload and the offline package
+        # This drives build:official, release:pack for both families, prepare:runtime,
+        # prepare:packages, and prepare:seed, in the one order they have to run in. The output is a
+        # runtime tree, a package store, and a seed under apps/desktop/.desktop-build.
+        run: pnpm run package:desktop:win:x64
+
+      - name: Build the shell and the installer
+        # build-sidecar bundles the Node sidecar, prepare-shell copies the shell pages and archives
+        # the seed, and `tauri build` produces the NSIS installer.
+        run: pnpm --filter '@deepseek-ai/dsh-desktop-shell' run build
+
+      - name: Collect the two published files
+        id: collect
+        shell: pwsh
+        run: |
+          $version = (Get-Content apps/desktop-shell/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $installer = "apps/desktop-shell/src-tauri/target/release/bundle/nsis/Harness-CN_${version}_x64-setup.exe"
+          $seed = "apps/desktop-shell/dist-artifacts/Harness-CN-seed-${version}.tar.zst"
+          if (-not (Test-Path $installer)) { throw "no installer at $installer" }
+          if (-not (Test-Path $seed)) { throw "no offline package at $seed" }
+          New-Item -ItemType Directory -Force dist/release | Out-Null
+          Copy-Item $installer dist/release/
+          Copy-Item $seed dist/release/
+          $notes = "RELEASE-NOTES-v$version.md"
+          if (-not (Test-Path $notes)) { $notes = "../RELEASE-NOTES-v$version.md" }
+          if (-not (Test-Path $notes)) { throw "no release notes for $version" }
+          Copy-Item $notes dist/release/
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Report the packaged bytes
+        shell: pwsh
+        run: |
+          foreach ($file in Get-ChildItem dist/release) {
+            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash
+            Write-Output ("{0}  {1} bytes  {2}" -f $file.Name, $file.Length, $hash)
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-cn-${{ steps.collect.outputs.version }}
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish to GitHub and Gitee
+    needs: package
+    runs-on: windows-2022
+    # A tag push is a release; a dispatch publishes only when asked, which is what makes a dry run
+    # possible. The artifacts are the same bytes the package job hashed.
+    if: github.event_name == 'push' || inputs.publish
+    environment: harness-cn-release
+    concurrency:
+      group: harness-cn-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: harness-cn-${{ needs.package.outputs.version }}
+          path: dist/release
+
+      - name: Publish both files to both hosts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          $version = "${{ needs.package.outputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'the package job reported no version' }
+          $installer = (Get-ChildItem dist/release -File | Where-Object Extension -eq '.exe').FullName
+          $seed = (Get-ChildItem dist/release -File | Where-Object Extension -eq '.zst').FullName
+          node scripts/release/publish-harness-cn.mjs $version "dist/release/RELEASE-NOTES-v$version.md" $installer $seed
+
+      - name: Verify both hosts serve the published bytes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: node scripts/release/verify-harness-cn-release.mjs ${{ needs.package.outputs.version }} dist/release

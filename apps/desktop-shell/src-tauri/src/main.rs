@@ -69,7 +69,24 @@ struct Shell {
     ready: std::sync::atomic::AtomicBool,
     /// Tail of the sidecar's own diagnostics, shown when it dies before that.
     diagnostics: Mutex<String>,
+    /// Why the last release check failed, kept until a check succeeds.
+    ///
+    /// The automatic check runs without the user asking, so its failure has no dialog to land in.
+    /// Keeping it here is what lets the menu entry report it — both as a marker that an update
+    /// check is failing and, when the user follows that marker, as the reason itself.
+    update_failure: Mutex<Option<String>>,
 }
+
+/// Menu entry id and label of the release check.
+const UPDATE_MENU_ID: &str = "updates";
+const UPDATE_MENU_LABEL: &str = "检查更新";
+
+/// Text the menu entry carries while the last check failed.
+///
+/// A marker rather than a sentence: the menu bar is not the place to explain a network failure, and
+/// the explanation is one click away. Product copy stays Chinese here because the whole menu bar is
+/// authored in the shell, which has no locale of its own.
+const UPDATE_MENU_LABEL_FAILED: &str = "检查更新 [!]";
 
 /// One line the sidecar wrote to its stdout.
 #[derive(Deserialize)]
@@ -113,6 +130,9 @@ struct UpdateState {
     phase: String,
     #[serde(default)]
     version: Option<String>,
+    /// Why the check failed, present on an `error` phase.
+    #[serde(default)]
+    message: Option<String>,
 }
 
 fn origin(port: u16) -> String {
@@ -247,6 +267,19 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
             }
         }
         Handshake::Update { state } => {
+            // The menu says whether the last check succeeded, and remembers why it did not: a
+            // failure nobody asked for is otherwise invisible until the user thinks to check.
+            let failure = if state.phase == "error" {
+                state.message.clone().or_else(|| Some("检查更新失败，未提供原因。".to_string()))
+            } else if state.phase == "available" || state.phase == "idle" {
+                None
+            } else {
+                app.state::<Shell>().update_failure.lock().ok().and_then(|held| held.clone())
+            };
+            if let Ok(mut held) = app.state::<Shell>().update_failure.lock() {
+                *held = failure.clone();
+            }
+            set_update_menu_label(app, failure.is_some());
             // The prompt exists to offer a release or to report one being installed. An `idle` or
             // `error` check has its own answers — the menu item reports both through a dialog —
             // and opening a window for those would put a dialog about nothing on the user's
@@ -333,6 +366,22 @@ fn install_menu(app: &AppHandle) {
     }
 }
 
+/// Show whether the last release check succeeded on the menu entry that starts one.
+///
+/// The entry is the only place a check that nobody asked for can report itself: the automatic check
+/// publishes no dialog, and a user who never opens the update window would otherwise have no way to
+/// learn that this machine has stopped being offered releases.
+/// @param app - handle owning the menu bar.
+/// @param failed - whether the last check failed and its reason is being held.
+fn set_update_menu_label(app: &AppHandle, failed: bool) {
+    let Some(menu) = app.menu() else { return };
+    let Some(tauri::menu::MenuItemKind::MenuItem(item)) = menu.get(UPDATE_MENU_ID) else { return };
+    let label = if failed { UPDATE_MENU_LABEL_FAILED } else { UPDATE_MENU_LABEL };
+    if let Err(error) = item.set_text(label) {
+        eprintln!("Harness-CN: the update menu entry could not be relabelled: {error}");
+    }
+}
+
 /// Send one command to the sidecar over its stdin.
 fn send_command(app: &AppHandle, command: &str) {
     let state = app.state::<Shell>();
@@ -369,7 +418,15 @@ fn handle_menu(app: &AppHandle, id: &str) {
         "author" => window(AUTHOR, "/shell/author.html", "作者信息", 640.0, 660.0),
         "shop" => window(SHOP, "/shell/shop.html", "休闲食品商城", 980.0, 760.0),
         "feedback" => window(FEEDBACK, "/shell/feedback.html", "评价与反馈", 640.0, 620.0),
-        "updates" => send_command(app, "check-updates"),
+        "updates" => {
+            // A failing automatic check left its reason here. Reporting it before the fresh check
+            // runs is what makes the marker on this menu entry actionable: the user sees why the
+            // machine stopped being offered releases, not only that it did.
+            if let Some(reason) = app.state::<Shell>().update_failure.lock().ok().and_then(|held| held.clone()) {
+                platform::show_error("Harness-CN", &format!("上次检查更新失败：\n{reason}"));
+            }
+            send_command(app, "check-updates");
+        }
         "devtools" => {
             if let Some(main) = app.get_webview_window(MAIN) {
                 main.open_devtools();

@@ -158,6 +158,39 @@ function handshake(message: ShellHandshake): void {
  */
 let shutdown: (code: number) => Promise<void> = async (code: number) => { process.exit(code) }
 
+/**
+ * Whether one release-check failure reads as a network failure rather than a release that is broken.
+ *
+ * The distinction decides the advice: a machine that cannot reach either host needs to hear about
+ * proxies and mirrors, while a host that answered with something unreadable needs to hear that the
+ * release itself is the problem. Only transport-shaped failures are matched, so an error this
+ * product raises in its own words is never given a network explanation it does not have.
+ */
+const NETWORK_FAILURE_PATTERN = new RegExp(
+  [
+    'fetch failed', 'ENOTFOUND', 'EAI_AGAIN', 'ECONN', 'ETIMEDOUT', 'EACCES',
+    'CERT', 'certificate', 'self.signed', 'socket', 'timed? ?out', 'getaddrinfo', 'proxy',
+  ].join('|'),
+  'iu',
+)
+
+/**
+ * One sentence a user can act on, appended to a release-check failure that looks like the network.
+ *
+ * Both release hosts are named because checking updates asks both: a machine that can reach neither
+ * is the case this exists for, and Gitee is the one that answers from inside China. The proxy note
+ * points at the same variables the package installer now honours, so "how do I get this machine
+ * online" has one answer across the product.
+ * @param message - failure as the release channel reported it.
+ * @returns the message, with the advice appended when the failure looks like transport.
+ */
+function describeUpdateFailure(message: string): string {
+  if (!NETWORK_FAILURE_PATTERN.test(message)) return message
+  return `${message}\n\n检查更新需要访问 gitee.com 或 api.github.com。`
+    + '如果这台机器通过代理上网，请在系统环境变量中设置 HTTPS_PROXY 后重试；'
+    + '也可以直接从发布页下载安装包手动更新。'
+}
+
 async function main(): Promise<void> {
   const options = parseArguments(process.argv.slice(2))
   const locale = resolveDesktopLocale(options.locale)
@@ -270,6 +303,14 @@ async function main(): Promise<void> {
       updateState = state
       running.publish('update', state)
       handshake({ type: 'update', state })
+      // A check nobody asked for has to leave a trace: the automatic check runs ten seconds after
+      // the workspace opens and every six hours after that, and a machine that cannot reach either
+      // release host would otherwise sit on an old version with nothing anywhere saying so. The run
+      // log keeps the reason, and the shell marks its own update entry, so the state is visible
+      // from the menu bar rather than only to a window the user has to think to open.
+      if (state.phase === 'error' && state.message !== undefined) {
+        logShell(`release check failed: ${state.message}`)
+      }
       return state
     },
     async () => {
@@ -537,7 +578,7 @@ async function main(): Promise<void> {
             handshake({
               type: 'message',
               title: messages.updateCheckFailedTitle,
-              body: state.message ?? messages.unknownError,
+              body: describeUpdateFailure(state.message ?? messages.unknownError),
             })
           }
         })

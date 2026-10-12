@@ -250,6 +250,38 @@ afterEach(async () => {
   if (failures.length > 0) throw new AggregateError(failures, 'desktop worker cleanup failed')
 })
 
+/** Registry-related environment as the machine had it, so a case can put it back. */
+interface RegistryEnvironment {
+  readonly lower: string | undefined
+  readonly upper: string | undefined
+}
+
+/**
+ * Take the registry variables out of the environment, remembering what they were.
+ *
+ * The suite runs on somebody's workstation, and a workstation may well have a mirror configured.
+ * Which registry an install uses is what these cases judge, so a case states the machine's silence
+ * rather than depending on the shell it happens to run in.
+ * @returns the values to restore.
+ */
+function clearRegistryEnvironment(): RegistryEnvironment {
+  const saved = { lower: process.env.npm_config_registry, upper: process.env.NPM_CONFIG_REGISTRY }
+  delete process.env.npm_config_registry
+  delete process.env.NPM_CONFIG_REGISTRY
+  return saved
+}
+
+/**
+ * Put the registry variables back the way the machine had them.
+ * @param saved - values from {@link clearRegistryEnvironment}.
+ */
+function restoreRegistryEnvironment(saved: RegistryEnvironment): void {
+  if (saved.lower === undefined) delete process.env.npm_config_registry
+  else process.env.npm_config_registry = saved.lower
+  if (saved.upper === undefined) delete process.env.NPM_CONFIG_REGISTRY
+  else process.env.NPM_CONFIG_REGISTRY = saved.upper
+}
+
 describe('desktop package policy', () => {
   it('accepts registry package specs but rejects alternate sources and flags', () => {
     expect(packageNameFromSpec('@scope/plugin@1.2.3')).toBe('@scope/plugin')
@@ -651,9 +683,11 @@ describe('desktop project transactions', () => {
     await manager.applyRelease(seed, '1.0.0', hooks())
     const previousLog = process.env.TEST_PNPM_LOG
     process.env.TEST_PNPM_LOG = log
+    const registryEnvironment = clearRegistryEnvironment()
     try {
       await manager.mutate({ type: 'plugin-add', spec: '@scope/plugin@2.0.0' }, hooks())
     } finally {
+      restoreRegistryEnvironment(registryEnvironment)
       if (previousLog === undefined) delete process.env.TEST_PNPM_LOG
       else process.env.TEST_PNPM_LOG = previousLog
     }
@@ -676,6 +710,37 @@ describe('desktop project transactions', () => {
     expect(invocation.env.NPM_CONFIG_STORE_DIR).toBe(paths.pnpm.store)
     expect(invocation.env.NPM_CONFIG_USERCONFIG).toBe(join(paths.pnpm.config, 'npmrc'))
     expect(invocation.env.npm_config_registry).toBeUndefined()
+  })
+
+  it('installs from the registry the machine names instead of this product’s default', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    const log = join(root, 'pnpm-log.json')
+    createTestSeedMetadata(seed, release())
+    writeFileSync(join(seed, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    writeLinkedProfileSeed(seed, release())
+    archiveStore(seed)
+    writeIntegrity(seed)
+    const paths = resolveDesktopPaths(join(root, '.dsh'))
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+    await manager.applyRelease(seed, '1.0.0', hooks())
+    const previousLog = process.env.TEST_PNPM_LOG
+    process.env.TEST_PNPM_LOG = log
+    const registryEnvironment = clearRegistryEnvironment()
+    // A mirror is only usable when pnpm is allowed to reach it: naming a registry on the command
+    // line would override the file that named it, which is the bug this case exists to prevent.
+    process.env.NPM_CONFIG_REGISTRY = 'https://registry.npmmirror.com'
+    try {
+      await manager.mutate({ type: 'plugin-add', spec: '@scope/plugin@2.0.0' }, hooks())
+    } finally {
+      restoreRegistryEnvironment(registryEnvironment)
+      if (previousLog === undefined) delete process.env.TEST_PNPM_LOG
+      else process.env.TEST_PNPM_LOG = previousLog
+    }
+
+    const invocation = JSON.parse(readFileSync(log, 'utf8')) as { args: string[]; env: Record<string, string> }
+    expect(invocation.args.some(argument => argument.startsWith('--config.registry='))).toBe(false)
+    expect(invocation.env.NPM_CONFIG_REGISTRY).toBe('https://registry.npmmirror.com/')
   })
 
   it('reconciles dsh to the packaged release without removing desktop plugins', async () => {
