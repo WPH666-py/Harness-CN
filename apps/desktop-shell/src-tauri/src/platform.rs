@@ -11,17 +11,19 @@ use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, SetLastError, ERROR_ALREADY_EXISTS};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, SetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
     JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateMutexW, OpenProcess, TerminateProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    CreateMutexW, GetCurrentProcessId, OpenProcess, TerminateProcess,
+    PROCESS_SET_QUOTA, PROCESS_TERMINATE,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, MessageBoxW, SetForegroundWindow, ShowWindow, MB_ICONERROR, MB_OK, SW_RESTORE,
+    EnumWindows, FindWindowW, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
+    SetForegroundWindow, ShowWindow, MB_ICONERROR, MB_OK, SW_RESTORE,
 };
 
 /// Name of the mutex that stands for "a Harness-CN shell is running on this desktop".
@@ -202,15 +204,60 @@ pub fn release_single_instance() {
 ///
 /// A second launch is the user asking for the application, so the existing window is restored
 /// and focused instead of a second copy being started.
+/// One top-level window belonging to this process, collected by {@link enum_callback}.
+#[derive(Default)]
+struct OwnWindow {
+    /// The most recently seen visible top-level window, or zero.
+    handle: HWND,
+}
+
+/// Pick out this process's own visible top-level window.
+///
+/// The window is identified by its owning process rather than by its title. A title is not a
+/// stable identity here: the workspace window renders the Host's web interface, and WebView2
+/// rewrites the window title from the page's own `<title>` once that page loads, so a lookup by
+/// the title this shell set at creation stops matching the moment the page arrives.
+/// @param window - candidate top-level window.
+/// @param param - pointer to the {@link OwnWindow} collecting the answer.
+/// @returns always 1, to keep enumerating (the caller keeps the last visible match).
+unsafe extern "system" fn enum_callback(window: HWND, param: LPARAM) -> i32 {
+    let found = unsafe { &mut *(param as *mut OwnWindow) };
+    let mut owner = 0u32;
+    unsafe { GetWindowThreadProcessId(window, &mut owner) };
+    if owner == unsafe { GetCurrentProcessId() } && unsafe { IsWindowVisible(window) } != 0 {
+        found.handle = window;
+    }
+    1
+}
+
+/// Bring this product's existing window forward.
+///
+/// Called by a second launch that lost the single-instance claim, so its only job is to make the
+/// running instance visible: it restores a minimized window and raises it. A window that is not
+/// found is not an error — there may be no window yet while the first launch is still installing
+/// — and the process simply exits, leaving the instance that owns the claim alone.
 pub fn focus_running_instance() {
-    let title = wide(WINDOW_TITLE);
-    let window = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
-    if window.is_null() {
+    let mut found = OwnWindow::default();
+    unsafe {
+        EnumWindows(Some(enum_callback), std::ptr::from_mut(&mut found) as LPARAM);
+    }
+    if found.handle.is_null() {
+        // Fall back to the creation-time title for a window this process did not create: a
+        // release older than this one may still be the running instance.
+        let title = wide(WINDOW_TITLE);
+        let window = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+        if window.is_null() {
+            return;
+        }
+        unsafe {
+            ShowWindow(window, SW_RESTORE);
+            SetForegroundWindow(window);
+        }
         return;
     }
     unsafe {
-        ShowWindow(window, SW_RESTORE);
-        SetForegroundWindow(window);
+        ShowWindow(found.handle, SW_RESTORE);
+        SetForegroundWindow(found.handle);
     }
 }
 
