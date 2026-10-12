@@ -204,6 +204,30 @@ function errorOf(reason: unknown, fallback: string): Error {
   return reason instanceof Error ? reason : new Error(fallback)
 }
 
+/**
+ * Whether a rebuild failed because the package store was not whole.
+ *
+ * That is the one failure a fresh unpack can fix: linking is what reads the content the
+ * previous stage wrote, so a store whose entries are not all on disk reports itself here and
+ * nowhere else. Three shapes mean it, and all three are matched because the layers disagree:
+ * the link writer refuses a manifest entry whose content it cannot find, Node's own `link`
+ * names the store path it could not read, and a store that answers without the entry surfaces
+ * as a missing file inside it.
+ * @param error - failure raised while rebuilding the profile.
+ * @param storeRoot - absolute path of the package store the rebuild links from.
+ * @returns whether re-unpacking the store and rebuilding could succeed.
+ */
+function isStoreLinkError(error: unknown, storeRoot: string): boolean {
+  const report = errorOf(error, 'desktop project: profile rebuild failed')
+  const message = report.message
+  if (message.includes('targets a missing store file')) return true
+  const text = `${message}\n${report.stack ?? ''}`
+  return text.includes(`link '${storeRoot}`)
+    || text.includes(`link "${storeRoot}`)
+    || text.includes(`', link '${storeRoot}`)
+    || (report as { code?: unknown }).code === 'ENOENT' && text.includes(storeRoot)
+}
+
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, undefined, 2)}\n`, { mode: 0o600 })
 }
@@ -660,66 +684,114 @@ export class DesktopProjectManager {
       // rebuild that changes only the application code publishes the same archives, and
       // unpacking them again would recreate entries the store already holds.
       const archives = storeIdentity(seedDir)
-      if (this.storeMatchesSeed(archives)) {
-        note('package store already carries this seed')
-      } else {
-        note('unpacking the bundled package store')
-        progress(0.3)
-        await this.mergeSeedPnpmState(seedDir, step('展开软件包仓库', 0.3, 0.45))
-        this.recordStoreSeed(archives)
-        note('package store ready; rebuilding the desktop runtime')
-        progress(0.45)
-      }
-      const stagingProfile = this.newStagingProfile()
-      try {
-        // The seed carries the installed tree as links into the store it just published, so
-        // the runtime is rebuilt here instead of installed: pnpm would recreate exactly these
-        // files, at several times the cost of one link each.
-        // The seed's tree already carries every bundled plugin at its pinned version, so a
-        // profile that only names those needs no pnpm run at all. A plugin the user added, or
-        // one they moved to another version, is the only thing restored from the store.
-        const bundled = bundledPluginDependencies()
-        const plugins = (this.hasInstalledProfile() ? pluginRecords(this.paths.profile) : [])
-          .filter(plugin => bundled[plugin.name] !== plugin.version)
-        copyMetadata(seedDir, stagingProfile)
-        await materializeLinkedProfile(
-          seedDir,
-          stagingProfile,
-          this.paths.pnpm.store,
-          this.paths.profile,
-          step('重建桌面运行时', 0.45, 0.75),
-        )
-        writeJson(join(stagingProfile, DESKTOP_SEED_IDENTITY_FILE), {
-          schemaVersion: 1,
-          integrity: identity,
-        } satisfies DesktopSeedIdentity)
-        note('desktop runtime linked from the package store')
-        progress(0.75)
-        if (plugins.length > 0) {
-          note(`restoring ${String(plugins.length)} desktop plugin(s)`)
-          await this.runPnpm(stagingProfile, [
-            'add',
-            ...plugins.map(plugin => `${plugin.name}@${plugin.version}`),
-            '--save-exact',
-            '--offline',
-          ])
-          writeProfilePlugins(stagingProfile, plugins)
+      // A store that has just been unpacked can still be missing content when the rebuild
+      // reaches for it: the failure is `link '<store path>' -> '<profile path>' UNKNOWN`, and
+      // the second attempt succeeds because the entries that were not yet on disk are there by
+      // then. Retrying here is what keeps that from being a first launch the user has to repeat.
+      // One retry only: a store that is still incomplete after a fresh unpack is a real fault,
+      // and looping would turn a corrupt download into a launch that never finishes.
+      let refreshedStore = false
+      for (;;) {
+        if (this.storeMatchesSeed(archives)) {
+          note('package store already carries this seed')
+        } else {
+          note('unpacking the bundled package store')
+          progress(0.3)
+          await this.mergeSeedPnpmState(seedDir, step('展开软件包仓库', 0.3, 0.45))
+          this.recordStoreSeed(archives)
+          note('package store ready; rebuilding the desktop runtime')
+          progress(0.45)
         }
-        note('verifying the staged runtime')
-        hooks.step?.('检查运行时完整性', 0)
-        progress(0.85)
-        await hooks.healthCheck(stagingProfile)
-        hooks.step?.('检查运行时完整性', 1)
-        note('staged runtime boots; activating it')
-        progress(0.9)
-        await this.activate(stagingProfile, hooks)
-        note('desktop runtime activated')
-        progress(0.94)
-        return true
-      } catch (error) {
-        this.discardStaging(stagingProfile, error)
+        const stagingProfile = this.newStagingProfile()
+        try {
+          const plugins = await this.materializeProfile(
+            seedDir,
+            stagingProfile,
+            identity,
+            step('重建桌面运行时', 0.45, 0.75),
+          )
+          note('desktop runtime linked from the package store')
+          progress(0.75)
+          if (plugins.length > 0) {
+            note(`restoring ${String(plugins.length)} desktop plugin(s)`)
+            await this.runPnpm(stagingProfile, [
+              'add',
+              ...plugins.map(plugin => `${plugin.name}@${plugin.version}`),
+              '--save-exact',
+              '--offline',
+            ])
+            writeProfilePlugins(stagingProfile, plugins)
+          }
+          note('verifying the staged runtime')
+          hooks.step?.('检查运行时完整性', 0)
+          progress(0.85)
+          await hooks.healthCheck(stagingProfile)
+          hooks.step?.('检查运行时完整性', 1)
+          note('staged runtime boots; activating it')
+          progress(0.9)
+          await this.activate(stagingProfile, hooks)
+          note('desktop runtime activated')
+          progress(0.94)
+          return true
+        } catch (error) {
+          // The staging tree is dropped either way, because a retry needs an empty one: the
+          // links written so far would otherwise be confused with the ones still to write.
+          try {
+            removeOwnedDirectory(stagingProfile)
+          } catch {
+            // A staging tree that refuses removal must not replace the failure that caused the
+            // retry; the next launch's recover() owns whatever is left behind.
+          }
+          if (refreshedStore || !isStoreLinkError(error, this.paths.pnpm.store)) {
+            this.discardStaging(stagingProfile, error)
+          }
+          note('the package store was still incomplete after the rebuild; unpacking it again')
+          refreshedStore = true
+        }
       }
     })
+  }
+
+  /**
+   * Build one staging profile from the seed's links, and report the plugins left to restore.
+   *
+   * Separated from {@link installSeed} so the caller can retry the whole build: linking out of
+   * the store is where an unpacking store shows up as a failure, and the recovery for that is a
+   * fresh staging directory rather than a patch of the half-linked one.
+   * @param seedDir - verified seed directory.
+   * @param stagingProfile - empty staging profile to fill.
+   * @param identity - seed identity recorded for the next launch.
+   * @param onProgress - progress sink for the linking band of the launch bar.
+   * @returns plugins the user had moved off the bundled set, for the caller to restore.
+   */
+  private async materializeProfile(
+    seedDir: string,
+    stagingProfile: string,
+    identity: string,
+    onProgress: (fraction: number) => void,
+  ): Promise<DesktopPluginRecord[]> {
+    // The seed carries the installed tree as links into the store it just published, so
+    // the runtime is rebuilt here instead of installed: pnpm would recreate exactly these
+    // files, at several times the cost of one link each.
+    // The seed's tree already carries every bundled plugin at its pinned version, so a
+    // profile that only names those needs no pnpm run at all. A plugin the user added, or
+    // one they moved to another version, is the only thing restored from the store.
+    const bundled = bundledPluginDependencies()
+    const plugins = (this.hasInstalledProfile() ? pluginRecords(this.paths.profile) : [])
+      .filter(plugin => bundled[plugin.name] !== plugin.version)
+    copyMetadata(seedDir, stagingProfile)
+    await materializeLinkedProfile(
+      seedDir,
+      stagingProfile,
+      this.paths.pnpm.store,
+      this.paths.profile,
+      onProgress,
+    )
+    writeJson(join(stagingProfile, DESKTOP_SEED_IDENTITY_FILE), {
+      schemaVersion: 1,
+      integrity: identity,
+    } satisfies DesktopSeedIdentity)
+    return plugins
   }
 
   /**

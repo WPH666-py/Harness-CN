@@ -297,6 +297,37 @@ describe('desktop project transactions', () => {
     expect(existsSync(join(paths.profile, 'desktop-release.json'))).toBe(true)
   })
 
+  it('unpacks the store again and retries when the rebuild finds it incomplete', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    createTestSeedMetadata(seed, release())
+    writeFileSync(join(seed, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    writeLinkedProfileSeed(seed, release())
+    archiveStore(seed)
+    writeIntegrity(seed)
+    const paths = resolveDesktopPaths(join(root, '.dsh'))
+
+    // A store that has been unpacked but is not yet whole is what a first launch can meet:
+    // the rebuild links out of it and fails on an entry the unpack has not written. Removing
+    // one content file reproduces exactly that, and the seed archive still holds the bytes the
+    // retry needs.
+    const storeFile = join(paths.pnpm.store, 'v11', 'files', 'dsh-package.json')
+    let failedOnce = false
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+    const outcome = await manager.applyRelease(seed, '1.0.0', hooks({
+      step: (label) => {
+        if (label !== '重建桌面运行时' || failedOnce) return
+        rmSync(storeFile, { force: true })
+        rmSync(join(paths.pnpm.root, 'store-seed.json'), { force: true })
+        failedOnce = true
+      },
+    }))
+
+    expect(failedOnce).toBe(true)
+    expect(outcome).toBe(true)
+    expect(manager.dshVersion()).toBe('1.0.0')
+  })
+
   it('reuses an installed profile instead of verifying the seed it never reads', async () => {
     const root = temporaryRoot()
     const seed = join(root, 'seed')
