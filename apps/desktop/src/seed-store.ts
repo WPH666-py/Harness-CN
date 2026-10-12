@@ -12,7 +12,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { link } from 'node:fs/promises'
+import { copyFile, link } from 'node:fs/promises'
 import { dirname, join, posix, relative, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { create, extract } from 'tar'
@@ -662,18 +662,36 @@ export async function materializeLinkedProfile(
   // links own the rest of the bar.
   const entries = Object.entries(manifest.links)
   let linked = 0
+  let copied = 0
   for (let start = 0; start < entries.length; start += COOPERATIVE_BATCH_ENTRIES) {
     await Promise.all(entries.slice(start, start + COOPERATIVE_BATCH_ENTRIES).map(async ([profilePath, storePath]) => {
+      const source = join(storeRoot, ...storePath.split('/'))
+      const destination = join(profileDir, ...profilePath.split('/'))
       try {
-        await link(join(storeRoot, ...storePath.split('/')), join(profileDir, ...profilePath.split('/')))
+        await link(source, destination)
+        return
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        // A link this filesystem refuses is not a reason to fail the launch. The store content
+        // is the same bytes either way, so the entry is copied instead — which costs space and
+        // time for that file but leaves a profile identical to the one linking would have built.
+        // Windows reports the refusal as `UNKNOWN` rather than a code that names the cause, and
+        // the same source links successfully in another directory, so the condition is treated
+        // as per-entry rather than per-store. ENOENT is only worth naming when the store itself
+        // lacks the content: then copying fails too, and the message says which entry is missing.
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          copied += 1
+          await copyFile(source, destination)
+          return
+        }
         throw new Error(`desktop seed: profile link ${profilePath} targets a missing store file ${storePath}`)
       }
     }))
     linked += COOPERATIVE_BATCH_ENTRIES
     onProgress?.(0.2 + 0.8 * Math.min(linked / entries.length, 1))
     await yieldToEventLoop()
+  }
+  if (copied > 0) {
+    console.log(`desktop seed: copied ${String(copied)} profile file(s) the filesystem would not link`)
   }
   onProgress?.(1)
   recordInstalledPnpmPaths(profileDir, storeRoot, installedProfileDir)
