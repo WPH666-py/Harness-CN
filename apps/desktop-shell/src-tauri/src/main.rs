@@ -53,6 +53,12 @@ const PLUGINS: &str = "plugins";
 const LOGS: &str = "logs";
 /// Window label of the release prompt.
 const UPDATE: &str = "update";
+/// Window label of the author card.
+const AUTHOR: &str = "author";
+/// Window label of the snack shop.
+const SHOP: &str = "shop";
+/// Window label of the feedback form.
+const FEEDBACK: &str = "feedback";
 
 /// Owned children, the port the sidecar published, and the account of a failed launch.
 #[derive(Default)]
@@ -278,6 +284,9 @@ fn install_menu(app: &AppHandle) {
             .item(&MenuItemBuilder::with_id("plugins", "插件管理").build(app)?)
             .item(&MenuItemBuilder::with_id("updates", "检查更新").build(app)?)
             .item(&MenuItemBuilder::with_id("api-key", "API 密钥").build(app)?)
+            .item(&MenuItemBuilder::with_id("author", "作者信息").build(app)?)
+            .item(&MenuItemBuilder::with_id("shop", "休闲食品商城").build(app)?)
+            .item(&MenuItemBuilder::with_id("feedback", "评价与反馈").build(app)?)
             .item(&MenuItemBuilder::with_id("devtools", "开发者工具").build(app)?)
             .item(&MenuItemBuilder::with_id("quit", "退出").build(app)?)
             .build()?;
@@ -320,8 +329,11 @@ fn handle_menu(app: &AppHandle, id: &str) {
             }
         }
         "logs" => window(LOGS, "/shell/log-viewer.html", "运行日志", 1000.0, 700.0),
-        "plugins" => window(PLUGINS, "/shell/plugin-manager.html", "插件管理", 900.0, 620.0),
+        "plugins" => window(PLUGINS, "/shell/plugin-manager.html", "内置插件", 900.0, 620.0),
         "api-key" => window(API_KEY, "/shell/api-key.html", "绑定 DeepSeek 密钥", 560.0, 520.0),
+        "author" => window(AUTHOR, "/shell/author.html", "作者信息", 640.0, 660.0),
+        "shop" => window(SHOP, "/shell/shop.html", "休闲食品商城", 980.0, 760.0),
+        "feedback" => window(FEEDBACK, "/shell/feedback.html", "评价与反馈", 640.0, 620.0),
         "updates" => send_command(app, "check-updates"),
         "devtools" => {
             if let Some(main) = app.get_webview_window(MAIN) {

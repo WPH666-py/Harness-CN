@@ -1,30 +1,33 @@
-/** Desktop plugin manager: list what is installed and drive install, update, and remove. */
+/**
+ * Desktop plugin manager: list the plugins this build ships and their versions.
+ *
+ * It is a read-only view on purpose. Every plugin here arrives with the release, so
+ * an install, update, or removal control could only ever move the profile away from
+ * the set the build was verified with — and a plugin that fails to compose takes the
+ * whole application down with it, which is not a failure a settings window should be
+ * able to cause.
+ */
 
-import { addPlugin, getLocale, listPlugins, removePlugin, updatePlugin } from './shell-api.js'
+import { getLocale, listPlugins } from './shell-api.js'
 
 async function main() {
   const locale = await getLocale()
   const messages = locale.messages
-  const message = (key, values = {}) => messages[key].replaceAll(/\{([^{}]+)\}/gu, (placeholder, name) => values[name] ?? placeholder)
   document.documentElement.lang = locale.id
   document.querySelector('#page-title').textContent = messages.pluginManagerTitle
   document.querySelector('#title').textContent = messages.pluginManagerTitle
   document.querySelector('#description').textContent = messages.pluginManagerDescription
   document.querySelector('#refresh').textContent = messages.refresh
-  document.querySelector('#package-label').textContent = messages.npmPackage
-  document.querySelector('#install').textContent = messages.install
   document.querySelector('#installed-heading').textContent = messages.installed
   document.querySelector('#empty').textContent = messages.noPlugins
 
   const list = document.querySelector('#plugins')
   const empty = document.querySelector('#empty')
   const status = document.querySelector('#status')
-  const form = document.querySelector('#install-form')
-  const input = document.querySelector('#package-spec')
   const refresh = document.querySelector('#refresh')
 
   function setBusy(busy, statusMessage = '') {
-    for (const control of document.querySelectorAll('button, input')) control.disabled = busy
+    for (const control of document.querySelectorAll('button')) control.disabled = busy
     status.textContent = statusMessage
   }
 
@@ -39,52 +42,17 @@ async function main() {
       identity.append(document.createTextNode(plugin.name), version)
       const actions = document.createElement('span')
       actions.className = 'package-actions'
-      if (plugin.bundled) {
-        // This release fixes both the version and the presence of a bundled
-        // plugin, and the Host refuses every mutation that would change either.
-        // The row states the fact rather than offering controls that fail.
-        const badge = document.createElement('span')
-        badge.className = 'package-bundled'
-        badge.textContent = messages.bundled
-        badge.title = messages.bundledHint
-        actions.append(badge)
-      } else {
-        const remove = document.createElement('button')
-        remove.type = 'button'
-        remove.textContent = messages.remove
-        remove.addEventListener('click', () => void run(
-          () => removePlugin(plugin.name),
-          message('removing', { name: plugin.name }),
-        ))
-        const update = document.createElement('button')
-        update.type = 'button'
-        update.textContent = messages.update
-        update.addEventListener('click', () => {
-          const next = window.prompt(message('targetVersion', { name: plugin.name }), plugin.version)?.trim()
-          if (next === undefined || next === '' || next === plugin.version) return
-          void run(() => updatePlugin(plugin.name, next), message('updating', { name: plugin.name }))
-        })
-        actions.append(update, remove)
-      }
+      const badge = document.createElement('span')
+      badge.className = 'package-bundled'
+      // An entry that is not bundled was placed in the profile by a bundle patch or by
+      // the user, so it is reported as installed rather than claimed as shipped here.
+      badge.textContent = plugin.bundled ? messages.bundled : messages.installedBadge
+      if (plugin.bundled) badge.title = messages.bundledHint
+      actions.append(badge)
       item.append(identity, actions)
       return item
     }))
     empty.hidden = plugins.length !== 0
-  }
-
-  // Failures arrive as the shell's own localized sentence, so both paths show the message
-  // exactly as the request layer produced it.
-  async function run(operation, statusMessage) {
-    setBusy(true, statusMessage)
-    try {
-      await operation()
-      await render()
-      status.textContent = messages.operationComplete
-    } catch (error) {
-      status.textContent = error instanceof Error ? error.message : String(error)
-    } finally {
-      setBusy(false, status.textContent)
-    }
   }
 
   async function load(statusMessage, success) {
@@ -99,15 +67,6 @@ async function main() {
     }
   }
 
-  form.addEventListener('submit', (event) => {
-    event.preventDefault()
-    const spec = input.value.trim()
-    if (spec === '') return
-    void run(async () => {
-      await addPlugin(spec)
-      input.value = ''
-    }, message('installing', { spec }))
-  })
   refresh.addEventListener('click', () => void load(messages.refreshing, messages.refreshed))
 
   await load(messages.loadingPlugins, '')

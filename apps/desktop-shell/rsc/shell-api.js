@@ -55,6 +55,15 @@ export function getLocale() {
   return request('/locale')
 }
 
+/**
+ * Mail one submitted review to the author.
+ * @param {{ message: string, email: string }} submission - review text and reply address.
+ * @returns {Promise<{ sent: boolean }>} the shell's acknowledgement.
+ */
+export function sendFeedback(submission) {
+  return request('/feedback', { json: submission })
+}
+
 /** @returns {Promise<object>} how far the launch has come, as `{phase, progress, version, message?}`. */
 export function getStatus() {
   return request('/status')

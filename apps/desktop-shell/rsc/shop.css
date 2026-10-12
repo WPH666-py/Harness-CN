@@ -1,0 +1,119 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: Canvas;
+  color: CanvasText;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 34px 26px 48px;
+}
+
+header h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+}
+
+#intro {
+  margin: 0;
+  color: GrayText;
+  line-height: 1.7;
+}
+
+/* Three to a row on a wide window, stepping down as the window narrows so the
+   cards never squeeze below a readable width. */
+#products {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+  margin: 26px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (max-width: 900px) {
+  #products { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 620px) {
+  #products { grid-template-columns: minmax(0, 1fr); }
+}
+
+#products li {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid color-mix(in srgb, CanvasText 14%, transparent);
+  border-radius: 12px;
+  overflow: hidden;
+  background: color-mix(in srgb, CanvasText 3%, Canvas);
+}
+
+figure {
+  margin: 0;
+  background: #fff;
+}
+
+figure img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 6px;
+  padding: 13px 14px 15px;
+}
+
+.name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.detail {
+  margin: 0;
+  color: GrayText;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.buy {
+  margin-top: auto;
+  padding-top: 10px;
+  color: color-mix(in srgb, CanvasText 45%, #d1495b);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.buy:hover {
+  text-decoration: underline;
+}
+
+.buy.disabled {
+  color: GrayText;
+  font-weight: 400;
+  cursor: not-allowed;
+}
+
+#products li.unavailable figure img {
+  opacity: 0.75;
+}
+
+#note {
+  margin: 30px 0 0;
+  color: GrayText;
+  font-size: 12px;
+  line-height: 1.7;
+}

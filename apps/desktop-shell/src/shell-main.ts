@@ -41,6 +41,7 @@ import { ensureSeedPackage } from './seed-package.ts'
 import { verifyStagedRuntime } from './staged-runtime-check.ts'
 import type { ShellArguments, ShellCommand, ShellHandshake, ShellStatus } from './shell-types.ts'
 import { createReleaseChannel } from './release-channel.ts'
+import { FEEDBACK_MESSAGE_MAX, sendFeedbackMail, type FeedbackSubmission } from './feedback-mail.ts'
 
 /** Delay after the workspace opens before the launch's automatic update check runs. */
 const AUTOMATIC_UPDATE_CHECK_MS = 10_000
@@ -343,6 +344,19 @@ async function main(): Promise<void> {
       timer.unref()
     },
     skipUpdate: (version: string) => { skipped.remember(version) },
+    sendFeedback: async (submission: FeedbackSubmission): Promise<void> => {
+      const message = submission.message.trim()
+      const email = submission.email.trim()
+      if (message === '') throw new Error('反馈内容不能为空')
+      if (message.length > FEEDBACK_MESSAGE_MAX) {
+        throw new Error(`反馈内容过长，请控制在 ${String(FEEDBACK_MESSAGE_MAX)} 字以内`)
+      }
+      // The form asks for a QQ mailbox because that is what the author replies through;
+      // anything else is refused here rather than discovered as a bounce later.
+      if (!/^[\w.+-]+@qq\.com$/iu.test(email)) throw new Error('请填写有效的 QQ 邮箱')
+      await sendFeedbackMail({ message, email })
+      logShell('one feedback message was sent to the author')
+    },
     apiKeyStatus: async (): Promise<DesktopApiKeyStatus> =>
       await runApiKeyStep(async () => await describeApiKey(requireHost())),
     saveApiKey: async (key: string): Promise<DesktopApiKeyStatus> => await runApiKeyStep(async () => {

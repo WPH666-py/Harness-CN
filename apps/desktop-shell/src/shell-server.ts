@@ -10,6 +10,7 @@ import type { DesktopApiKeyStatus, DesktopUpdateState } from '../../desktop/src/
 import type { DesktopLogSnapshot } from '../../desktop/src/log-buffer.ts'
 import type { DesktopLocale } from '../../desktop/src/locale.ts'
 import type { DesktopPluginRecord, DesktopProjectMutation } from '../../desktop/src/project-manager.ts'
+import type { FeedbackSubmission } from './feedback-mail.ts'
 import type { ShellStatus } from './shell-types.ts'
 
 /** Path prefix serving the shell's own HTML, CSS, and video assets. */
@@ -77,6 +78,8 @@ export interface ShellApi {
   uninstall(): void
   /** Remember the release the user chose not to install. */
   skipUpdate(version: string): void
+  /** Mail one submitted review to the author's own mailbox. */
+  sendFeedback(submission: FeedbackSubmission): Promise<void>
   /** Whether the DeepSeek credential is configured. */
   apiKeyStatus(): Promise<DesktopApiKeyStatus>
   /** Prove and store one DeepSeek key. */
@@ -312,6 +315,14 @@ export async function startShellServer(options: ShellServerOptions): Promise<She
       const body = await readJsonBody(message)
       options.api.skipUpdate(requireString(body.version, 'release version'))
       return sendJson(response, 200, {})
+    }
+    if (route === 'feedback' && method === 'POST') {
+      const body = await readJsonBody(message)
+      await options.api.sendFeedback({
+        message: requireString(body.message, 'feedback message'),
+        email: requireString(body.email, 'reply address'),
+      })
+      return sendJson(response, 200, { sent: true })
     }
     if (route === 'api-key' && method === 'GET') return sendJson(response, 200, await options.api.apiKeyStatus())
     if (route === 'api-key' && method === 'POST') {
