@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, relative, resolve, sep } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { createSeedMetadata } from '../src/project-manager.ts'
 import { DESKTOP_HOST_PROTOCOL_VERSION } from '../src/host-protocol.ts'
 import { parseDesktopRelease, type DesktopRelease } from '../src/release.ts'
@@ -106,6 +107,37 @@ function runPnpm(args: readonly string[]): Promise<void> {
   })
 }
 
+function patchInstalledRuleEngine(root: string): Promise<void> {
+  // `compress` is an official DSH tool the installed engine does not classify, and the engine
+  // denies every tool it cannot classify, so a fresh profile loses that tool until a human
+  // grants it. Patching the installed table here is what makes the fix permanent: the patched
+  // bytes go into the archived store, and every profile later materialized from this seed
+  // carries them. See scripts/patch-rule-engine.mjs for why this cannot be configuration.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-rule-engine.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: rule-engine patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
+/** Read the engine's classification table back out of a tree the seed produced. */
+async function verifyRuleEnginePatch(root: string): Promise<void> {
+  const catalog = join(root, 'node_modules', 'dsh-rule-engine', 'lib', 'core', 'tool-catalog.js')
+  if (!existsSync(catalog)) {
+    throw new Error('desktop seed: the profile the seed produced has no dsh-rule-engine tool catalog')
+  }
+  const module = await import(pathToFileURL(catalog).href) as { toolClass?: (name: string, args: unknown) => string }
+  if (typeof module.toolClass !== 'function') {
+    throw new Error(`desktop seed: ${catalog} does not export toolClass`)
+  }
+  if (module.toolClass('compress', {}) !== 'artifact') {
+    throw new Error(`desktop seed: the seed classifies compress as ${module.toolClass('compress', {})}`)
+  }
+}
+
 function inventory(root: string): readonly { path: string; bytes: number; sha256: string }[] {
   const files: string[] = []
   const visit = (dir: string): void => {
@@ -140,6 +172,9 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
         throw new Error(`desktop seed: local ${DESKTOP_HOST_PACKAGE}@${release.version} does not contain ${file}`)
       }
     }
+    // Same tree, different question: the archived store has to produce the patched table too, or
+    // only the machine that built the release would have it.
+    await verifyRuleEnginePatch(materialized)
   } finally {
     rmSync(materialized, { recursive: true, force: true })
   }
@@ -165,6 +200,7 @@ async function main(): Promise<void> {
     // helper, and an install that skipped them would ship a profile those packages cannot
     // load from.
     await runPnpm(['install', '--prod', '--frozen-lockfile', '--trust-lockfile'])
+    await patchInstalledRuleEngine(join(SEED_ROOT, 'node_modules'))
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
     let signedMachOFiles: number | undefined
