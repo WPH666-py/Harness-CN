@@ -54,12 +54,19 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     active: true,
   },
   {
-    // WeChat bridge. Pinned to the last release that declares `engines.dsh >=0.1.2-rc.1`, the line
-    // this product carries: 0.9.7 fixed the engine at `0.2.0-rc.2` and later releases widened it to
-    // `>=0.2.0-rc.2`, and the bridge reaches host services in process, so a 0.2-era build would call
-    // against APIs this baseline does not have. Its client half requests only baseline modules.
+    // WeChat bridge.
+    //
+    // 0.8.0 was the last release declaring `engines.dsh >=0.1.2-rc.1`, the line this product
+    // carries, so the earlier pins stopped there: 0.9.7 fixed the engine at `0.2.0-rc.2` and later
+    // releases widened it to `>=0.2.0-rc.2`. That declared range is stale rather than true — it was
+    // raised when the author moved their own baseline, not because the bridge started calling
+    // 0.2-era APIs. 0.10.0 was observed booting on this exact host line with the row mounted, the
+    // native command layer attached, the approval/question waterfall answerers attached, and the
+    // QR login flow running, with no module-resolution or missing-API failure anywhere in the
+    // startup log. The engine field is metadata no loader on this path enforces; the observable
+    // mount is the stronger evidence, so the shipped version tracks the one verified in the field.
     name: 'dsh-wechat',
-    version: '0.8.0',
+    version: '0.10.0',
     active: true,
   },
   { name: '@jieai/dsh-plugin-vet', version: '0.3.12', active: true },

@@ -123,6 +123,58 @@ function patchInstalledRuleEngine(root: string): Promise<void> {
   })
 }
 
+function patchInstalledWeChatSessions(root: string): Promise<void> {
+  // dsh-wechat builds every WeChat-bound session with a setup callback that reads the agent off the
+  // setup context, which Cordis rejects, so each message ends in 「无法创建/恢复 DSH 会话」. Patching
+  // the installed bytes here is what makes the fix permanent: the corrected module goes into the
+  // archived store, and every profile later materialized from this seed carries it. See
+  // scripts/patch-wechat-sessions.mjs for why this cannot be configuration.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-wechat-sessions.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: wechat session patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
+/** Read the agent setup back out of the installed dsh-wechat in a tree the seed produced. */
+async function verifyWeChatSessionsPatch(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-wechat-sessions.mjs')
+  const module = await import(pathToFileURL(script).href) as { verifyWeChatSessions?: (tree: string) => string }
+  if (typeof module.verifyWeChatSessions !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyWeChatSessions`)
+  }
+  module.verifyWeChatSessions(root)
+}
+
+function patchInstalledWeChatIdentity(root: string): Promise<void> {
+  // WeChat's contact name for the bot belongs to Tencent's iLink platform, so the only name this
+  // product controls is the one the bridge chats under: the built-in surface prompt the plugin
+  // injects for every WeChat-bound session. Naming the installed bytes here puts that name in the
+  // archived store, and every profile later materialized from this seed carries it. See
+  // scripts/patch-wechat-identity.mjs for why this cannot be configuration.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-wechat-identity.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: wechat identity patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
+/** Read the bridge's name back out of the installed dsh-wechat in a tree the seed produced. */
+async function verifyWeChatIdentityPatch(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-wechat-identity.mjs')
+  const module = await import(pathToFileURL(script).href) as { verifyWeChatIdentity?: (tree: string) => string }
+  if (typeof module.verifyWeChatIdentity !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyWeChatIdentity`)
+  }
+  module.verifyWeChatIdentity(root)
+}
+
 /** Read the engine's classification table back out of a tree the seed produced. */
 async function verifyRuleEnginePatch(root: string): Promise<void> {
   const catalog = join(root, 'node_modules', 'dsh-rule-engine', 'lib', 'core', 'tool-catalog.js')
@@ -175,6 +227,10 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     // Same tree, different question: the archived store has to produce the patched table too, or
     // only the machine that built the release would have it.
     await verifyRuleEnginePatch(materialized)
+    // And the WeChat bridge has to come out of the archived store able to create a session.
+    await verifyWeChatSessionsPatch(materialized)
+    // And it has to come out of it answering to this product's name.
+    await verifyWeChatIdentityPatch(materialized)
   } finally {
     rmSync(materialized, { recursive: true, force: true })
   }
@@ -201,6 +257,8 @@ async function main(): Promise<void> {
     // load from.
     await runPnpm(['install', '--prod', '--frozen-lockfile', '--trust-lockfile'])
     await patchInstalledRuleEngine(join(SEED_ROOT, 'node_modules'))
+    await patchInstalledWeChatSessions(join(SEED_ROOT, 'node_modules'))
+    await patchInstalledWeChatIdentity(join(SEED_ROOT, 'node_modules'))
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
     let signedMachOFiles: number | undefined

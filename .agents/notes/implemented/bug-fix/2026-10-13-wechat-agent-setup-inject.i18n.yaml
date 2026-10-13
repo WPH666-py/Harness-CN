@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-10-13-wechat-agent-setup-inject.md
+2026-10-13-wechat-agent-setup-inject.md: ad908fd82770087c93db3a5017d9fda9e2e8deb4
+2026-10-13-wechat-agent-setup-inject.zh.md: ad3cc3942f2937d0136be7a6f825b75c91c030af

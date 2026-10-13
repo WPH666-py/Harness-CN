@@ -6,8 +6,19 @@ import { clearLogs, getLocale, getLogs, revealLogs, subscribeEvents } from './sh
 // how far back the viewer can scroll.
 const RENDER_LIMIT = 2000
 
+// How long one snapshot read may take, and how often the window tries again before it reports the
+// failure. A read that never settles is the one failure the page cannot show on its own: without a
+// deadline the labels appear, the list stays empty, and the window claims this run logged nothing.
+const SNAPSHOT_TIMEOUT_MS = 5000
+const SNAPSHOT_ATTEMPTS = 4
+const SNAPSHOT_RETRY_DELAY_MS = 500
+
 /** The snapshot the viewer last read, kept so the status line can still name the log file. */
 let logFile = ''
+
+// Failure notices above the list, kept by key so clearing a recovered retry cannot erase an
+// unrelated failure that is still true.
+const bootNotices = new Map()
 
 let entries = []
 let dropped = 0
@@ -20,6 +31,14 @@ let pauseLabel = ''
 let resumeLabel = ''
 let fallbackLabel = ''
 
+function renderBootNotices() {
+  const boot = document.querySelector('#boot')
+  if (boot === null) return
+  const text = [...bootNotices.values()].join('  ')
+  boot.textContent = text
+  boot.hidden = text === ''
+}
+
 /**
  * Report a failure where the user can see it.
  *
@@ -27,12 +46,20 @@ let fallbackLabel = ''
  * looks exactly like a run that logged nothing. Every step that can fail therefore says so, in the
  * same place, instead of leaving an empty list that means the opposite of what it appears to mean.
  * @param text - what failed, with whatever detail the failure carried.
+ * @param key - which notice this is, so a later recovery clears only its own.
  */
-function reportBootFailure(text) {
-  const boot = document.querySelector('#boot')
-  if (boot === null) return
-  boot.textContent = text
-  boot.hidden = false
+function reportBootFailure(text, key = 'boot') {
+  bootNotices.set(key, text)
+  renderBootNotices()
+}
+
+/**
+ * Take one notice back after the step that reported it has succeeded.
+ * @param key - the notice to drop, exactly as `reportBootFailure` named it.
+ */
+function clearBootFailure(key) {
+  bootNotices.delete(key)
+  renderBootNotices()
 }
 
 /** The most specific message an unknown rejection carries. */
@@ -147,12 +174,41 @@ function setPaused(next) {
   else updateStatus()
 }
 
-async function main() {
-  // The boot guard stops waiting the moment this runs, so a module that starts is never reported as
-  // one that did not.
-  window.__dshLogViewerStarted = true
+/** Reject after `ms`, so a request that never answers is reported instead of pending forever. */
+function timeoutAfter(ms) {
+  return new Promise((_resolve, reject) => {
+    setTimeout(() => { reject(new Error(`读取运行日志超时（${String(ms)} 毫秒）`)) }, ms)
+  })
+}
 
-  const locale = await getLocale()
+/**
+ * Read the snapshot, trying again while the read fails or never settles.
+ * @returns the snapshot the shell reported.
+ */
+async function readSnapshot() {
+  let failure
+  for (let attempt = 0; attempt < SNAPSHOT_ATTEMPTS; attempt += 1) {
+    try {
+      return await Promise.race([getLogs(), timeoutAfter(SNAPSHOT_TIMEOUT_MS)])
+    } catch (error) {
+      failure = error
+      if (attempt + 1 < SNAPSHOT_ATTEMPTS) {
+        reportBootFailure(
+          `读取运行日志失败，正在重试（已试 ${String(attempt + 1)} 次）：${messageOf(error)}`,
+          'snapshot',
+        )
+        await new Promise((resolve) => { setTimeout(resolve, SNAPSHOT_RETRY_DELAY_MS * (attempt + 1)) })
+      }
+    }
+  }
+  throw failure
+}
+
+/**
+ * Write every label the window shows from the interface text the shell answered with.
+ * @param locale - the locale, with the message table the shell reported.
+ */
+function applyLocale(locale) {
   const messages = locale.messages
   document.documentElement.lang = locale.id
   document.querySelector('#page-title').textContent = messages.logViewerTitle
@@ -182,6 +238,35 @@ async function main() {
     option.textContent = options[option.value] ?? option.value
   }
   document.querySelector('#toggle').textContent = messages.logPause
+}
+
+/**
+ * Read the interface text, with the same deadline as the snapshot.
+ *
+ * This read comes before everything else the window does, and the boot guard has already stood
+ * down by then (the module announced itself on its first line), so a read that never settles
+ * would leave the labels unwritten and the list empty with nobody left to report it. Timing out
+ * keeps the page's own built-in labels and moves on to the snapshot.
+ * @returns the locale, or undefined when the shell did not answer in time.
+ */
+async function readLocale() {
+  try {
+    return await Promise.race([getLocale(), timeoutAfter(SNAPSHOT_TIMEOUT_MS)])
+  } catch (error) {
+    reportBootFailure(`界面文字读取失败，已用页面自带的文字继续：${messageOf(error)}`, 'locale')
+    return undefined
+  }
+}
+
+async function main() {
+  // The boot guard stops waiting the moment this runs, so a module that starts is never reported as
+  // one that did not.
+  window.__dshLogViewerStarted = true
+
+  const locale = await readLocale()
+  // A stalled interface-text read keeps the page's own built-in labels; the window still goes on to
+  // show the log rather than nothing at all.
+  if (locale !== undefined) applyLocale(locale)
 
   // The snapshot is read on its own and first: it is what this window exists to show, and it has to
   // survive a live stream that cannot be opened. The stream is attached before the wiring below, so
@@ -200,12 +285,14 @@ async function main() {
     reportBootFailure(`实时日志流不可用，仅显示已读取的记录：${messageOf(error)}`)
   }
 
-  const snapshot = await getLogs()
+  const snapshot = await readSnapshot()
   entries = []
   dropped = snapshot.dropped
   logFile = snapshot.file
   merge(snapshot.entries)
   renderAll()
+  // The list is on screen, so a notice about retrying the read has served its purpose.
+  clearBootFailure('snapshot')
   if (!liveAttached) updateStatus()
 
   document.querySelector('#source').addEventListener('change', (event) => {

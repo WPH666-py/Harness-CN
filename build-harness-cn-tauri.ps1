@@ -32,6 +32,35 @@ function Assert-Command([string]$Name) {
   }
 }
 
+# Run a native command, echoing its output AND appending it to a log file, and return its exit code.
+#
+# `2>&1 | Tee-Object` is deliberately NOT used here: under `$ErrorActionPreference = 'Stop'`, a native
+# command that writes to stderr (pnpm does this for every `[WARN] Unsupported platform: darwin-arm64`
+# line) makes PowerShell turn the pipeline into a terminating NativeCommandError, so a build whose only
+# "error" was a warning would abort before it compiled anything. Redirection into a plain file has no
+# such behaviour, and the exit code is read from $LASTEXITCODE rather than inferred from the text.
+function Invoke-Logged([string]$Exe, [string[]]$ExeArgs, [string]$Log, [switch]$Append) {
+  $tmp = [System.IO.Path]::GetTempFileName()
+  $savedEap = $ErrorActionPreference
+  try {
+    # PowerShell 5.1 turns a native command's stderr lines into error records even when they are
+    # redirected, and `Stop` then ends the script on the first one — so this runs under `Continue`
+    # and the real verdict comes from the exit code, never from the text.
+    $ErrorActionPreference = 'Continue'
+    $cmdExit = 0
+    & $Exe @ExeArgs > $tmp 2>&1
+    $cmdExit = $LASTEXITCODE
+    $ErrorActionPreference = $savedEap
+    Get-Content -LiteralPath $tmp | ForEach-Object { Write-Host $_ }
+    if ($Append) { Get-Content -LiteralPath $tmp | Add-Content -LiteralPath $Log -Encoding UTF8 }
+    else { Get-Content -LiteralPath $tmp | Set-Content -LiteralPath $Log -Encoding UTF8 }
+    return $cmdExit
+  } finally {
+    $ErrorActionPreference = $savedEap
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+  }
+}
+
 Assert-Command node
 Assert-Command cargo
 Assert-Command pnpm
@@ -52,15 +81,15 @@ if ($SkipPrepare) {
 } else {
   Write-Host '=== pnpm --filter @deepseek-ai/dsh-desktop run prepare:package ===' -ForegroundColor Cyan
   Write-Host '(build:official, release:pack, prepare:runtime, prepare:packages, prepare:seed)'
-  & pnpm --filter '@deepseek-ai/dsh-desktop' run prepare:package 2>&1 | Tee-Object -FilePath $LogFile
-  if ($LASTEXITCODE -ne 0) { throw "Payload preparation failed with exit code $LASTEXITCODE. See $LogFile" }
+  $rc = Invoke-Logged -Exe 'pnpm' -ExeArgs @('--filter', '@deepseek-ai/dsh-desktop', 'run', 'prepare:package') -Log $LogFile
+  if ($rc -ne 0) { throw "Payload preparation failed with exit code $rc. See $LogFile" }
 }
 
 Write-Host ''
 Write-Host '=== pnpm --filter @deepseek-ai/dsh-desktop-shell run build ===' -ForegroundColor Cyan
 Write-Host '(build:sidecar, prepare:shell, tauri build)'
-& pnpm --filter '@deepseek-ai/dsh-desktop-shell' run build 2>&1 | Tee-Object -FilePath $LogFile -Append
-if ($LASTEXITCODE -ne 0) { throw "Tauri packaging failed with exit code $LASTEXITCODE. See $LogFile" }
+$rc = Invoke-Logged -Exe 'pnpm' -ExeArgs @('--filter', '@deepseek-ai/dsh-desktop-shell', 'run', 'build') -Log $LogFile -Append
+if ($rc -ne 0) { throw "Tauri packaging failed with exit code $rc. See $LogFile" }
 
 # --- Report ------------------------------------------------------------------
 
