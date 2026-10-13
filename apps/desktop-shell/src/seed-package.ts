@@ -17,7 +17,8 @@
  */
 
 import { createReadStream, existsSync, statSync } from 'node:fs'
-import { mkdir, rename, rm } from 'node:fs/promises'
+import { mkdir, readdir, rename, rm } from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -96,9 +97,47 @@ function errorOf(reason: unknown, fallback: string): Error {
   return reason instanceof Error ? reason : new Error(fallback)
 }
 
+/**
+ * A suffix no other run of the same program can produce.
+ *
+ * Temporary and set-aside directories carry this, which is what makes every directory a run writes
+ * private to that run. Two runs that overlap — the installer's prebuild and a launch, or a launch
+ * and a relaunch after a kill — then cannot delete or rename each other's files, which is the fault
+ * this suffix exists to remove.
+ */
+function stamp(): string {
+  return `${String(process.pid)}-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`
+}
+
 /** Whether a directory holds a complete seed rather than a partial extraction. */
 function isSeedDirectory(directory: string): boolean {
   return existsSync(join(directory, SEED_INTEGRITY_FILE))
+}
+
+/**
+ * Whether a leftover directory is still being written by a run that is alive.
+ *
+ * Every temporary name this module creates carries the process that made it, so the question can be
+ * answered from the name alone. A run that is still unpacking owns an incomplete directory on
+ * purpose, and deleting it would fail that run on a file that was plainly there a moment ago: the
+ * installer's prebuild and a launch overlapping is exactly when both exist at once. A run that was
+ * killed leaves its name behind and nothing else, and that is what a sweep is for.
+ * @param entry - one entry name from the cache directory.
+ * @returns whether a live process is still working in that directory.
+ */
+function isLiveLeftover(entry: string): boolean {
+  const marker = '.partial-'
+  const owner = entry.slice(entry.indexOf(marker) + marker.length).split('-')[0] ?? ''
+  const pid = Number.parseInt(owner, 10)
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // A process this one may not signal still exists, and is still writing. Only a missing process
+    // makes a directory debris.
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
 }
 
 /** The decompressor one published archive needs, chosen by the name the host gave it. */
@@ -109,25 +148,223 @@ function decompressorFor(archive: string): ReturnType<typeof createGunzip> | und
 }
 
 /**
+ * Filesystem faults that say "not now" rather than "not this".
+ *
+ * Windows reports a just-closed file as still occupied, a directory that is being emptied as still
+ * occupied, and a rename over a file another process holds as a plain permission denial. None of
+ * them describes the content being unpacked, so none of them should end a first launch.
+ */
+const TRANSIENT_FILE_ERRORS = new Set(['EACCES', 'EBUSY', 'EMFILE', 'ENFILE', 'ENOTEMPTY', 'EPERM'])
+
+/** Attempts one transient filesystem step gets before it is treated as a real refusal. */
+const FILE_ATTEMPTS = 4
+
+function transientErrorOf(reason: unknown): NodeJS.ErrnoException | undefined {
+  const code = (reason as NodeJS.ErrnoException | undefined)?.code
+  return code !== undefined && TRANSIENT_FILE_ERRORS.has(code)
+    ? reason as NodeJS.ErrnoException
+    : undefined
+}
+
+/**
+ * Run one filesystem step, pausing between attempts while the fault is a transient one.
+ * @param action - the step to run.
+ * @param what - what the step is doing, for the error a real failure carries.
+ */
+async function withFileRetry<T>(action: () => Promise<T>, what: string): Promise<T> {
+  let last: unknown
+  for (let attempt = 0; attempt < FILE_ATTEMPTS; attempt += 1) {
+    try {
+      return await action()
+    } catch (error) {
+      if (transientErrorOf(error) === undefined) throw error
+      last = error
+      await new Promise(resolve => setTimeout(resolve, 80 * 2 ** attempt))
+    }
+  }
+  throw errorOf(last, `${what} failed`)
+}
+
+/**
+ * Remove a directory, or at least stop it from being in the way.
+ *
+ * Removal is what is wanted, and on a quiet machine it is what happens. When the directory cannot
+ * be removed at all — a scanner still holding a file inside it, a handle from a run that was killed
+ * — the directory is moved aside instead, under a name no later attempt looks for. That is the
+ * difference this function exists for: a leftover extraction must never be able to fail a launch
+ * twice, and deletion is the only step above that a locked file can refuse permanently.
+ *
+ * A directory that can neither be deleted nor moved aside is reported and left where it is. Every
+ * caller of this is housekeeping — the name is one this run does not work in — so the directory is
+ * a cost in disk space rather than a reason to fail, and the next launch tries again.
+ * @param directory - absolute directory to get out of the way.
+ * @param report - receives a line for the run log when deletion had to be worked around.
+ * @returns whether the directory is gone from the name it was holding.
+ */
+async function clearDirectoryOrSetAside(
+  directory: string,
+  report?: (note: string, step?: SeedPackageStep) => void,
+): Promise<boolean> {
+  let refusal: unknown
+  try {
+    await withFileRetry(async () => rm(directory, { recursive: true, force: true }), `remove ${directory}`)
+    return true
+  } catch (error) {
+    refusal = error
+  }
+  const setAside = `${directory}.stale-${stamp()}`
+  try {
+    await withFileRetry(async () => rename(directory, setAside), `set aside ${directory}`)
+  } catch {
+    // A directory that is already gone is the outcome that was wanted; one that is still there and
+    // still cannot be moved is reported. The name it holds is the one that stays in the way, which
+    // is why the caller is told: it is the difference between debris and a refusal.
+    if (existsSync(directory)) {
+      report?.(`${directory} 无法删除也无法改名，本次启动会绕开它：${errorOf(refusal, '').message}`)
+      return false
+    }
+    return true
+  }
+  report?.(`${directory} 无法删除，已改名让位。`)
+  // The name is what this call had to free. Its bytes are no longer this launch's problem: they are
+  // under a name nothing looks for, and the next launch sweeps them.
+  await rm(setAside, { recursive: true, force: true }).catch(() => undefined)
+  return true
+}
+
+/**
+ * Publish freshly unpacked content, replacing whatever is at the destination.
+ *
+ * A directory that is in the way is moved aside and only then deleted: an occupied destination then
+ * costs one rename rather than the whole launch. Two runs can still reach the publish step at the
+ * same time on one machine — the installer's prebuild and a launch — and Windows refuses a rename
+ * onto a name that appeared after it was read. Both of those are the same situation from here: the
+ * destination is not what this run read, so it is looked at again rather than failed on.
+ * @param from - absolute directory holding the complete content.
+ * @param to - absolute directory it should be published as.
+ * @param report - receives a line for the run log when the destination could not be replaced.
+ * @returns where the content ended up, which is the destination unless it was still held open.
+ */
+async function replaceDirectory(
+  from: string,
+  to: string,
+  report?: (note: string, step?: SeedPackageStep) => void,
+): Promise<string> {
+  for (let attempt = 0; ; attempt += 1) {
+    let previous: string | undefined
+    if (existsSync(to)) {
+      const setAside = `${to}.old-${stamp()}`
+      previous = setAside
+      try {
+        await withFileRetry(async () => rename(to, setAside), `set aside ${to}`)
+      } catch {
+        // The destination is held open by something this process cannot wait out. Unpacking beside it
+        // has already produced a complete seed, and the next launch will replace the destination
+        // then, so the attempt that did the work is allowed to succeed and to say where it worked.
+        report?.(`${to} 仍被占用，暂不替换；下次启动会再次尝试。`)
+        return from
+      }
+    }
+    try {
+      await withFileRetry(async () => rename(from, to), `publish ${to}`)
+    } catch (error) {
+      // Whatever went wrong, a complete seed under the destination is one this launch can install
+      // from: another run got there first, and which run unpacks it is not the user's problem.
+      if (isSeedDirectory(to)) {
+        if (previous !== undefined) {
+          await rm(previous, { recursive: true, force: true }).catch(() => undefined)
+        }
+        report?.(`${to} 已有另一个进程发布的离线包，本次改用该副本。`)
+        return to
+      }
+      // The destination appeared between reading it and publishing over it, and it is not a seed:
+      // another run is midway through the same unpack. One more pass moves it aside first.
+      if (attempt === 0 && (error as NodeJS.ErrnoException).code !== 'ENOENT') continue
+      throw error
+    }
+    if (previous !== undefined) {
+      await rm(previous, { recursive: true, force: true }).catch(() => undefined)
+    }
+    return to
+  }
+}
+
+/**
+ * Take back the space a previous run was interrupted in.
+ *
+ * A launch that was killed while unpacking, or that found the download blocked, leaves a directory
+ * that is not a seed and is not wanted. Cleaning them up at the start is what keeps them from
+ * accumulating forever, and it is also the cheapest place to notice one that cannot be removed: it
+ * happens before the user is watching a progress bar.
+ * @param cacheRoot - directory the fetched seed is kept under.
+ * @param version - release version the current launch is obtaining.
+ * @param report - receives a line for the run log when something could not be cleaned up.
+ */
+async function sweepSeedLeftovers(
+  cacheRoot: string,
+  version: string,
+  report?: (note: string) => void,
+): Promise<void> {
+  const current = `seed-${version}`
+  let entries: string[]
+  try {
+    entries = await readdir(cacheRoot)
+  } catch {
+    // No cache directory yet is the ordinary first launch.
+    return
+  }
+  for (const entry of entries) {
+    // The current version's own directory is the one this run is about to use or write; everything
+    // else that carries the seed prefix is debris from a run that did not finish, including the
+    // temporary and set-aside names this module itself creates.
+    if (!entry.startsWith('seed-') || entry === current) continue
+    // A directory another live run is unpacking into is not debris, it is a sibling at work. Both
+    // are removed by the run that owns them or by a later launch, so skipping it costs nothing.
+    if (isLiveLeftover(entry)) continue
+    const directory = join(cacheRoot, entry)
+    try {
+      await withFileRetry(
+        async () => rm(directory, { recursive: true, force: true }),
+        `remove ${directory}`,
+      )
+    } catch {
+      report?.(`未能清理上次遗留的 ${directory}，本次启动会绕开它。`)
+    }
+  }
+}
+
+/**
  * Extract one seed archive into a directory that is not published until it is complete.
  *
  * The extraction is streamed straight from the archive through its decompressor into tar, so the
  * 314 MB that come out never exist a second time on disk as an intermediate tar. The rename is what
  * makes the cache safe to trust on the next launch: a directory that exists is a directory whose
  * extraction finished, so a download interrupted halfway cannot be mistaken for a seed.
+ *
+ * Every directory this function writes to is private to this run, and a directory that this run
+ * cannot have written is retired before the run depends on it. Two runs that overlap — the
+ * installer's prebuild and a launch — therefore cannot take each other's half-written tree, and a
+ * locked leftover from a killed run cannot fail the launch that follows it.
  * @param archive - absolute path of the downloaded archive.
  * @param destination - absolute directory the seed should end up at.
- * @param staging - absolute directory the extraction runs in, beside the destination.
+ * @param report - receives a line for the run log about what had to be cleaned up first.
  * @param onProgress - receives the fraction of the archive that has been read through.
+ * @returns the directory the complete seed is at, which is the destination unless another process
+ * held it open and the fresh tree is therefore still under its own name.
  */
 async function extractSeed(
   archive: string,
   destination: string,
-  staging: string,
+  report?: (note: string, step?: SeedPackageStep) => void,
   onProgress?: (fraction: number) => void,
-): Promise<void> {
-  await rm(staging, { recursive: true, force: true })
+): Promise<string> {
+  await clearDirectoryOrSetAside(`${destination}.partial`, report)
+  // Staging is private to this run. A shared staging directory is what let an interrupted run and
+  // its replacement delete each other's files halfway through, which is how a first launch could
+  // fail on a directory that was plainly still there.
+  const staging = `${destination}.partial-${stamp()}`
   await mkdir(staging, { recursive: true })
+  let installed = ''
   try {
     const unpack = extract({
       cwd: staging,
@@ -169,12 +406,16 @@ async function extractSeed(
     if (!isSeedDirectory(staging)) {
       throw new Error(`the archive does not contain ${SEED_INTEGRITY_FILE}`)
     }
-    await rm(destination, { recursive: true, force: true })
-    await rename(staging, destination)
+    installed = await replaceDirectory(staging, destination, report)
     onProgress?.(1)
+    return installed
   } catch (error) {
-    await rm(staging, { recursive: true, force: true }).catch(() => undefined)
     throw errorOf(error, 'the offline package could not be unpacked')
+  } finally {
+    // Whichever directory was published holds the content. Staging that is still there and is not
+    // what this run installed from is a tree that never became a seed, and leaving it would be
+    // exactly the debris the next launch has to clean up.
+    if (installed !== staging) await rm(staging, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
@@ -222,6 +463,14 @@ export async function ensureSeedPackage(options: SeedPackageOptions): Promise<Se
   const cached = join(options.cacheRoot, `seed-${options.version}`)
   if (isSeedDirectory(cached)) return { directory: cached, origin: 'cache' }
 
+  // Everything a previous run left behind is dealt with before this run needs any of it: a killed
+  // unpack must not be able to fail the launch that follows it, and a locked directory must be
+  // discovered here rather than in the middle of an extraction the user is waiting on.
+  options.onProgress?.('正在准备离线包…', undefined, '解包离线包')
+  await sweepSeedLeftovers(options.cacheRoot, options.version, (note) => {
+    options.onProgress?.(note, undefined, '解包离线包')
+  })
+
   const request = options.fetch ?? globalThis.fetch
   const names = seedArchiveNames(options.version)
   // A file the user placed by hand is used as it is: the names it is looked up by are this
@@ -260,17 +509,24 @@ export async function ensureSeedPackage(options: SeedPackageOptions): Promise<Se
   }
 
   options.onProgress?.('正在解包离线包… 0%', 0, '解包离线包')
-  await extractSeed(archive, cached, `${cached}.partial`, (fraction) => {
-    options.onProgress?.(
-      `正在解包离线包… ${String(Math.round(fraction * 100))}%`,
-      fraction,
-      '解包离线包',
-    )
-  })
+  // Where the seed ended up, which is the cache directory unless something else was holding it: a
+  // launch installs from a complete tree either way, and only the name differs.
+  const directory = await extractSeed(
+    archive,
+    cached,
+    (note, step) => { options.onProgress?.(note, undefined, step ?? '解包离线包') },
+    (fraction) => {
+      options.onProgress?.(
+        `正在解包离线包… ${String(Math.round(fraction * 100))}%`,
+        fraction,
+        '解包离线包',
+      )
+    },
+  )
   // A fetched archive is only useful once, and keeping it would cost more than re-fetching it is
   // worth. The user's own file is left where they put it: they chose that directory, and it is
   // theirs to keep or delete.
   if (manual === undefined) await rm(archive, { force: true }).catch(() => undefined)
   options.onProgress?.('', 1, '解包离线包')
-  return { directory: cached, origin }
+  return { directory, origin }
 }
