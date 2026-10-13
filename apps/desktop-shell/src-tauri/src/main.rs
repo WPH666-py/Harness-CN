@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// Windows creation flag that keeps a console-subsystem child from opening a console window.
@@ -59,6 +60,15 @@ const AUTHOR: &str = "author";
 const SHOP: &str = "shop";
 /// Window label of the feedback form.
 const FEEDBACK: &str = "feedback";
+
+/// Id of the notification-area icon the shell keeps alive.
+const TRAY_ID: &str = "harness-cn-tray";
+/// Tray menu entry that brings the hidden workspace window back.
+const TRAY_SHOW_ID: &str = "tray-show";
+/// Tray menu entry that ends the product for real.
+const TRAY_QUIT_ID: &str = "tray-quit";
+/// Caption the tray tooltip and the fallback window lookup share.
+const APP_NAME: &str = "Harness-CN";
 
 /// Owned children, the port the sidecar published, and the account of a failed launch.
 #[derive(Default)]
@@ -437,6 +447,67 @@ fn handle_menu(app: &AppHandle, id: &str) {
     }
 }
 
+/// Bring the workspace window back from the notification area.
+///
+/// Closing that window hides it rather than ending the product, so this is the way back. A launch
+/// that has not opened the workspace yet has no window here, and doing nothing is the right answer:
+/// the workspace opens by itself once it is ready.
+fn show_main_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(MAIN) else { return };
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+}
+
+/// Put the product in the notification area.
+///
+/// The icon is what keeps the shell reachable once its window is closed. Opening the workspace is
+/// expensive — the sidecar rebuilds a runtime on the first launch — so a close that ended the
+/// process would pay that cost again the next time the user wanted the product. The close hides the
+/// window instead and the product keeps running, and these two entries are how the user gets back
+/// to it or ends it for good.
+fn install_tray(app: &AppHandle) {
+    let build = || -> tauri::Result<()> {
+        let show = MenuItemBuilder::with_id(TRAY_SHOW_ID, "显示主窗口").build(app)?;
+        let quit = MenuItemBuilder::with_id(TRAY_QUIT_ID, "退出 Harness-CN").build(app)?;
+        let menu = MenuBuilder::new(app).item(&show).item(&quit).build()?;
+        let mut builder = TrayIconBuilder::with_id(TRAY_ID)
+            .tooltip(APP_NAME)
+            .menu(&menu)
+            // A left click on the icon is the user asking for the product, so it raises the window;
+            // the menu belongs on the right button, which is where the platform puts it anyway.
+            .show_menu_on_left_click(false)
+            .on_menu_event(|app, event| {
+                let id: &str = event.id().as_ref();
+                match id {
+                    TRAY_SHOW_ID => show_main_window(app),
+                    TRAY_QUIT_ID => app.exit(0),
+                    _ => {}
+                }
+            })
+            .on_tray_icon_event(|tray, event| {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    show_main_window(tray.app_handle());
+                }
+            });
+        // The icon is the one the installer already embeds; a build without one still gets a tray
+        // entry, only without a glyph.
+        if let Some(icon) = app.default_window_icon().cloned() {
+            builder = builder.icon(icon);
+        }
+        builder.build(app)?;
+        Ok(())
+    };
+    if let Err(error) = build() {
+        eprintln!("Harness-CN: the tray icon could not be installed: {error}");
+    }
+}
+
 /// Start the bundled Node sidecar and read its handshake stream.
 fn start_sidecar(app: AppHandle) {
     // `bundle.resources` keeps each entry's path, so the trees land under `<resources>/resources`.
@@ -611,13 +682,21 @@ fn stop_sidecar(app: &AppHandle) {
 
 fn main() {
     if !platform::claim_single_instance() {
+        // A second launch is the user asking for the product, so the instance that owns the claim
+        // is asked to raise its window — which it may have hidden rather than closed — before this
+        // process leaves. The event is what carries the request; the focus call is the best effort
+        // for a release old enough not to know about the event.
+        platform::signal_show_event();
         platform::focus_running_instance();
         return;
     }
+    // Created before the window loop starts so a second launch always finds the event to signal.
+    platform::create_show_event();
     let built = tauri::Builder::default()
         .manage(Shell::default())
         .setup(|app| {
             start_sidecar(app.handle().clone());
+            install_tray(app.handle());
             Ok(())
         })
         .on_menu_event(|app, event| { handle_menu(app, event.id().as_ref()) })
@@ -630,13 +709,22 @@ fn main() {
             return;
         }
     };
+    // The wait runs off the window loop, which has to stay free to pump messages while it blocks.
+    let listener = app.handle().clone();
+    std::thread::spawn(move || {
+        while platform::wait_show_event() {
+            let handle = listener.clone();
+            let _ = listener.run_on_main_thread(move || show_main_window(&handle));
+        }
+    });
     app.run(|handle, event| match event {
         RunEvent::ExitRequested { api, .. } => {
             // A window disappearing is not a quit. The splash is destroyed on purpose when the
             // workspace opens, and a launch that is still installing has no window at all; ending
             // the process there would kill the very transaction that was making progress. The
             // launch ends when its own window is closed, or when the sidecar that owns the
-            // workspace is gone.
+            // workspace is gone. Closing the workspace window is not one of those: it hides the
+            // window and leaves the product running in the notification area.
             let sidecar_alive = handle
                 .state::<Shell>()
                 .child
@@ -649,8 +737,14 @@ fn main() {
             }
         }
         RunEvent::Exit => stop_sidecar(handle),
-        RunEvent::WindowEvent { ref label, event: tauri::WindowEvent::Destroyed, .. } if label == MAIN => {
-            handle.exit(0);
+        RunEvent::WindowEvent { ref label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } if label == MAIN => {
+            // Closing the workspace window keeps the product running: opening it again is the
+            // expensive part, so the window is hidden rather than closed and the tray's own quit
+            // entry is what ends the process for good.
+            api.prevent_close();
+            if let Some(window) = handle.get_webview_window(MAIN) {
+                let _ = window.hide();
+            }
         }
         _ => {}
     });

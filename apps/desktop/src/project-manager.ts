@@ -19,6 +19,7 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { bundledPluginDependencies, bundledPluginNames, bundledPluginPackageNames } from './bundled-plugins.ts'
 import {
@@ -30,7 +31,6 @@ import {
   readDesktopCorePackageSet,
   verifyDesktopCorePackageSet,
 } from './core-package-set.ts'
-import { yieldToEventLoop } from './event-loop.ts'
 import { removeOwnedDirectory, renameOwnedDirectory } from './owned-directory.ts'
 import type { DesktopPaths } from './paths.ts'
 import { parseDesktopRelease, type DesktopRelease } from './release.ts'
@@ -86,6 +86,9 @@ const DESKTOP_PROJECT_FILES = [
   DESKTOP_SEED_IDENTITY_FILE,
   DESKTOP_PACKAGE_SET_FILE,
 ] as const
+
+/** Number of seed files hashed at once when verifying a seed's integrity. */
+const SEED_HASH_CONCURRENCY = 8
 
 /** Desktop plugin record derived from the installed profile. */
 export interface DesktopPluginRecord {
@@ -431,8 +434,11 @@ function copyMetadata(source: string, target: string): void {
 /**
  * Inventory one seed tree, hashing every file it ships.
  *
- * The walk yields between files: the shell serves its own windows, and a launch that never
- * yields also stops the startup window from loading.
+ * The files are read and hashed several at a time: the seed's own archives are the bulk of the work
+ * (~300 MB across a handful of files), and reading them one after another leaves the disk idle
+ * between each. Overlapping them on the libuv thread pool is what turns this step from a serial
+ * read into a bounded parallel one without changing what it proves. The walk itself never yields
+ * the event loop, but every `await` here does, so the startup window still repaints.
  * @param root - seed directory to inventory, excluding its own integrity inventory.
  * @param onProgress - receives the hashed fraction so a caller can show real progress.
  * @returns one record per file, in path order.
@@ -458,17 +464,26 @@ async function seedFiles(
   }
   collect(root)
   paths.sort((left, right) => left.localeCompare(right))
-  const files: DesktopSeedIntegrityRecord[] = []
-  for (const relativePath of paths) {
-    const body = readFileSync(join(root, ...relativePath.split('/')))
-    files.push({
-      path: relativePath,
-      bytes: body.byteLength,
-      sha256: createHash('sha256').update(body).digest('hex'),
-    })
-    await yieldToEventLoop()
-    if (paths.length > 0) onProgress?.(files.length / paths.length)
+  const files: DesktopSeedIntegrityRecord[] = new Array<DesktopSeedIntegrityRecord>(paths.length)
+  let next = 0
+  let done = 0
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next
+      next += 1
+      if (index >= paths.length) return
+      const relativePath = paths[index] as string
+      const body = await readFile(join(root, ...relativePath.split('/')))
+      files[index] = {
+        path: relativePath,
+        bytes: body.byteLength,
+        sha256: createHash('sha256').update(body).digest('hex'),
+      }
+      done += 1
+      if (paths.length > 0) onProgress?.(done / paths.length)
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(SEED_HASH_CONCURRENCY, paths.length) }, worker))
   return files
 }
 

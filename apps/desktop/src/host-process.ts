@@ -93,6 +93,11 @@ export class DesktopHostProcess {
    * @param mirrorStdout - whether to copy this child's stdout onto the shell's own stdout. A shell
    * that reserves its stdout for a line protocol of its own turns this off; the run log still
    * receives every line either way.
+   * @param compileCacheDir - directory Node keeps its on-disk V8 compile cache in. Setting it makes
+   * the second and every later launch reuse the bytecode compiled for the plugin tree instead of
+   * recompiling it, which is a large share of a cold start. The directory must live outside the
+   * profile, because the profile is replaced on every upgrade and a cache beside it would be thrown
+   * away with it.
    */
   constructor(
     private readonly node: string,
@@ -100,6 +105,7 @@ export class DesktopHostProcess {
     private readonly inspectPort?: number,
     private readonly logs?: DesktopLogBuffer,
     private readonly mirrorStdout = true,
+    private readonly compileCacheDir?: string,
   ) {}
 
   /** Start the child once and resolve only after its complete composition is active. */
@@ -113,9 +119,13 @@ export class DesktopHostProcess {
       ...(this.inspectPort === undefined ? [] : ['--allow-linked-profile']),
     ], {
       cwd: this.projectDir,
-      env: Object.fromEntries(Object.entries(process.env).filter(([name]) => (
-        name !== 'NODE_OPTIONS' && !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
-      ))),
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => (
+          name !== 'NODE_OPTIONS' && name !== 'NODE_COMPILE_CACHE'
+          && !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
+        ))),
+        ...(this.compileCacheDir === undefined ? {} : { NODE_COMPILE_CACHE: this.compileCacheDir }),
+      },
       stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe', 'ipc'],
     })
     const requestPipe = child.stdio[DESKTOP_REQUEST_PIPE_FD]

@@ -18,13 +18,14 @@ use windows_sys::Win32::System::JobObjects::{
     JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateMutexW, GetCurrentProcessId, OpenProcess, TerminateProcess,
-    PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    CreateEventW, CreateMutexW, GetCurrentProcessId, OpenEventW, OpenProcess, SetEvent,
+    TerminateProcess, WaitForSingleObject, EVENT_MODIFY_STATE, INFINITE, PROCESS_SET_QUOTA,
+    PROCESS_TERMINATE,
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowW, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
-    SetForegroundWindow, ShowWindow, MB_ICONERROR, MB_OK, SW_RESTORE,
+    AllowSetForegroundWindow, EnumWindows, FindWindowW, GetWindowThreadProcessId, IsWindowVisible,
+    MessageBoxW, SetForegroundWindow, ShowWindow, ASFW_ANY, MB_ICONERROR, MB_OK, SW_RESTORE,
 };
 
 /// Name of the mutex that stands for "a Harness-CN shell is running on this desktop".
@@ -33,8 +34,18 @@ const INSTANCE_MUTEX: &str = "Local\\Harness-CN-Shell";
 /// Title every Harness-CN top-level window carries, used to find the running instance.
 const WINDOW_TITLE: &str = "Harness-CN";
 
+/// Name of the event a second launch signals to ask the running instance to show its window.
+///
+/// The notification area is why this exists. A shell that keeps running after its window is closed
+/// has no visible window left, and `focus_running_instance` finds windows by visibility, so without
+/// this channel a second launch would leave the user with a running product they cannot see.
+const SHOW_EVENT: &str = "Local\\Harness-CN-Show";
+
 /// Claim handle, kept so an in-place restart can hand the slot to its replacement.
 static INSTANCE: Mutex<isize> = Mutex::new(0);
+
+/// Handle of the show event owned by the first instance, or zero if it could not be created.
+static SHOW: Mutex<isize> = Mutex::new(0);
 
 /// Job object holding the Node sidecar and every process it starts, or zero when containment failed.
 ///
@@ -235,6 +246,57 @@ pub fn release_single_instance() {
     if handle != 0 {
         unsafe { CloseHandle(handle as _) };
         *current = 0;
+    }
+}
+
+/// Create the event a second launch signals to ask this instance to show its window.
+///
+/// Called once by the instance that owns the single-instance claim, and before the window loop
+/// starts, so a second launch always finds it. The event is auto-reset and created non-signaled:
+/// each signal wakes the waiting thread exactly once, which is what makes the wait a loop rather
+/// than a one-shot.
+pub fn create_show_event() {
+    let name = wide(SHOW_EVENT);
+    // `bManualReset = 0` (auto-reset) and `bInitialState = 0` (non-signaled).
+    let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+    if handle.is_null() {
+        eprintln!("Harness-CN: the show event could not be created; a second launch will not raise the window");
+        return;
+    }
+    if let Ok(mut current) = SHOW.lock() {
+        *current = handle as isize;
+    }
+}
+
+/// Block until a second launch asks this instance to show its window.
+///
+/// Run from a worker thread rather than the window loop, which has to stay free to pump messages.
+/// @returns whether there is an event to wait on; false means the caller should stop waiting.
+pub fn wait_show_event() -> bool {
+    let handle = SHOW.lock().map(|held| *held).unwrap_or(0);
+    if handle == 0 {
+        return false;
+    }
+    unsafe { WaitForSingleObject(handle as _, INFINITE) };
+    true
+}
+
+/// Ask the running instance to show its window.
+///
+/// Called by a second launch that lost the single-instance claim. It also grants that instance the
+/// right to take the foreground first: Windows only lets the process that received the last input
+/// change the foreground window, and after this process signals and exits that right would be gone,
+/// leaving the restored window behind the one the user is actually looking at.
+pub fn signal_show_event() {
+    let name = wide(SHOW_EVENT);
+    let handle = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
+    if handle.is_null() {
+        return;
+    }
+    unsafe {
+        AllowSetForegroundWindow(ASFW_ANY);
+        SetEvent(handle);
+        CloseHandle(handle);
     }
 }
 

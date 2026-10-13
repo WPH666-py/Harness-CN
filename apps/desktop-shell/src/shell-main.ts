@@ -13,7 +13,7 @@
  * Its own stdout is a line protocol read by the Rust shell, so nothing else may write there.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { spawn } from 'node:child_process'
@@ -66,6 +66,20 @@ const INSTALL_EXIT_DELAY_MS = 800
 
 /** Silent switch of the NSIS installer, which then replaces the previous installation in place. */
 const NSIS_SILENT_SWITCH = '/S'
+
+/**
+ * Subcommand the installer runs after its files are in place, before the first launch.
+ *
+ * Building the desktop runtime is the one-time cost of a fresh installation. It is paid on the
+ * first launch only because nothing runs at install time; running it here, from the Node runtime
+ * the installer just unpacked, moves that cost to the moment the user is already waiting for the
+ * installer to finish. A prebuild that fails for any reason — no network, no disk, a machine that
+ * refuses — is not fatal: the first launch builds the same runtime the same way.
+ */
+const PREBUILD_SWITCH = '--prebuild'
+
+/** Directory Node keeps its on-disk V8 compile cache in for the backend process. */
+const COMPILE_CACHE_DIRECTORY = 'node-compile-cache'
 
 /** Interval one coalesced batch of run-log lines is published on. */
 const LOG_FLUSH_MS = 150
@@ -191,11 +205,63 @@ function describeUpdateFailure(message: string): string {
     + '也可以直接从发布页下载安装包手动更新。'
 }
 
+/**
+ * Build the desktop runtime now instead of on the first launch.
+ *
+ * The installer runs this once its files are in place. It obtains the offline package exactly as a
+ * launch would — bundled, cached, or fetched — and then runs the same transaction, so a profile
+ * this builds is byte-for-byte the profile the first launch would have built and the launch is left
+ * with nothing to do but start the backend. The Host is deliberately not started: composing the
+ * runtime is the long part, and booting it here would cost the fifty seconds the structural check
+ * exists to avoid.
+ *
+ * Nothing here publishes a handshake or opens a window; the installer is the only reader, and it
+ * ignores the exit code so a failure falls back to the first launch's own build.
+ * @param argv - this process's arguments, including the prebuild switch.
+ */
+async function prebuild(argv: readonly string[]): Promise<void> {
+  const options = parseArguments(argv)
+  const paths = resolveDesktopPaths()
+  for (const required of [options.node, options.pnpm]) {
+    if (!existsSync(required)) throw new Error(`dsh shell: bundled resource is missing: ${required}`)
+  }
+  const logs = new DesktopLogBuffer(join(options.logDirectory, 'harness.log'))
+  const note = (text: string): void => { logs.line('shell', `prebuild: ${text}`) }
+  const manager = new DesktopProjectManager(paths, { node: options.node, pnpm: options.pnpm })
+  manager.recover()
+  note(`building ${options.version} into ${paths.profile}`)
+  const seed = await ensureSeedPackage({
+    version: options.version,
+    resourceDir: options.resourceDir,
+    cacheRoot: join(paths.root, 'seed'),
+    onProgress: (message) => { if (message !== '') note(message) },
+  })
+  note(`offline package: ${seed.origin} at ${seed.directory}`)
+  const activated = await manager.applyRelease(seed.directory, options.version, {
+    healthCheck: async (projectDir) => {
+      const report = await verifyStagedRuntime({ projectDir, node: options.node })
+      note(`staged runtime verified: ${String(report.files)} files`)
+    },
+    beforeActivate: async () => {},
+    afterActivate: async () => {},
+    note,
+  })
+  note(activated ? 'desktop runtime installed during setup' : 'desktop runtime already matches the release')
+  await logs.close()
+}
+
 async function main(): Promise<void> {
   const options = parseArguments(process.argv.slice(2))
   const locale = resolveDesktopLocale(options.locale)
   const messages = locale.messages
   const paths = resolveDesktopPaths()
+
+  // Node's own on-disk compile cache is what makes the backend's second start cheaper than its
+  // first: every module it loads is compiled once and the bytecode is reused afterwards. It must
+  // live outside the profile, which a release upgrade replaces wholesale, and it must exist before
+  // the backend is told to use it.
+  const compileCacheDir = join(paths.root, COMPILE_CACHE_DIRECTORY)
+  mkdirSync(compileCacheDir, { recursive: true })
 
   // The seed is no longer an installer resource, so only the runtime itself has to be present:
   // an offline or full installer still carries a seed beside it, and a normal one fetches it on
@@ -226,7 +292,7 @@ async function main(): Promise<void> {
 
   /** Start the Host from one project directory, sharing this process's run log. */
   const startHost = async (projectDir: string): Promise<DesktopHostProcess> => {
-    const next = new DesktopHostProcess(options.node, projectDir, undefined, logs, false)
+    const next = new DesktopHostProcess(options.node, projectDir, undefined, logs, false, compileCacheDir)
     const ready = await next.start()
     logShell(`backend ready: dsh ${ready.dshVersion} from ${projectDir}`)
     return next
@@ -607,4 +673,15 @@ process.on('unhandledRejection', (reason) => {
   process.exit(1)
 })
 
-await main()
+const argv = process.argv.slice(2)
+if (argv.includes(PREBUILD_SWITCH)) {
+  // The installer runs this once its files are in place. A failure is reported on stderr, which
+  // the installer writes to its own log, and sets the exit code so a manual run can tell success
+  // from failure; the installer ignores both and falls back to the first launch's own build.
+  await prebuild(argv).catch((error: unknown) => {
+    process.stderr.write(`dsh shell: prebuild failed: ${errorOf(error, 'prebuild failed').message}\n`)
+    process.exitCode = 1
+  })
+} else {
+  await main()
+}

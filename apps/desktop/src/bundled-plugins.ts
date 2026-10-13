@@ -42,6 +42,26 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     version: '0.1.45',
     active: false,
   },
+  {
+    // Mobile adaptation for the Web GUI: a client-only plugin whose host half is an empty apply,
+    // so it adds a plugin row and nothing else. Its one runtime request,
+    // `@deepseek-ai/dsh-client-ui-primitives`, is a baseline module every dynamic bundle may
+    // request (`PLATFORM_MODULES` in `packages/client/web/src/platform.ts`), so it needs no
+    // package beside it in the profile; the request is written to fall back to a null icon when a
+    // host release does not export the name it asks for.
+    name: 'dsh-web-mobile',
+    version: '3.0.6',
+    active: true,
+  },
+  {
+    // WeChat bridge. Pinned to the last release that declares `engines.dsh >=0.1.2-rc.1`, the line
+    // this product carries: 0.9.7 fixed the engine at `0.2.0-rc.2` and later releases widened it to
+    // `>=0.2.0-rc.2`, and the bridge reaches host services in process, so a 0.2-era build would call
+    // against APIs this baseline does not have. Its client half requests only baseline modules.
+    name: 'dsh-wechat',
+    version: '0.8.0',
+    active: true,
+  },
   { name: '@jieai/dsh-plugin-vet', version: '0.3.12', active: true },
   { name: '@liustack/modlens', version: '3.26.1', active: true },
   {

@@ -1,6 +1,6 @@
 [package]
 name = "harness-cn"
-version = "0.1.5-rc.19"
+version = "0.1.5-rc.20"
 description = "Harness-CN desktop shell"
 authors = ["水哥"]
 edition = "2021"
@@ -12,7 +12,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # `devtools` keeps the menu's developer-tools entry working in a release build, which is what
 # the Electron shell it replaces did; without the feature the call does not exist at all.
-tauri = { version = "2", features = ["devtools"] }
+# `tray-icon` is what lets closing the workspace window keep the product running from the
+# notification area: the backend the sidecar owns is expensive to build, so the close-to-quit
+# behaviour it replaces paid that cost again on every re-open.
+tauri = { version = "2", features = ["devtools", "tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `windows-sys` is already in the tree through Tauri's own Windows support; declaring it
