@@ -783,4 +783,57 @@ describe('desktop project transactions', () => {
     expect(readFileSync(join(paths.pnpm.store, 'release-2'), 'utf8')).toBe('two')
     await expect(manager.applyRelease(nextSeed, '1.1.0', hooks())).resolves.toBe(false)
   })
+
+  it('keeps a bundled plugin at the version this release ships instead of the older pin it replaced', async () => {
+    const root = temporaryRoot()
+    const paths = resolveDesktopPaths(join(root, '.dsh'))
+    const log = join(root, 'pnpm-log.json')
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+    const firstSeed = join(root, 'seed-1')
+    createTestSeedMetadata(firstSeed, release('1.0.0'))
+    writeFileSync(join(firstSeed, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    mkdirSync(join(firstSeed, 'store'), { recursive: true })
+    writeFileSync(join(firstSeed, 'store', 'release-1'), 'one')
+    writeLinkedProfileSeed(firstSeed, release('1.0.0'))
+    archiveStore(firstSeed)
+    writeIntegrity(firstSeed)
+    await manager.applyRelease(firstSeed, '1.0.0', hooks())
+    await manager.mutate({ type: 'plugin-add', spec: '@scope/plugin@2.0.0' }, hooks())
+
+    // A profile an older release wrote records that release's pin for a plugin this one bundles,
+    // next to a plugin the user added themselves. Only the user's plugin may be restored.
+    const manifestPath = join(paths.profile, 'package.json')
+    const name = 'dsh-wechat'
+    const stale = JSON.parse(readFileSync(manifestPath, 'utf8')) as { dependencies: Record<string, string> }
+    stale.dependencies[name] = '0.8.0'
+    writeFileSync(manifestPath, `${JSON.stringify(stale, undefined, 2)}\n`)
+
+    const nextSeed = join(root, 'seed-2')
+    createTestSeedMetadata(nextSeed, release('1.1.0'))
+    writeFileSync(join(nextSeed, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    mkdirSync(join(nextSeed, 'store'), { recursive: true })
+    writeFileSync(join(nextSeed, 'store', 'release-2'), 'two')
+    writeLinkedProfileSeed(nextSeed, release('1.1.0'))
+    archiveStore(nextSeed)
+    writeIntegrity(nextSeed)
+    const previousLog = process.env.TEST_PNPM_LOG
+    process.env.TEST_PNPM_LOG = log
+    try {
+      await expect(manager.applyRelease(nextSeed, '1.1.0', hooks())).resolves.toBe(true)
+    } finally {
+      if (previousLog === undefined) delete process.env.TEST_PNPM_LOG
+      else process.env.TEST_PNPM_LOG = previousLog
+    }
+
+    const rebuilt = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      dependencies: Record<string, string>
+      dsh: { profile: { bundles: string[] } }
+    }
+    expect(rebuilt.dsh.profile.bundles).toContain('@scope/plugin')
+    expect(existsSync(log)).toBe(true)
+    const invocation = JSON.parse(readFileSync(log, 'utf8')) as { args: string[] }
+    expect(invocation.args).toContain('@scope/plugin@2.0.0')
+    expect(invocation.args).not.toContain(`${name}@0.8.0`)
+    expect(invocation.args.join(' ')).not.toContain(name)
+  })
 })

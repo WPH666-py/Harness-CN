@@ -581,6 +581,42 @@ function readProfileLinkManifest(seedRoot: string): SeedProfileLinkManifest {
   return { schemaVersion: 1, links: links as Record<string, string> }
 }
 
+/** The two path facts pnpm's record has to agree with the installed tree about. */
+type RecordedPathKey = 'storeDir' | 'virtualStoreDir'
+
+/**
+ * Replace one recorded path fact, keeping the comma that ends its line.
+ * @param content - text of pnpm's `.modules.yaml`.
+ * @param key - path fact to replace.
+ * @param value - absolute path this tree actually occupies.
+ * @returns the record with that line rewritten, or the original text when it records no such fact.
+ */
+function rewriteRecordedPath(content: string, key: RecordedPathKey, value: string): string {
+  const line = new RegExp(`^([ \\t]*)"?${key}"?[ \\t]*:[^\\n]*$`, 'mu')
+  const match = line.exec(content)
+  if (match === null) return content
+  const ending = match[0].endsWith(',') ? ',' : ''
+  return content.replace(line, `${match[1] ?? ''}"${key}": ${JSON.stringify(value)}${ending}`)
+}
+
+/**
+ * Give back the comma an older rewrite of this record deleted.
+ *
+ * The record is JSON, and a rewrite that replaced the whole line also deleted the comma
+ * ending it, after which pnpm refuses the tree with `missed comma between flow collection
+ * entries`. Seeds built by those releases carry the damaged record, so a tree built from one
+ * has to be repaired here rather than only written correctly from now on.
+ * @param content - text of pnpm's `.modules.yaml`.
+ * @param key - path fact whose line may be missing its comma.
+ * @returns the record with the comma restored, or the original text when it is already correct.
+ */
+function restoreRecordedComma(content: string, key: RecordedPathKey): string {
+  return content.replace(
+    new RegExp(`^([ \\t]*"?${key}"?[ \\t]*:[^\\n]*[^,\\n])(\\r?\\n[ \\t]*")`, 'mu'),
+    '$1,$2',
+  )
+}
+
 /**
  * Point one materialized tree's pnpm record at the locations it actually occupies.
  *
@@ -604,12 +640,14 @@ function recordInstalledPnpmPaths(profileDir: string, storeRoot: string, install
     throw new Error(`desktop seed: package store ${storeRoot} holds no version directory`)
   }
   const content = readFileSync(modulesPath, 'utf8')
-  const rewritten = content
-    .replace(/^(\s*)"?storeDir"?\s*:.*$/mu, `$1"storeDir": ${JSON.stringify(join(storeRoot, storeVersion))}`)
-    .replace(
-      /^(\s*)"?virtualStoreDir"?\s*:.*$/mu,
-      `$1"virtualStoreDir": ${JSON.stringify(join(installedProfileDir, 'node_modules', '.pnpm'))}`,
-    )
+  const facts: readonly (readonly [RecordedPathKey, string])[] = [
+    ['storeDir', join(storeRoot, storeVersion)],
+    ['virtualStoreDir', join(installedProfileDir, 'node_modules', '.pnpm')],
+  ]
+  let rewritten = content
+  for (const [key, value] of facts) {
+    rewritten = rewriteRecordedPath(restoreRecordedComma(rewritten, key), key, value)
+  }
   // A tree that records neither path has nothing to correct, and rewriting more of pnpm's own
   // record than these two facts would be guesswork about a format this module does not own.
   if (rewritten !== content) writeFileSync(modulesPath, rewritten)

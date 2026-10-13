@@ -214,6 +214,47 @@ describe('desktop linked profile', () => {
     expect(modules).toContain(`"storeDir": ${JSON.stringify(join(store, 'v11'))}`)
     expect(modules).toContain(`"virtualStoreDir": ${JSON.stringify(join(installed, 'node_modules', '.pnpm'))}`)
     expect(modules).not.toContain('build-store')
+    // The values pnpm reads are quoted scalars in a flow collection, so the rewritten lines
+    // have to keep the commas that end them: without one pnpm reports `missed comma between
+    // flow collection entries` and refuses the tree.
+    expect(modules).toContain(`"storeDir": ${JSON.stringify(join(store, 'v11'))},`)
+    expect(modules).toContain(`"virtualStoreDir": ${JSON.stringify(join(installed, 'node_modules', '.pnpm'))},`)
+  })
+
+  it('repairs a record whose path lines lost their commas', async () => {
+    const root = temporaryRoot()
+    const store = join(root, 'store')
+    const profile = join(root, 'profile')
+    const seed = join(root, 'seed')
+    mkdirSync(join(store, 'v11', 'files'), { recursive: true })
+    mkdirSync(join(profile, 'node_modules'), { recursive: true })
+    mkdirSync(seed, { recursive: true })
+    const storePath = storePathFor('v11', 'alpha')
+    mkdirSync(join(store, ...storePath.split('/').slice(0, -1)), { recursive: true })
+    writeFileSync(join(store, ...storePath.split('/')), 'alpha')
+    linkSync(join(store, ...storePath.split('/')), join(profile, 'node_modules', 'linked.js'))
+    // What a seed built by an older release carries: replacing the whole line also deleted the
+    // comma ending it, which pnpm reads as a broken record.
+    writeFileSync(join(profile, 'node_modules', '.modules.yaml'), [
+      '"layoutVersion": 5,',
+      '"nodeLinker": "hoisted",',
+      '"storeDir": "C:\\\\Temp\\\\build-store\\\\v11"',
+      '"virtualStoreDir": "C:\\\\Temp\\\\staging\\\\profile\\\\node_modules\\\\.pnpm"',
+      '"virtualStoreDirMaxLength": 60,',
+      '',
+    ].join('\n'))
+    archiveLinkedProfile(seed, store, profile)
+
+    const rebuilt = join(root, 'rebuilt')
+    const installed = join(root, 'installed')
+    mkdirSync(rebuilt, { recursive: true })
+    await materializeLinkedProfile(seed, rebuilt, store, installed)
+
+    const modules = readFileSync(join(rebuilt, 'node_modules', '.modules.yaml'), 'utf8')
+    expect(modules).toContain(`"storeDir": ${JSON.stringify(join(store, 'v11'))},`)
+    expect(modules).toContain(`"virtualStoreDir": ${JSON.stringify(join(installed, 'node_modules', '.pnpm'))},`)
+    expect(modules).toContain('"virtualStoreDirMaxLength": 60,')
+    expect(modules).not.toContain('build-store')
   })
 
   it('rejects a manifest whose link escapes the profile directory', async () => {

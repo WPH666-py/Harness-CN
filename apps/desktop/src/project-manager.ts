@@ -858,16 +858,6 @@ export class DesktopProjectManager {
           )
           note('desktop runtime linked from the package store')
           progress(0.75)
-          if (plugins.length > 0) {
-            note(`restoring ${String(plugins.length)} desktop plugin(s)`)
-            await this.runPnpm(stagingProfile, [
-              'add',
-              ...plugins.map(plugin => `${plugin.name}@${plugin.version}`),
-              '--save-exact',
-              '--offline',
-            ])
-            writeProfilePlugins(stagingProfile, plugins)
-          }
           note('verifying the staged runtime')
           hooks.step?.('检查运行时完整性', 0)
           progress(0.85)
@@ -878,6 +868,7 @@ export class DesktopProjectManager {
           await this.activate(stagingProfile, hooks)
           note('desktop runtime activated')
           progress(0.94)
+          if (plugins.length > 0) await this.restorePlugins(plugins)
           return true
         } catch (error) {
           // The staging tree is dropped either way, because a retry needs an empty one: the
@@ -920,11 +911,13 @@ export class DesktopProjectManager {
     // the runtime is rebuilt here instead of installed: pnpm would recreate exactly these
     // files, at several times the cost of one link each.
     // The seed's tree already carries every bundled plugin at its pinned version, so a
-    // profile that only names those needs no pnpm run at all. A plugin the user added, or
-    // one they moved to another version, is the only thing restored from the store.
+    // profile that only names those needs no pnpm run at all. A plugin the user added is the
+    // only thing restored from the store: a bundled plugin whose recorded version differs is
+    // the pin an older seed wrote, and this release bundles the version it ships, so the tree
+    // already carries the version the profile should end up with.
     const bundled = bundledPluginDependencies()
     const plugins = (this.hasInstalledProfile() ? pluginRecords(this.paths.profile) : [])
-      .filter(plugin => bundled[plugin.name] !== plugin.version)
+      .filter(plugin => bundled[plugin.name] === undefined)
     copyMetadata(seedDir, stagingProfile)
     await materializeLinkedProfile(
       seedDir,
@@ -938,6 +931,34 @@ export class DesktopProjectManager {
       integrity: identity,
     } satisfies DesktopSeedIdentity)
     return plugins
+  }
+
+  /**
+   * Put back the plugins the user added, once the tree has taken its final path.
+   *
+   * pnpm cannot run inside a staged tree: the tree's dependencies are linked from the profile's
+   * final location, so pnpm refuses the virtual store the staging path implies
+   * (`ERR_PNPM_UNEXPECTED_VIRTUAL_STORE`). The restore therefore runs after activation, where
+   * the tree is where its own links say it is. A restore that fails leaves a profile that works
+   * without that plugin, so it is reported instead of failing a launch that already succeeded.
+   * @param plugins - plugins the user added, with the versions their profile records.
+   */
+  private async restorePlugins(plugins: readonly DesktopPluginRecord[]): Promise<void> {
+    this.note?.(`restoring ${String(plugins.length)} desktop plugin(s)`)
+    try {
+      await this.runPnpm(this.paths.profile, [
+        'add',
+        ...plugins.map(plugin => `${plugin.name}@${plugin.version}`),
+        '--save-exact',
+        '--offline',
+      ])
+      writeProfilePlugins(this.paths.profile, plugins)
+    } catch (error) {
+      this.note?.(
+        `could not restore ${plugins.map(plugin => plugin.name).join(', ')}: `
+        + `${errorOf(error, 'the plugin restore failed').message}`,
+      )
+    }
   }
 
   /**

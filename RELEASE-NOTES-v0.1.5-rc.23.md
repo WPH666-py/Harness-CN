@@ -1,18 +1,22 @@
-# Harness-CN 0.1.5-rc.22（Windows x64 桌面发行版）
+# Harness-CN 0.1.5-rc.23（Windows x64 桌面发行版）
 
 基于上游 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) `dsh-v0.1.5-rc.1` 的第三方发行版。
-本版修掉 rc.21 里**微信桥完全不可用**的缺陷（每条消息都回「无法创建/恢复 DSH 会话」），并让运行日志窗口**不可能再什么都不显示**；微信桥升到上游已修好的 0.10.0，并让它在微信里自称 **DSH-MoBot**。
+本版修掉 rc.21 里**微信桥完全不可用**的缺陷（每条消息都回「无法创建/恢复 DSH 会话」），让运行日志窗口**不可能再什么都不显示**，并修好**已装过旧版本的机器升不上来**的问题（rc.22 的重建路径会被坏掉的 pnpm 记录与「把旧钉版当成用户插件」两步卡住）；微信桥升到上游已修好的 0.10.0，并让它在微信里自称 **DSH-MoBot**。
 
-> **关于版本号**：`0.1.5-rc.22` 是发行版自己的版本；代码基线仍是上游 `dsh-v0.1.5-rc.1`。
+> **关于版本号**：`0.1.5-rc.23` 是发行版自己的版本；代码基线仍是上游 `dsh-v0.1.5-rc.1`。
 >
-> **rc.21 的微信桥不可用**：rc.21 里 `dsh-wechat` 钉在 0.8.0，该版本的会话创建回调会读 `ctx.agent`，被 Cordis 拒绝后每条微信消息都只能回复「⚠️ 无法创建/恢复 DSH 会话」。请用 rc.22；rc.20 则带启动失败的 `ENOTEMPTY` 缺陷，同样不要再用。
+> **rc.21 的微信桥不可用**：rc.21 里 `dsh-wechat` 钉在 0.8.0，该版本的会话创建回调会读 `ctx.agent`，被 Cordis 拒绝后每条微信消息都只能回复「⚠️ 无法创建/恢复 DSH 会话」。请用 rc.23。
+>
+> **rc.22 装得上、但升不上去**：rc.22 修好了微信桥，可它重建已有 profile 时先被一份改写坏掉的 pnpm 记录拦住（`missed comma between flow collection entries`），再被「把旧版钉版当成用户插件去恢复」拦住——已经装过 rc.21 或更早版本的机器升到 rc.22 会失败。请用 rc.23（见第十条）。
+>
+> **rc.20 及更早不要再用**：它们带启动失败的 `ENOTEMPTY` 缺陷。
 
 ## 下载
 
 | 文件 | 大小 | 用途 |
 | --- | --- | --- |
-| `Harness-CN_0.1.5-rc.22_x64-setup.exe` | 见发布页 | 安装程序 |
-| `Harness-CN-seed-0.1.5-rc.22.tar.zst` | 见发布页 | 离线包：Node + pnpm + 插件树 + 预热的包存储 |
+| `Harness-CN_0.1.5-rc.23_x64-setup.exe` | 见发布页 | 安装程序 |
+| `Harness-CN-seed-0.1.5-rc.23.tar.zst` | 见发布页 | 离线包：Node + pnpm + 插件树 + 预热的包存储 |
 
 安装包**未签名**，首装与每次更新都会有 SmartScreen 提示（更多信息 → 仍要运行）；按用户安装，不需要管理员权限。
 
@@ -131,15 +135,36 @@ rc.21 把退出改成握手（先请求宿主收尾，超过预算才强杀）�
 - 覆盖写而不是就地改：pnpm 把 store 条目**硬链接**进 profile，就地写会顺着链接改掉 store 里的原件，而记录里那些条目的哈希还是旧的。
 - `verifyOfflineInstallation` 现在会把物化出来的那棵树的分类表**读回来**校验，`apps/desktop/scripts/materialize-seed-check.ts` 用启动器自己的物化路径重放一遍；补丁若在归档环节掉了，构建就会失败，而不是发出去。
 
+### 十、已装过旧版本的机器现在能升上来（本版新增）
+
+**现象**：在一台装过旧版本的机器上更新到 rc.22，启动走到「重建桌面运行时」就失败：
+
+```
+dsh shell: prebuild failed: desktop project: pnpm exited with 1: [ERROR] missed comma between flow collection entries (1812:3)
+```
+
+**根因**（同一条重建路径上的两个缺陷）：
+
+- `recordInstalledPnpmPaths` 会把物化出来的树里 pnpm 的记录（`node_modules/.modules.yaml`）改写到它真正所在的位置。改写按整行匹配（`^(…)"?storeDir"?\s*:.*$`），写回时没有带上行尾的逗号；这份记录是 JSON，逗号一缺 pnpm 就拒绝整棵树，之后该 profile 里每条 pnpm 命令都失败。
+- 恢复用户插件那一步是在**暂存目录里、激活之前**跑 `pnpm add … --offline`。暂存树的依赖按 profile 的最终位置链接，pnpm 因此拒绝暂存路径对应的虚拟存储；而且它用 `bundled[名字] !== 版本` 判断「哪些是用户加的插件」，于是把旧版本写下的钉版（rc.21 的 profile 里 `dsh-wechat` 0.8.0）当成用户的选择，去恢复一个离线包本来就带有的包。
+
+**修复**（`apps/desktop/src/seed-store.ts`、`apps/desktop/src/project-manager.ts`）：
+
+- 改写保留每行原有的行尾符号；已经丢掉逗号的记录在物化一棵树时**补回来**——受损记录在所有已发布版本的离线包里，所以修复必须发生在物化时，而不只是以后写对。
+- 只恢复**本版没有捆绑**的插件：旧 profile 里记的版本是那次发布的钉版，不是用户的选择。
+- 恢复挪到**激活之后**：此时树就在它自己的链接所指的位置，pnpm 与它一致；恢复失败只写一行日志，不会让一次已经成功的启动失败。
+
 ## 本次发布的验证方式
 
 - **微信桥先说复现**：在本机 rc.21 的 profile 上，日志里每一次微信消息都成对出现 `[dsh-wechat] preset mount failed` 与 `[dsh-wechat] create session failed`，错误正文为 `cannot get property "agent" without inject`；`dsh-wechat@0.10.0` 的 `dist/dsh/sessions.js` 里该回调已写成 `agentSetup(agentCtx, agent)`，脚本对这份真实模块跑一遍得到「无需改动」，对 0.8.0 的真实模块跑一遍得到改写后的字节。
 - **补丁的单元测试**：`apps/desktop/tests/patch-wechat-sessions.spec.ts` 7 项、`apps/desktop/tests/patch-wechat-identity.spec.ts` 6 项全绿——0.8.0 形状的模块逐行改写、0.10.0 形状的模块（含提到 `ctx.agent` 的注释）保持原样、无法锚定的模块直接报错、CLI 第二次运行只说「无需改动」、profile 目录与 `node_modules` 根两种入参都校验、命名补丁改完的文件能 `import` 出这个名字；`apps/desktop/tests/seed-package.spec.ts` 16 项全绿。
-- **运行日志页面实测**：把正在运行的 rc.21 外壳页面用无头 Edge 打开（CDP 取 DOM），状态行为「显示 39 条，内存保留 39 条，已丢弃 0 条。C:\Users\admin\AppData\Local\com.harnesscn.desktop\logs\harness.log」，39 行记录首行是启动日志——证明脚本、cookie、`/shell-api/logs` 链路本身是通的，空白窗口是「模块卡住且无人接手」这一种失败模式。
+- **运行日志页面实测**：把正在运行的 rc.21 外壳页面用无头 Edge 打开（CDP 取 DOM），状态行为「显示 39 条，内存保留 39 条，已丢弃 0 条。C:\Users\admin\AppData\Local\com.harnesscn.desktop\logs\harness.log」，39 行记录首行是启动日志——证明脚本、cookie、`/shell-api/logs` 链路本身是通的，空白窗口是「模块卡住且无人接手」这一种失败模式。本版再用一个「永不回答 `/shell-api/`」的静态页复跑同一检查：第 5 秒页面写出「界面文字读取失败，已用页面自带的文字继续：读取运行日志超时（5000 毫秒）」，之后每 5 秒改写为「读取运行日志失败，正在重试（已试 N 次）…」，第 4 次放弃时写出「日志页面无法读取运行日志：读取运行日志超时（5000 毫秒）」；把接口改成延迟 2 秒才回答，同一页面照常渲染出记录。
 - **ENOTEMPTY 复现与修复**（rc.21 起）：用 rc.20 的 sidecar，把 `.partial\desktop-packages\half-unpacked.tgz` 用 `FileShare::None` 按住不放，再跑 `--prebuild`——解包第一步就退出：`EBUSY: resource busy or locked, unlink '…\seed-0.1.5-rc.20.partial\desktop-packages\half-unpacked.tgz'`（exit 1）；换成本版构建的 sidecar，在**同样的**被占用状态下 `--prebuild` 跑到 `staged runtime verified: 28545 files` / `desktop runtime activated`，exit 0，被占用的旧目录原地不动。这与用户报的 `ENOTEMPTY` 是**同一步、同一目录**，错误码取决于删除在哪一层被拦住。
 - **离线包**：`prepare:seed` 重建通过，`verifyOfflineInstallation`（把 profile 从 store 链接清单物化出来再校验）通过，并把 `dsh-wechat` 的会话补丁与命名补丁从**归档后的**离线包里读回来校验；`dsh-web-mobile`、`dsh-wechat` 记为 `file:` 依赖并写进 `dsh.profile.bundles`。
 - **发布物自检**：`scripts/release/verify-harness-cn-release.mjs <版本> <目录>` 把安装包与离线包在本机、GitHub、Gitee 三处逐一比对 sha256，全部一致才算发布完成。
 - **`compress` 分类补丁**：先在一份未改动的 `dsh-rule-engine@0.6.4` 上验证「补之前 = `unknown`、补之后 = `artifact`、重复运行不重复写」，再让 `prepare:seed` 带着补丁重建离线包，最后用启动器的物化路径从**归档后的**离线包还原出 profile 并读回分类表（`compress=artifact`，其余判定不变）。
+- **升级路径在本机实测**：拿一份 rc.21 装好的 profile，用本版的 sidecar 跑 `--prebuild`（`DSH_HOME` 清空，落回用户的 `~/.dsh`），一次通过：50 秒内 `desktop runtime activated`，profile 的依赖集变成 rc.22 那一版、`dsh-wechat` 从 0.8.0 变成 0.10.0。修之前，同一条命令先后跑 139 秒与 46 秒，两次都失败在 `pnpm exited with 1 … missed comma between flow collection entries`。
+- **升级路径的单元测试**：`apps/desktop/tests/seed-store.spec.ts` 13 项、`apps/desktop/tests/project-manager.spec.ts` 19 项全绿——后者新增一项：旧钉版的捆绑插件与用户插件并存时，只有用户插件会走到 pnpm。
 - 安装程序与离线包由同一条 `tauri build` 链路产出，`cargo check --release` 与各 app 的 `tsc` 通过。
 
 ## 已知限制
