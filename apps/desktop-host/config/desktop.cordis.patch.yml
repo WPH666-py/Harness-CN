@@ -30,6 +30,20 @@
 - id: directory-picker
   disabled: true
 
+# A bundled third-party plugin also replaces the stock `directory-picker` row, inserting its own
+# browse pair behind a platform guard: `process.platform === 'win32' && (desktopRuntime is win32 ||
+# desktopProfiles is defined)`. That guard exists so a DSH Desktop profile keeps the in-page
+# picker, but this host provides neither service, so on Windows the guard is always false and the
+# browse pair would mount alongside the native pair inserted below. Both backends register the
+# same single-instance `directoryPicker` service, and the second registration fails the whole
+# plugin tree. These two rows therefore belong to the desktop carrier: disable them here, in the
+# winning layer, whatever plugin inserted them.
+- id: directory-picker-mobile-host
+  disabled: true
+
+- id: directory-picker-mobile-surface
+  disabled: true
+
 - id: connection
   inject:
     - credentials
