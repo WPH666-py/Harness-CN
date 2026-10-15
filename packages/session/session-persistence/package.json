@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-session-persistence",
   "description": "Abstract durable session persistence seam (ctx.sessionPersistence) for the DeepSeek Harness",
-  "version": "0.1.5-rc.23",
+  "version": "0.1.5-rc.25",
   "publishConfig": {
     "access": "public"
   },

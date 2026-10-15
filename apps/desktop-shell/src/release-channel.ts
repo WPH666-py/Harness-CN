@@ -66,6 +66,28 @@ function cancelled(reason: unknown): Error {
   return new Error(`${UPDATE_CANCELLED}: ${reason instanceof Error ? reason.message : String(reason)}`)
 }
 
+/**
+ * Readable text for a failed transfer.
+ *
+ * `fetch` reports every transport failure as a bare "fetch failed" and keeps the real reason in
+ * `cause` — DNS, a refused connection, TLS, a reset socket. That wrapper would otherwise be the
+ * whole message the window shows and the whole line the run log records, which leaves a failure no
+ * one can act on. Appending the cause chain here keeps the reason the user needs.
+ * @param error - whatever the transfer rejected with.
+ * @returns an Error whose message names the underlying failure when there is one.
+ */
+function describeFailure(error: unknown): Error {
+  if (!(error instanceof Error)) return new Error(String(error))
+  const causes: string[] = []
+  let cause: unknown = error.cause
+  while (cause instanceof Error && causes.length < 4) {
+    causes.push(cause.message)
+    cause = cause.cause
+  }
+  const detail = causes.filter(text => text !== '' && text !== error.message).join(' <- ')
+  return detail === '' ? error : new Error(`${error.message} (${detail})`)
+}
+
 /** The file this channel installs, from whatever name a host gave it. */
 function pickInstaller(assets: readonly ReleaseAsset[]): ReleaseAsset | undefined {
   return assets.find(asset => /[_-]setup\.exe$/iu.test(asset.name))
@@ -176,7 +198,7 @@ export async function downloadVerified(request: VerifiedDownloadRequest): Promis
     // A cancellation is the user's own instruction and has to arrive as itself: reporting it as a
     // failed transfer would leave the window offering to retry something the user just stopped.
     if (request.signal?.aborted === true) throw cancelled(request.signal.reason)
-    throw error instanceof Error ? error : new Error(String(error))
+    throw describeFailure(error)
   } finally {
     clearTimeout(totalTimer)
     if (stallTimer !== undefined) clearTimeout(stallTimer)

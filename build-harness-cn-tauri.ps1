@@ -26,6 +26,11 @@ $ArtifactsDir = Join-Path $TauriRoot 'target\release\bundle\nsis'
 $LogFile      = Join-Path $RepoRoot 'build-tauri.log'
 $IconPath     = Join-Path $RepoRoot 'Harness.ico'
 
+# Start from an empty log. The recovery check at the end reads this file to decide whether a
+# non-zero exit still produced its installer, and a message left by an earlier run would let a
+# build that genuinely failed be reported as complete.
+Remove-Item -LiteralPath $LogFile -Force -ErrorAction SilentlyContinue
+
 function Assert-Command([string]$Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
     throw "Required command '$Name' was not found on PATH."
@@ -89,7 +94,39 @@ Write-Host ''
 Write-Host '=== pnpm --filter @deepseek-ai/dsh-desktop-shell run build ===' -ForegroundColor Cyan
 Write-Host '(build:sidecar, prepare:shell, tauri build)'
 $rc = Invoke-Logged -Exe 'pnpm' -ExeArgs @('--filter', '@deepseek-ai/dsh-desktop-shell', 'run', 'build') -Log $LogFile -Append
-if ($rc -ne 0) { throw "Tauri packaging failed with exit code $rc. See $LogFile" }
+if ($rc -ne 0) {
+  # The build can finish its work and still exit non-zero, and two known causes are both
+  # benign here. Neither is detectable from the exit code, so both are read out of the log
+  # and both require the installer itself to have been written to be accepted.
+  #
+  #   1. DSH Desktop wraps pnpm in its own runner, which stops a run that has shown no
+  #      output and touched nothing under the profile for IDLE_TIMEOUT_MS (five minutes,
+  #      dsh-desktop-market-installer/pnpm-runner.mjs). `tauri build` prints nothing at all
+  #      while rustc compiles, so a long compile is exactly the shape it misreads; the
+  #      runner kills the tree and the wrapper reports exit code 1 for a build that had
+  #      already written its bundle.
+  #   2. `tauri build` itself has been observed to exit 1 after reporting 'Finished 1
+  #      bundle', which leaves a complete installer behind.
+  #
+  # The version has to be the one just built, not any installer sitting in the folder.
+  $planned = (Get-Content -LiteralPath (Join-Path $RepoRoot 'package.json') -Raw | ConvertFrom-Json).version
+  $produced = @(
+    Get-ChildItem -Path (Join-Path $ArtifactsDir ("*{0}*" -f $planned)) -Filter '*.exe' -ErrorAction SilentlyContinue
+  )
+  $log = ''
+  if (Test-Path -LiteralPath $LogFile) { $log = Get-Content -LiteralPath $LogFile -Raw }
+  $watchdogKilled = $log -match 'produced no output and touched nothing'
+  $tauriFinished  = $log -match 'Finished 1 bundle'
+  if ($produced.Count -gt 0 -and ($watchdogKilled -or $tauriFinished)) {
+    Write-Warning "The build reported exit code $rc, but the installer for $planned was written anyway."
+    if ($watchdogKilled) {
+      Write-Warning 'Cause: DSH Desktop''s pnpm runner killed the run for five minutes of silence; `tauri build` says nothing while rustc compiles.'
+    }
+    Write-Warning 'Treating this as a completed build. Verify the installer before publishing.'
+  } else {
+    throw "Tauri packaging failed with exit code $rc. See $LogFile"
+  }
+}
 
 # --- Report ------------------------------------------------------------------
 

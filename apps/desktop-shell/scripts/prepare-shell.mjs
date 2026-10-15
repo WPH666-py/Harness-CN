@@ -118,8 +118,13 @@ if (withSeed) {
 // named after the release it belongs to. zstd rather than gzip because the download is the user's
 // wall-clock and zstd is roughly a fifth smaller on this content at a level it still compresses at
 // build speed; the app accepts either extension, so older releases stay fetchable.
+//
+// Level 22 is the default because of Gitee: a release is published to both hosts from the same
+// files, Gitee caps an attachment at 100 MB, and a seed carrying the mobile and WeChat plugins is
+// already past that at level 19 (measured on rc.24: 124.1 MiB at 19, 97.0 MiB at 22). The extra
+// minutes are build-machine time, and the assertion below refuses a package nobody could download.
 mkdirSync(ARTIFACT_ROOT, { recursive: true })
-const level = Number(process.env.HARNESS_CN_ZSTD_LEVEL ?? '19')
+const level = Number(process.env.HARNESS_CN_ZSTD_LEVEL ?? '22')
 const tarPath = join(ARTIFACT_ROOT, `Harness-CN-seed-${version}.tar`)
 const archive = join(ARTIFACT_ROOT, `Harness-CN-seed-${version}.tar.zst`)
 rmSync(tarPath, { force: true })
@@ -139,8 +144,19 @@ await pipeline(
   createWriteStream(archive),
 )
 rmSync(tarPath, { force: true })
-const megabytes = (statSync(archive).size / 1024 / 1024).toFixed(1)
+const archiveBytes = statSync(archive).size
+const megabytes = (archiveBytes / 1024 / 1024).toFixed(1)
 process.stdout.write(`prepare-shell: offline package ${archive} (${megabytes} MB, zstd -${String(level)})\n`)
+
+// Gitee refuses an attachment over 100 MB, and publishing is all-or-nothing across both hosts, so a
+// package past the cap is one nobody can download. Fail the build here instead of at the upload.
+const GITEE_ATTACHMENT_LIMIT = 100 * 1024 * 1024
+if (archiveBytes > GITEE_ATTACHMENT_LIMIT) {
+  throw new Error(
+    `prepare-shell: the offline package is ${megabytes} MB and Gitee caps an attachment at 100 MB; ` +
+      `raise HARNESS_CN_ZSTD_LEVEL above ${String(level)} or drop a bundled plugin`,
+  )
+}
 
 // Tauri needs the application icon inside `src-tauri`, and it takes it from the Electron shell's
 // own build resources so both shells of this fork wear the same icon by construction.

@@ -118,7 +118,11 @@ describe('desktop update skip wiring', () => {
     const coordinator = coordinatorOver(backend, store, remembered)
 
     await expect(coordinator.check()).resolves.toEqual({ phase: 'idle', current: '' })
-    await expect(coordinator.install()).rejects.toThrow(/no verified update is available/u)
+    await expect(coordinator.install()).resolves.toEqual({
+      phase: 'error',
+      current: '',
+      message: '没有可安装的更新，请先检查更新。',
+    })
     expect(backend.download).not.toHaveBeenCalled()
   })
 
@@ -173,6 +177,7 @@ describe('desktop update skip wiring', () => {
 
     expect(notes).toEqual([
       'release channel offers 0.1.6',
+      'desktop update 0.1.6: downloading the installer',
       'desktop update 0.1.6 downloaded (unverified)',
     ])
   })

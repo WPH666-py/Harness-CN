@@ -242,6 +242,7 @@ describe('desktop update coordinator', () => {
 
     expect(notes).toEqual([
       'release channel offers 1.1.0',
+      'desktop update 1.1.0: downloading the installer',
       'desktop update 1.1.0 downloaded (unverified)',
     ])
   })
@@ -304,7 +305,11 @@ describe('desktop update skip state', () => {
     await store.remember('1.1.0')
 
     await expect(skipping.check()).resolves.toEqual({ phase: 'idle', current: '' })
-    await expect(skipping.install()).rejects.toThrow(/no verified update is available/u)
+    await expect(skipping.install()).resolves.toEqual({
+      phase: 'error',
+      current: '',
+      message: '没有可安装的更新，请先检查更新。',
+    })
   })
 
   it('prompts again for the skipped version when the user checks manually', async () => {

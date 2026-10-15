@@ -72,17 +72,32 @@ export class DesktopUpdateCoordinator {
   }
 
   /**
-   * Wait for an in-flight check, then download and install its retained release.
+   * Download and install the release already retained, waiting only for a check already running.
    *
    * The order is download, then `beforeRestart`, then the installer, then this process: the
    * installer cannot replace files the shell still has open, so the exit belongs to the same
-   * operation that started it. A failure anywhere before the installer starts leaves the shell
-   * running and publishes `error`.
+   * operation that started it. The operation always answers with a published state and never
+   * rejects, so a window that clicked install always has something to render.
    */
   async install(): Promise<DesktopUpdateState> {
     if (this.installOperation !== undefined) return this.installOperation
+    // The click has to produce something to render at once. Reporting the start of the install
+    // before anything is awaited is what keeps the window from sitting on the previous state —
+    // an install held behind a check that is still running (or that already failed) is exactly
+    // the click that used to look ignored.
+    const retained = this.offer
+    if (retained !== undefined) {
+      this.publish({ ...this.offered(retained), phase: 'installing', progress: 0, downloaded: 0 })
+    }
     this.installOperation = (async () => {
-      await this.checkOperation
+      // Only a check that is already running is worth waiting for, and only because it may be the
+      // one about to retain the offer. A new check is never started here, and a failed one becomes
+      // a visible state rather than a rejected install.
+      if (this.offer === undefined) await this.checkOperation?.catch(() => undefined)
+      const offer = this.offer
+      if (offer !== undefined && offer !== retained) {
+        this.publish({ ...this.offered(offer), phase: 'installing', progress: 0, downloaded: 0 })
+      }
       return this.doInstall()
     })().finally(() => { this.installOperation = undefined })
     return this.installOperation
@@ -127,11 +142,16 @@ export class DesktopUpdateCoordinator {
   private async doInstall(): Promise<DesktopUpdateState> {
     const offer = this.offer
     if (offer === undefined) {
-      throw new Error('desktop update: no verified update is available')
+      // Nothing to install is still an answer the window has to receive. Throwing here was a 500
+      // the page could not render, which is what a click that does nothing looks like.
+      this.note('desktop update: install asked for with no release offered')
+      return this.publish({ phase: 'error', current: this.currentVersion, message: '没有可安装的更新，请先检查更新。' })
     }
     const abort = new AbortController()
     this.downloading = abort
-    this.publish({ ...this.offered(offer), phase: 'installing', progress: 0, downloaded: 0 })
+    // The install start was already published by `install()`, which had to answer the click before
+    // awaiting anything; publishing it again here would only make the window draw it twice.
+    this.note(`desktop update ${offer.version}: downloading the installer`)
     try {
       const integrity = await this.backend.download({
         version: offer.version,
@@ -149,10 +169,14 @@ export class DesktopUpdateCoordinator {
       this.requestExit(installer)
       return ready
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // A download that failed has to leave a trace of its own: the published state is the only
+      // thing the window sees, and the run log is the only thing a user can read afterwards.
+      this.note(`desktop update ${offer.version} failed: ${message}`)
       return this.publish({
         ...this.offered(offer),
         phase: 'error',
-        message: error instanceof Error ? error.message : String(error),
+        message,
       })
     } finally {
       this.downloading = undefined

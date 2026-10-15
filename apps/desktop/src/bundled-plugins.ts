@@ -54,6 +54,25 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     active: true,
   },
   {
+    // Phone access: the LAN/remote gateway that serves the Web GUI over HTTPS with a QR pairing
+    // page, plus its own in-page pickers for the two cases this profile gets wrong on a phone.
+    // `dsh-web-mobile` above is only the mobile *layout*; this is the piece that makes the GUI
+    // reachable from the phone at all, which is why it is the one that was missing.
+    //
+    // It declares no `engines.dsh` at all — all six of its peers (react, cordis, dsh-llm,
+    // dsh-commands, dsh-host-webserver, dsh-client-connection) are optional, so there is no second
+    // copy of the cordis/session chain for pnpm to install beside the Host's own, and it mounts on
+    // this baseline — observed running here, serving with managed TLS and a signed CA.
+    //
+    // Order matters. Its bundle patch disables the stock `directory-picker` row and inserts a
+    // mobile host/Client browse pair guarded by a platform check, so the patch has to be applied
+    // in a layer that can still see the row it disables; `dsh-web-mobile` above stays first so
+    // the mobile surface is mounted before this one starts rearranging rows.
+    name: 'dsh-mobile',
+    version: '0.6.4',
+    active: true,
+  },
+  {
     // WeChat bridge.
     //
     // 0.8.0 was the last release declaring `engines.dsh >=0.1.2-rc.1`, the line this product
