@@ -36,12 +36,27 @@ const SEED_STAGED = join(RESOURCE_ROOT, 'seed')
 
 /**
  * The version the installer will report.
+ *
+ * Three files carry this release's version and nothing bumps them together: `tauri.conf.json`
+ * names the installer and the offline package, `Cargo.toml` names the crate, `Cargo.lock` records
+ * it. The package-manifest bump in `scripts/release/bump.ts` reads `package.json` globs only, so a
+ * release that forgets these three builds an installer under the *previous* version's name and
+ * publishes it over that release's asset. Disagreement therefore fails here, loudly.
+ *
  * @returns the version `tauri.conf.json` declares, which is the one file that defines it.
  */
 function applicationVersion() {
   const config = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'src-tauri', 'tauri.conf.json'), 'utf8'))
   if (typeof config.version !== 'string' || config.version === '') {
     throw new Error('prepare-shell: tauri.conf.json carries no version')
+  }
+  const crate = /^version = "([^"]+)"/m.exec(readFileSync(join(PACKAGE_ROOT, 'src-tauri', 'Cargo.toml'), 'utf8'))
+  if (crate?.[1] !== config.version) {
+    throw new Error(`prepare-shell: Cargo.toml declares ${String(crate?.[1])} while tauri.conf.json declares ${config.version}`)
+  }
+  const locked = /\[\[package\]\]\nname = "harness-cn"\nversion = "([^"]+)"/.exec(readFileSync(join(PACKAGE_ROOT, 'src-tauri', 'Cargo.lock'), 'utf8'))
+  if (locked?.[1] !== config.version) {
+    throw new Error(`prepare-shell: Cargo.lock declares ${String(locked?.[1])} while tauri.conf.json declares ${config.version}`)
   }
   return config.version
 }
