@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-desktop-shell",
-  "version": "0.1.5-rc.27",
+  "version": "0.1.5-rc.28",
   "private": true,
   "license": "MIT",
   "author": "Harness-CN",
@@ -10,7 +10,7 @@
     "check:types": "tsc -p tsconfig.check.json",
     "build:sidecar": "node scripts/build-sidecar.mjs",
     "prepare:shell": "node scripts/prepare-shell.mjs",
-    "build": "node scripts/build-sidecar.mjs && node scripts/prepare-shell.mjs && tauri build",
+    "build": "node scripts/build-sidecar.mjs && node scripts/prepare-shell.mjs && node scripts/tauri-build.mjs",
     "tauri": "tauri"
   },
   "devDependencies": {
