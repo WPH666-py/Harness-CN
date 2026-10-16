@@ -8,7 +8,7 @@ English | [中文](2026-10-16-desktop-bundled-plugin-set-and-offline-package-siz
 
 A fresh Desktop profile only carries the plugins the release bundles: `apps/desktop/src/bundled-plugins.ts` is the list the seed warms its pnpm store from, the profile manifest is copied from that seed, and `dsh.profile.bundles` activates the rows. Three capabilities users ask for were outside that list, so a first launch without a registry could not load them: white-box long-term memory, image recognition for text-only models, and the WorkBuddy desktop app's own model provider.
 
-Adding them is not free in one dimension the release cares about. The offline package is one archive of the whole seed, it is published as a release attachment, and Gitee caps an attachment at 100 MiB while `prepare-shell.mjs` refuses a build past that cap so a release nobody can download fails at build time rather than at the upload. The memory plugin alone is the largest package this repository bundles by two orders of magnitude — npm reports 42.4 MiB unpacked (44 434 676 bytes) — and the rc.25 seed was already 96.9 MiB (101 604 376 bytes) at zstd level 22.
+Adding them is not free in one dimension the release cares about. The offline package is one archive of the whole seed, it is published as a release attachment, and Gitee caps an attachment at 100 MiB; at rc.26 the build refused to produce an archive past that cap, so a release nobody could download failed at build time rather than at the upload. The memory plugin alone is the largest package this repository bundles by two orders of magnitude — npm reports 42.4 MiB unpacked (44 434 676 bytes) — and the rc.25 seed was already 96.9 MiB (101 604 376 bytes) at zstd level 22.
 
 ## Decision
 
@@ -20,7 +20,7 @@ Three entries join the bundled set as active rows with exact pins, each document
 
 Versions stay exact because three places must agree: the pnpm store `prepare:seed` warms, the profile manifest copied from the seed, and the `dsh.profile.bundles` list. `verifyOfflineInstallation` catches a drifted pin at build time instead of on a user's machine.
 
-The seed-size ceiling becomes an explicit build knob instead of a constant. `apps/desktop-shell/scripts/prepare-shell.mjs` reads `HARNESS_CN_SEED_LIMIT_MB`, defaulting to 100 — Gitee's attachment cap, so an ordinary build still fails loudly when the seed grows past it — and `0` disables the check for a release that does not go to Gitee. Release 0.1.5-rc.26 is built that way: the archive is 122.2 MiB at zstd level 22.
+The seed-size ceiling stops binding the build. `apps/desktop-shell/scripts/prepare-shell.mjs` still reads `HARNESS_CN_SEED_LIMIT_MB`, but it now defaults to `0` — no ceiling — because the release process answers the publication constraint directly: `scripts/release/split-offline-package.mjs` cuts the archive into fixed-size parts (64 MiB each) plus a manifest carrying every part's sha256 and the whole archive's, GitHub keeps the whole file, and Gitee carries the parts. A release that has to stay publishable as one attachment sets the variable to its host's cap and gets the loud failure back.
 
 ## Alternatives considered
 
@@ -28,7 +28,7 @@ The seed-size ceiling becomes an explicit build knob instead of a constant. `app
 
 **Drop the memory plugin to stay under Gitee's cap.** Rejected: it is the feature. The cap is a publication constraint, not a reason to withhold the package the other two additions are less than a tenth the size of.
 
-**Split the offline package into a core archive and an extras archive.** Deferred rather than rejected: the first-launch path fetches one file and validates one inventory, so a split is an architecture change to the seed contract (identity, integrity, store merge) rather than a release-time choice. It is the way to get a >100 MiB capability set onto both hosts again.
+**Split the offline package into a core archive and an extras archive.** Not taken: the first-launch path fetches one file and validates one inventory, so splitting the *seed contract* is an architecture change to identity, integrity, and the store merge rather than a release-time choice. What release 0.1.5-rc.27 does instead is split the *attachment*: byte-range parts of one unchanged archive, concatenated before use, which leaves the contract intact and still fits a host that caps one file.
 
 **Raise the zstd level above 22.** Rejected: 22 is the highest standard level the encoder accepts, and the measured gain from 19 to 22 is already spent (rc.24: 124.1 MiB at 19, 97.0 MiB at 22).
 
@@ -36,10 +36,10 @@ The seed-size ceiling becomes an explicit build knob instead of a constant. `app
 
 ## Consequences
 
-The rc.26 seed is 122.2 MiB, so the offline package can only be attached to a GitHub release for now; a Gitee release of this build cannot carry it, and the release notes say so. Anyone who wants Gitee to host the offline package again has to shrink the bundled set or split the archive.
+The rc.26 seed is 122.2 MiB. Release 0.1.5-rc.27 publishes it whole on GitHub and as parts on Gitee, whose per-attachment cap is why the parts exist: a downloader concatenates them in name order and checks the whole-archive digest the manifest carries, and both hosts serve the same installer.
 
 Every installed profile now carries the memory plugin's files and the two smaller additions, and all three load without a registry because the seed store holds their closures. The memory plugin's own bundle patch is a single insert, and the two others register through their own patches, so no Desktop patch layer gained a row for them.
 
-The seed-size guard is weaker by exactly one environment variable: a build that sets `HARNESS_CN_SEED_LIMIT_MB=0` ships whatever it produced. That is deliberate — the ceiling belongs to a publication decision the build cannot make — and the default keeps the loud failure for everyone who does not set it.
+The seed-size guard is opt-in rather than default-on: a build ships whatever it produced unless `HARNESS_CN_SEED_LIMIT_MB` names a ceiling. That is deliberate — the ceiling belongs to a publication decision the build cannot make, and the release process no longer needs one.
 
 The [DeepSeek account and bonus credits](2026-10-16-desktop-deepseek-account-and-bonus-credits.md) note owns the other packages that entered the same seed, including the official client package this release removed, which partly offsets the growth here.

@@ -29,7 +29,7 @@ kind: "package-reference"
 
 ### 未登录
 
-未登录时，该行提供登录，调用 `startSignIn(client, window.location.origin, 'desktop')`——当前页面源成为回跳地址，`'desktop'` 选择桌面客户端类型。当一次尝试报告阶段（`initializing`、`waiting-browser`、`exchanging`、`committing`、`expired`）时，状态行取代该操作，并提供取消；没有进行中的尝试时，该行只显示登录操作。
+未登录时，该行提供登录，调用 `startSignIn(client, window.location.origin, 'desktop')`——当前页面源成为回跳地址，`'desktop'` 选择桌面客户端类型。当一次尝试报告阶段（`initializing`、`waiting-browser`、`exchanging`、`committing`、`expired`）时，状态行取代该操作，并提供取消；没有进行中的尝试时，该行只显示登录操作。当一次尝试进入 `waiting-browser` 时，该行会在新窗口中打开它的 `authorizeUrl` 一次——账户服务只产生该 URL，没有别的组件去打开它——并在状态行旁保留一个 `open` 链接，供拒绝该自动请求的载体使用。
 
 ### 已登录
 
@@ -93,7 +93,7 @@ kind: "package-reference"
 
 这些限制描述该行在桌面发行版上的行为；它们是当前包约束。
 
-- **Electron 开发外壳中的外部链接**——已发布的 Tauri 外壳把页面的新窗口请求交给平台浏览器（只放行 `http` 与 `https`，从不放行 loopback），因此登录尝试的 `authorizeUrl` 与 `usageUrl`/`topUpUrl` 链接在已发布应用中正常打开；开发所用的 Electron 外壳拒绝每一个新窗口，因此这些点击在那里没有反应。
+- **Electron 开发外壳中的外部链接**——已发布的 Tauri 外壳把页面的新窗口请求交给平台浏览器（只放行 `http` 与 `https`，从不放行 loopback），因此一次尝试进入 `waiting-browser` 后该行打开一次的 `authorizeUrl`、以及 `usageUrl`/`topUpUrl` 链接，在已发布应用中正常打开；开发所用的 Electron 外壳拒绝每一个新窗口（无论是自动打开还是点击），因此授权页在那里始终不会出现，只剩状态行旁的 `open` 链接。
 - **尽力而为的确认**——失败的 `ackBonusNotified` 只在分区保持挂载期间重试，因此过早关闭分区会让该额度保持未通知（安全的方向）。
 - **退出登录确认依赖一次宿主读取**——`hasRunningAccountTasks()` 失败时，未知情形会用更弱的断言提出同一个问题，而不是阻塞退出登录。
 

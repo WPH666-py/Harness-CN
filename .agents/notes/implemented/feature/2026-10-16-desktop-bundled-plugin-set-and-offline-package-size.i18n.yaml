@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-10-16-desktop-bundled-plugin-set-and-offline-package-size.md
-2026-10-16-desktop-bundled-plugin-set-and-offline-package-size.md: 30948ff3221aad4242b4188366e93ac1a410fe92
-2026-10-16-desktop-bundled-plugin-set-and-offline-package-size.zh.md: 815108bf707285a3ffe400ac2bd3836786cade58
+2026-10-16-desktop-bundled-plugin-set-and-offline-package-size.md: 0f4efe39df6f25a5121068353ae8d538e3f481b2
+2026-10-16-desktop-bundled-plugin-set-and-offline-package-size.zh.md: 8fb839e3ebe7a3417b20aed3fe9fc8493f170061

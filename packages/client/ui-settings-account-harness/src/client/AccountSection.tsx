@@ -4,12 +4,15 @@
  *
  * The row renders the snapshot its controller publishes and calls back for
  * every action, so it owns no subscription and its only local state is the
- * sign-out confirmation the user opened. Every external link is a plain
- * anchor: the Desktop shell's window refuses off-origin navigation, so the
- * links serve a browser-hosted profile and stay inert in the shell.
+ * sign-out confirmation the user opened. The authorization page of a sign-in
+ * attempt is opened once, as soon as the attempt reports its URL, because
+ * nothing else does it: the account service only produces the URL. Every
+ * external link stays a plain anchor beside it, so a carrier that refuses the
+ * open (the Electron development shell denies every new window) still leaves
+ * the page one click away.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button, IconCloseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
@@ -135,6 +138,17 @@ export function AccountSection(props: AccountSectionProps): ReactNode {
 
   const view = state.view
   const attempt = view !== undefined && view.status === 'signed-out' ? view.attempt : null
+
+  // One open per attempt: the snapshot is republished on every Host frame, so the
+  // effect runs many times for the same attempt and the id is what makes it once.
+  const opened = useRef<SignInAttemptId | null>(null)
+  useEffect(() => {
+    if (attempt === null || attempt.phase !== 'waiting-browser' || attempt.authorizeUrl === undefined) return
+    if (opened.current === attempt.id) return
+    opened.current = attempt.id
+    window.open(attempt.authorizeUrl, '_blank', 'noopener,noreferrer')
+  }, [attempt])
+
   const phaseCopy = attempt === null ? undefined : PHASE_COPY[attempt.phase]
   const statusText = phaseCopy === undefined ? undefined : t(phaseCopy)
   const profile = state.profile

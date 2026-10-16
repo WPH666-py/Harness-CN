@@ -9,7 +9,7 @@
  * copy and the callback behind every gesture.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
@@ -25,6 +25,10 @@ import type {
   SignInAttemptView,
 } from '../src/client/types.ts'
 
+// jsdom answers window.open with its own stub and a console complaint; the row is
+// asserted on the calls it makes, so the browser's answer is not the subject here.
+beforeEach(() => { vi.spyOn(window, 'open').mockImplementation(() => null) })
+afterEach(() => { vi.restoreAllMocks() })
 afterEach(cleanup)
 
 /** Program links every view carries. */
@@ -199,6 +203,45 @@ describe('AccountSection', () => {
       expect(screen.queryByRole('button', { name: en.cancel }) === null).toBe(!active)
       expect(screen.queryByRole('link', { name: en.open }) === null).toBe(!active)
     }
+  })
+
+  it('opens each attempt page once and leaves the anchor as the fallback', async () => {
+    const row = createRow()
+    renderRow(row)
+    const open = vi.mocked(window.open)
+
+    expect(open).not.toHaveBeenCalled()
+
+    await row.update({
+      view: signedOutView({ id: ATTEMPT_ID, phase: 'waiting-browser', authorizeUrl: AUTHORIZE_URL }),
+    })
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(open).toHaveBeenCalledWith(AUTHORIZE_URL, '_blank', 'noopener,noreferrer')
+    expect(screen.getByRole('link', { name: en.open }).getAttribute('href')).toBe(AUTHORIZE_URL)
+
+    // The same attempt republished and then advanced must not open a second page,
+    // and a waiting attempt that carries no URL yet opens nothing either.
+    await row.update({
+      view: signedOutView({ id: ATTEMPT_ID, phase: 'waiting-browser', authorizeUrl: AUTHORIZE_URL }),
+    })
+    await row.update({
+      view: signedOutView({ id: ATTEMPT_ID, phase: 'exchanging', authorizeUrl: AUTHORIZE_URL }),
+    })
+    await row.update({ view: signedOutView({ id: ATTEMPT_ID, phase: 'waiting-browser' }) })
+    expect(open).toHaveBeenCalledTimes(1)
+
+    // A second attempt gets its own page, and an attempt that never reached the
+    // browser opens none.
+    await row.update({
+      view: signedOutView({
+        id: 'attempt-2' as SignInAttemptId,
+        phase: 'waiting-browser',
+        authorizeUrl: 'https://platform.example/authorize-2',
+      }),
+    })
+    expect(open).toHaveBeenCalledTimes(2)
+    await row.update({ view: signedOutView({ id: ATTEMPT_ID, phase: 'initializing' }) })
+    expect(open).toHaveBeenCalledTimes(2)
   })
 
   it('calls the injected action for each signed-out gesture', async () => {

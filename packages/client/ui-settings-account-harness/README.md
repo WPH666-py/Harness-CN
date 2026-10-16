@@ -29,7 +29,7 @@ The **Account & balance** row is one line in Settings and the whole account surf
 
 ### Signed out
 
-Signed out, the row offers sign-in, which calls `startSignIn(client, window.location.origin, 'desktop')` — the current page origin becomes the return address and `'desktop'` selects the desktop client kind. While an attempt reports a phase (`initializing`, `waiting-browser`, `exchanging`, `committing`, `expired`), a status line replaces the action and a cancel is offered in its place; with no attempt in flight the row shows the sign-in action alone.
+Signed out, the row offers sign-in, which calls `startSignIn(client, window.location.origin, 'desktop')` — the current page origin becomes the return address and `'desktop'` selects the desktop client kind. While an attempt reports a phase (`initializing`, `waiting-browser`, `exchanging`, `committing`, `expired`), a status line replaces the action and a cancel is offered in its place; with no attempt in flight the row shows the sign-in action alone. When an attempt reaches `waiting-browser` the row opens its `authorizeUrl` once in a new window — the account service produces the URL but nothing else opens it — and keeps an `open` link beside the status line for a carrier that refuses the automatic request.
 
 ### Signed in
 
@@ -93,7 +93,7 @@ None; this package neither assembles nor sends a provider request.
 
 These limits describe how the row behaves on the desktop distribution; they are current package constraints.
 
-- **External links in the Electron development shell** — the shipped Tauri shell answers a page's new-window request by handing the address to the platform browser (only `http` and `https`, never loopback), so the sign-in attempt's `authorizeUrl` and the `usageUrl`/`topUpUrl` links open normally in the shipped app; the Electron shell used for development denies every new window, so those clicks do nothing there.
+- **External links in the Electron development shell** — the shipped Tauri shell answers a page's new-window request by handing the address to the platform browser (only `http` and `https`, never loopback), so the `authorizeUrl` the row opens once an attempt reaches `waiting-browser` and the `usageUrl`/`topUpUrl` links open normally in the shipped app; the Electron shell used for development denies every new window, automatic or clicked, so the attempt page never appears there and the `open` link beside the status line is the only thing left.
 - **Best-effort acknowledgement** — a failed `ackBonusNotified` is retried only while the section stays mounted, so closing the section early leaves the credit unnotified (the safe direction).
 - **Sign-out confirmation depends on a host read** — when `hasRunningAccountTasks()` fails, the unknown case asks the same question with a weaker claim rather than blocking sign-out.
 

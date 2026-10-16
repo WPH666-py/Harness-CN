@@ -243,7 +243,8 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     // every other profile, where an insert naming an absent package fails the whole tree.
     //
     // Its peers are `@deepseek-ai/dsh-authorization`, `dsh-credentials`, `dsh-host-webserver`,
-    // and its own base package at `^0.1.7-alpha.1`, while this line carries 0.1.5-rc.26. That
+    // and its own base package at `^0.1.7-alpha.1`, while this distribution's profile carries the
+    // 0.1.5 line. That
     // range is declared, not enforced: the profile workspace sets `autoInstallPeers: false`, so
     // pnpm warns instead of installing a second copy of the seams, and the APIs this package
     // calls are the ones the line already has — `credentials.readRecord` / `modifyRecord` /
@@ -265,7 +266,7 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     // `getUnnotifiedBonuses` / `ackBonusNotified` — and the codecs that carry it. Those codecs
     // are emitted in the newer `create()` schema form, which this line's typert loader, registry,
     // and gateway now accept alongside the eager `schema` form they emit themselves (see the
-    // Agent Note for 0.1.5-rc.26).
+    // Agent Note `2026-10-16-typert-codec-schema-forms`).
     name: '@deepseek-ai/dsh-api-account-controller',
     version: '0.1.7-rc.2',
     active: false,

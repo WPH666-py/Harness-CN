@@ -148,18 +148,20 @@ const archiveBytes = statSync(archive).size
 const megabytes = (archiveBytes / 1024 / 1024).toFixed(1)
 process.stdout.write(`prepare-shell: offline package ${archive} (${megabytes} MB, zstd -${String(level)})\n`)
 
-// Gitee refuses an attachment over 100 MB, and publishing is all-or-nothing across both hosts, so a
-// package past the cap is one nobody can download. Fail the build here instead of at the upload.
+// Gitee refuses an attachment over 100 MB, so an offline package past that cap is published in
+// fixed-size parts (`scripts/release/split-offline-package.mjs`) while GitHub keeps the whole
+// archive; the release is downloadable from both hosts either way.
 //
-// `HARNESS_CN_SEED_LIMIT_MB` is the deliberate way out for a release that is not going to Gitee:
-// set it to the largest attachment this release's hosts accept, or to 0 to skip the check. The
-// default stays Gitee's cap, so an ordinary build still fails loudly when the seed grows past it.
-const limitMb = Number(process.env.HARNESS_CN_SEED_LIMIT_MB ?? '100')
+// The size check is therefore opt-in: `HARNESS_CN_SEED_LIMIT_MB` is the largest attachment this
+// release's hosts accept as one file, and 0 — the default — skips the check. Set it to a positive
+// number for a release that has to stay publishable as a single attachment, and the build fails
+// here instead of at the upload.
+const limitMb = Number(process.env.HARNESS_CN_SEED_LIMIT_MB ?? '0')
 const limitBytes = limitMb * 1024 * 1024
 if (limitMb > 0 && archiveBytes > limitBytes) {
   throw new Error(
     `prepare-shell: the offline package is ${megabytes} MB and the configured attachment limit is ${String(limitMb)} MB; ` +
-      `raise HARNESS_CN_ZSTD_LEVEL above ${String(level)}, raise HARNESS_CN_SEED_LIMIT_MB, or drop a bundled plugin`,
+      `raise HARNESS_CN_ZSTD_LEVEL above ${String(level)}, raise or unset HARNESS_CN_SEED_LIMIT_MB, or drop a bundled plugin`,
   )
 }
 
