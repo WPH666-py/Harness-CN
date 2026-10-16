@@ -64,8 +64,12 @@ for (let index = 0; index < count; index += 1) {
     const want = Math.min(buffer.length, target - written)
     const { bytesRead } = await handle.read(buffer, 0, want, offset + written)
     if (bytesRead === 0) throw new Error(`unexpected end of ${name} at ${String(offset + written)}`)
-    sink.write(buffer.subarray(0, bytesRead))
-    hash.update(buffer.subarray(0, bytesRead))
+    // Copy before handing the bytes to the stream: `fs.WriteStream` keeps the caller's buffer until
+    // the write completes, while the next read overwrites it, so a reused buffer would put different
+    // bytes on disk than were hashed here.
+    const chunk = Buffer.from(buffer.subarray(0, bytesRead))
+    if (!sink.write(chunk)) await once(sink, 'drain')
+    hash.update(chunk)
     written += bytesRead
   }
   sink.end()

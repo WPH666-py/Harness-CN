@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-10-16-esbuild-oversized-temp-input.md
-2026-10-16-esbuild-oversized-temp-input.md: 31d734ecad74e1a0db217ec12016eeca5119bc32
-2026-10-16-esbuild-oversized-temp-input.zh.md: 942d3f8b46d69443355ef2d08ae16e1320be72df
+2026-10-16-esbuild-oversized-temp-input.md: 5c34eec924d26505d3c4474c9132dbb6f914b38c
+2026-10-16-esbuild-oversized-temp-input.zh.md: 347d214682884a2300a29db5b0663c55652e29ca
