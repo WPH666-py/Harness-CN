@@ -55,14 +55,13 @@
 - **类型与产物**：`tsc -b packages/client/ui-settings-account-harness/tsconfig.json` 与 `tsc -b tsconfig.client.json` 均以 0 退出；`run-oxlint.ts` 对该包报 0 个警告、0 个错误；进包的客户端半边 `lib/client.js` 34 479 字节（gzip 9 677 字节，sha256 `fa47807d7958afc57cefd0dc37985284492a1adb377e8a8a51dacf996c3e6179`，含自动打开授权页的那一行）、宿主半边 `lib/index.js` 388 字节。
 - **骨架门禁**：`verify-client-packages` 报 52 个客户端包（47 个动态、5 个静态）满足包模式与模块请求规则；`gen-client-catalog.ts --check` 与 `gen-tsconfig-paths.ts --check` 都报已是最新。
 - **文档门禁**：`verify-agent-note-format`（339 篇）与 `verify-agent-note-classification`（339 篇）全部通过；`verify-translation-pairing`、`verify-md-links`（1603 个文件）、`verify-package-readme-summaries`（320 篇）、`verify-package-readme-limitations`（269 篇）均通过；账号包的 README 与 Agent Note 已就地更新。
-- **构建**：（安装包与离线包的字节数、sha256 见下方「本次实际发布」）。
-- **本次实际发布**：（回读校验结果见下方「本次实际发布」小节）。
+- **构建**：`build-harness-cn-tauri.ps1 -SkipPrepare` 以 0 退出；安装包 `Harness-CN_0.1.5-rc.27_x64-setup.exe` 28 835 209 字节、sha256 `3b46b80a394f240a3401133ae364a402b4fcec3d65a9392f1126b875ae96aa35`；离线包 `Harness-CN-seed-0.1.5-rc.27.tar.zst` 127 911 057 字节（122.0 MiB）、sha256 `9b835aac3aa0edb35b6602bc5e653caf8e066de984ed6e9c7b6d31a115a390e0`；分卷 `…part1of2` 67 108 864 字节、`…part2of2` 60 802 193 字节，拼接后与整包逐字节一致（见下）。
 
 ### 本次实际发布
 
-- **GitHub**：`v0.1.5-rc.27`（prerelease），资产为安装包与整包离线包。
-- **Gitee**：`v0.1.5-rc.27`，资产为安装包、两卷离线包与分卷清单。
-- 两处的每个资产都从各自的下载地址回读校验过 sha256；Gitee 的两卷拼接后与 GitHub 整包的 sha256 一致。
+- **GitHub**：[`v0.1.5-rc.27`](https://github.com/WPH666-py/Harness-CN/releases/tag/v0.1.5-rc.27)（prerelease），资产为安装包（28 835 209 字节）与整包离线包（127 911 057 字节），服务端记录的摘要与本地构建逐字节一致。
+- **Gitee**：[`v0.1.5-rc.27`](https://gitee.com/ph-wang/Harness-CN/releases/tag/v0.1.5-rc.27)，资产为安装包、两卷离线包（67 108 864 + 60 802 193 字节）与分卷清单。
+- **回读校验**：两处的每个资产都从各自的下载地址重新下载并算过 sha256——安装包 `3b46b80a…aa35`、离线包 `9b835aac…90e0`；Gitee 的两卷拼接后同样是 127 911 057 字节、sha256 `9b835aac…90e0`，与 GitHub 整包逐字节一致。
 - **未演练的部分**：真实 DeepSeek 账号登录、真实赠金到账与确认仍未在本机演练；Windows 载体上的界面观感需要人工确认。
 
 ## 已知限制
