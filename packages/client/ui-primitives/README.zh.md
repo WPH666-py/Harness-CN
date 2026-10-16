@@ -93,6 +93,7 @@ kind: "package-library"
 | 文件 | 职责 |
 |---|---|
 | [`src/index.ts`](src/index.ts) | 原子组件公开导出 |
+| [`src/code-highlighting.ts`](src/code-highlighting.ts) | 文件名后缀到语法 id 的选择（`languageForPath`、`CODE_HIGHLIGHT_EXTENSIONS`），以及共享 Shiki 高亮器之上的 React 绑定（`useCodeHighlighter`） |
 | [`src/markdown/`](src/markdown/) | Markdown 与数学公式流水线：micromark 解析、KaTeX 排版、增量流式渲染器、`CodeBlock`/`JsonBlock` |
 | [`src/TerminalBlock.tsx`](src/TerminalBlock.tsx) | ANSI 转义解析（`anser`）与终端卡片渲染 |
 | [`src/ReadBlock.tsx`](src/ReadBlock.tsx) / [`src/DiffBlock.tsx`](src/DiffBlock.tsx) | 读取与差异卡片 |

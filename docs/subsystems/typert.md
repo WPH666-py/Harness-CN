@@ -46,7 +46,10 @@ type TypertCodec =
   | {
     readonly mode: 'strict'
     readonly typeSymbol: string
-    readonly schema: TypertSchema
+    /** Eager runtime schema. */
+    readonly schema?: TypertSchema
+    /** Lazy runtime-schema factory accepted in place of `schema`. */
+    readonly create?: () => TypertSchema
   }
   | {
     readonly mode: 'src-json'

@@ -1,4 +1,4 @@
-> **本仓库是 [Harness-CN](README.zh-CN.md)**——DeepSeek Harness 0.1.5-rc.1 的非官方 Windows 桌面发行版。它把整套运行时（内置的 Node、pnpm 与已安装的插件树）打包为一个未签名的 `win-x64` 安装程序，因此全新的机器无需任何开发者工具链。请从本仓库的 **Releases** 下载；中文指南、该 fork 的改动、构建步骤与故障排查章节都位于 **[README.zh-CN.md](README.zh-CN.md)**。上游自带的文档紧随其后，对本 fork 未改动的部分仍然适用。
+> **本仓库是 [Harness-CN](README.zh-CN.md)**——DeepSeek Harness 0.1.5-rc.1 的非官方 Windows 桌面发行版。它把整套运行时（内置的 Node、pnpm 与已安装的插件树）打包为一个自签名的 `win-x64` 安装程序，因此全新的机器无需任何开发者工具链。请从本仓库的 **Releases** 下载；中文指南、该 fork 的改动、构建步骤与故障排查章节都位于 **[README.zh-CN.md](README.zh-CN.md)**。上游自带的文档紧随其后，对本 fork 未改动的部分仍然适用。
 >
 > **装之前请先看 [SYSTEM-REQUIREMENTS.zh.md](SYSTEM-REQUIREMENTS.zh.md)**：该页写明这台机器需要什么（Windows x64、WebView2、约 1 GB 磁盘、能访问 gitee.com 或 api.github.com）、不需要什么（无需 Node/pnpm、无需管理员权限、首启之后离线可启动），以及代理、npm 镜像、自签证书、手动放置离线包各自怎么配。
 
