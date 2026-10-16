@@ -138,7 +138,9 @@ if (Test-Path $ArtifactsDir) {
     Format-Table -AutoSize
   Write-Host "Artifacts: $ArtifactsDir"
   Write-Host ''
-  Write-Host 'The installer is unsigned, so Windows SmartScreen warns on first run.'
+  Write-Host 'The installer carries a Harness-CN Authenticode signature whenever a code-signing'
+  Write-Host 'certificate is present in the current user store (HARNESS_CN_SIGN_THUMBPRINT or'
+  Write-Host 'HARNESS_CN_SIGN_SUBJECT); otherwise it is unsigned and SmartScreen warns on first run.'
 } else {
   Write-Warning "Expected artifact directory was not created: $ArtifactsDir"
 }
