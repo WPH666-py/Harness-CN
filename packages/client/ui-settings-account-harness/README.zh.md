@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-**账号与余额**是桌面发行版的 DeepSeek 账户界面：设置中的一行，负责登录、展示两行余额、呈现赠送额度，以及退出登录。它经 `ctx.slots.inject()` 注册一个 `settings.section` 贡献，因此只在桌面宿主各行为 `remote.account` 提供来源时出现，其余位置什么都不做。这一行本身就是完整界面——没有标题、说明或常驻文案——它渲染的一切，包括进行中的登录阶段与提示卡片，都是该分区自身挂载所持有的快照订阅。
+**账号与余额**是桌面发行版的 DeepSeek 账户界面：设置中的一行，负责登录、展示两行余额、呈现赠送额度，以及退出登录。它挂载账户 Remote 贡献，并注册一个 `settings.section` 贡献，因此只要本包被加载，这一行就存在，读取的正是它自己挂载所提供的命名空间。这一行本身就是完整界面——没有标题、说明或常驻文案——它渲染的一切，包括进行中的登录阶段与提示卡片，都是该分区自身挂载所持有的快照订阅。
 
 ## 目录
 
@@ -49,9 +49,9 @@ kind: "package-reference"
 
 该分区是一份快照的纯渲染：`src/client/AccountSectionController` 持有一个 `SnapshotStore<AccountSectionState>` 并订阅账户状态流，因此视图不会偏离收到的状态。
 
-### 注册
+### 挂载与注册
 
-浏览器插件注册一个 id 为 `account`、`order: -10`、`locale: 'settings.account'` 的本地化 `settings.section` 贡献；其 label 为 `nav` 键。注册经 `ctx.slots.inject('settings.section', ...)` 完成，`inject = ['slots', 'locale', 'remote', 'remote.account']`，因此能跟随延迟声明、重新声明、本地化变化与 teardown，而无需 import 分区拥有方。这里没有产品门禁：账户宿主包缺席时 `remote.account` 不会出现，插件什么也不做。上游 Client 包（`@deepseek-ai/dsh-client-ui-settings-account`）注册进 `settings.launcher`、`settings.models.sign-in` 与 `shell.quota-notice`，这些都不在本线 slot 注册表声明的范围内，因此本线拥有自己的浏览器半边。
+浏览器插件先挂载生成的账户 Remote 贡献——`@deepseek-ai/dsh-api-account-controller/remote`，与桌面宿主各行所加载的是同一个 `0.1.7-rc.2` 包——然后注册一个 id 为 `account`、`order: -10`、`locale: 'settings.account'` 的本地化 `settings.section` 贡献；其 label 为 `nav` 键。`inject` 为 `['slots', 'locale', 'remote']`：正是这次挂载把 `remote.account` 放到本 Client 的 Remote 服务上，所以把该命名空间声明为必需服务会形成循环。挂载注册为插件的第一个 effect，因此它也是 Cordis 最后才回退的一环——晚于那一行及其状态流。本仓的 Client 装配并不选择该命名空间（`packages/api/remotes/src/client/index.ts` 挂载的是一份不含它的固定清单），而这个生成贡献是浏览器包允许内联的形态。宿主不提供账户各行时也不再是启动门禁：挂载在本地就会成功，读取则以 Remote 失败返回，那一行会把它渲染为自己的失败状态。注册本身经 `ctx.slots.inject('settings.section', ...)` 完成，因此能跟随延迟声明、重新声明、本地化变化与 teardown，而无需 import 分区拥有方。上游 Client 包（`@deepseek-ai/dsh-client-ui-settings-account`）注册进 `settings.launcher`、`settings.models.sign-in` 与 `shell.quota-notice`，这些都不在本线 slot 注册表声明的范围内，因此本线拥有自己的浏览器半边。
 
 ### 状态与生命周期
 

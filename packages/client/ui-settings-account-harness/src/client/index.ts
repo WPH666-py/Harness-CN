@@ -1,11 +1,16 @@
 /**
- * Account & balance settings plugin, browser half. It registers one
- * `settings.section` row that signs in to DeepSeek, shows the topped-up and
- * granted balances, and surfaces each credited bonus once. Every call goes to
- * the Host's `remote.account` namespace; no credential ever reaches this half.
+ * Account & balance settings plugin, browser half. It mounts the Desktop
+ * account Remote contribution, registers one `settings.section` row that signs
+ * in to DeepSeek, shows the topped-up and granted balances, and surfaces each
+ * credited bonus once. Every call goes to the Host's `remote.account`
+ * namespace; no credential ever reaches this half.
  * Export discipline: packages/client/AGENTS.md.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
+// Value import: the generated Remote contribution this half mounts. The Desktop
+// Host serves the same namespace, so the peer is always there; this Client
+// assembly selects no account namespace of its own (packages/api/remotes).
+import accountRemote from '@deepseek-ai/dsh-api-account-controller/remote'
 // Type-only: pulls the shell's SlotMap merge (the 'settings.section' entry).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
@@ -14,8 +19,6 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 // Type-only: pulls the ctx.remote merge into this program.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
-// Type-only: declares the `remote.account` namespace this plugin consumes.
-import type {} from './types.ts'
 import { AccountSection } from './AccountSection.tsx'
 import type { AccountSectionInjected } from './AccountSection.tsx'
 import { AccountSectionController } from './account-store.ts'
@@ -36,22 +39,28 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 const NS = 'settings.account'
 
 /**
- * Required services (cordis fiber inject). `remote.account` is what makes this
- * row self-gating: a Host without the account namespace — every desktop shell
- * older than the one that ships it — leaves the fiber pending, so the row never
- * mounts and nothing fails loudly. The target slot belongs to ui-settings'
- * apply, whose activation order relative to this one is NOT constrained;
- * registration depends on that slot through `slots.inject()`.
+ * Required services (cordis fiber inject). `remote` is the typed Namespace
+ * Table this plugin mounts the account contribution into — injecting
+ * `remote.account` would be circular, since this apply is what provides it.
+ * The target slot belongs to ui-settings' apply, whose activation order
+ * relative to this one is NOT constrained; registration depends on that slot
+ * through `slots.inject()`.
  */
-export const inject = ['slots', 'locale', 'remote', 'remote.account']
+export const inject = ['slots', 'locale', 'remote']
 
 /**
- * Register the Account & balance row once the `settings.section` declaration
- * is on the ledger, and drive its store from the Host account stream for as
- * long as this fiber is active.
+ * Mount the account namespace, register the Account & balance row once the
+ * `settings.section` declaration is on the ledger, and drive its store from the
+ * Host account stream for as long as this fiber is active.
  * @param ctx - client root context.
+ * @returns fulfilment once the namespace is mounted and the row is registered.
  */
-export function apply(ctx: ClientContext): void {
+export async function apply(ctx: ClientContext): Promise<void> {
+  const unmount = await ctx.remote.$mount(accountRemote)
+  // Registered ahead of every consumer below: Cordis unwinds effects in reverse
+  // registration order, so the namespace outlives the row and its stream.
+  ctx.effect(() => () => unmount(), 'ui-settings-account-harness: account namespace')
+
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-settings-account-harness: copy dictionaries')
 
   const controller = new AccountSectionController(ctx)

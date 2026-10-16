@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-10-16-desktop-vision-plugin-config-forms.md
+2026-10-16-desktop-vision-plugin-config-forms.md: c2c6d54506291db3492e2da3fc7c718f5a66d1fb
+2026-10-16-desktop-vision-plugin-config-forms.zh.md: 664b1200bbe80acbaa3c19afdcba151303511b4a

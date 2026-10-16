@@ -12,10 +12,10 @@ Status: implemented
 
 ## Decision
 
-三条以 `active: true` 且版本精确钉住的行加入内置集，每条都在原地写清理由：
+三条以版本精确钉住的条目加入内置集，每条都在原地写清理由，其中两条列为 active 行：
 
 - `@furongjun1999/dsh-memory` `0.8.1`——一条宿主行加上其工具读取的知识树；它在运行时导入的每个包（`dsh-session`、`dsh-system-prompt`、`dsh-tools`）与声明的每个 peer 都是本 profile 已经提供的。
-- `@lp181818/dsh-vision-plugin` `1.2.3`——给纯文本模型用的图像识别，从它自己的 Settings 页配置。它与 `@anionex/dsh-vision-toolkit` 不同，后者因为首次使用时会自行准备 Python 运行时而保持 inactive；这一个只是 44 KB 的 JavaScript，宿主半边只导入 `@deepseek-ai/cordis` 与 `@deepseek-ai/schemastery`。
+- `@lp181818/dsh-vision-plugin` `1.2.3`——给纯文本模型用的图像识别，从它自己的 Settings 页配置。它与 `@anionex/dsh-vision-toolkit` 不同，后者因为首次使用时会自行准备 Python 运行时而保持 inactive；这一个只是 44 KB 的 JavaScript，宿主半边只导入 `@deepseek-ai/cordis` 与 `@deepseek-ai/schemastery`。它被安装并钉版，但不列出，因为它的浏览器半边等待本线客户端没有的 `configForms` 服务，而这个 pending 等待会让整个 Web 启动失败。[那一决策](../bug-fix/2026-10-16-desktop-vision-plugin-config-forms.zh.md)拥有机制与备选方案。
 - `dsh-workbuddy-connect` `0.6.5`——WorkBuddy 桌面端自己的模型服务，挂成一条 `llm-workbuddy` provider 行，不启动任何 OAuth 流程、也不改默认模型。它钉在其 0.1.5 走廊的最后一个版本上，因为 0.7.0 起把每个 dsh peer 都钉到 `0.2.0-rc.2`——本产品不携带那条线——而 0.6.5 对它需要的七个接缝接受 `^0.1.5-rc.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || ^0.2.0-rc.1`；它在走廊外的唯一 peer `@earendil-works/pi-ai` 已按它要求的版本装在这里，因为 `dsh-llm-pi-ai` 依赖它。
 
 版本必须精确，因为三处必须一致：`prepare:seed` 预热的 pnpm store、从种子复制的 profile 清单，以及 `dsh.profile.bundles` 列表。钉版漂移会被 `verifyOfflineInstallation` 在构建期抓住，而不是落到用户机器上。
@@ -38,7 +38,7 @@ Status: implemented
 
 rc.26 的种子是 122.2 MiB。0.1.5-rc.27 在 GitHub 上发整包、在 Gitee 上发分卷——该站的单附件上限正是分卷存在的理由：下载者按名字顺序拼接各卷，再按清单携带的整包摘要校验，两个托管方提供同一个安装包。
 
-现在每个安装好的 profile 都会带上记忆插件的文件与另外两项较小的新增，而三者都无需 registry 就能加载，因为种子 store 持有它们的闭包。记忆插件自带的 bundle patch 只有一条 insert，另外两者也各自通过自己的 patch 注册，因此没有任何桌面补丁层为它们新增行。
+现在每个安装好的 profile 都会带上记忆插件的文件与另外两项较小的新增；记忆插件与 WorkBuddy provider 无需 registry 就能加载，因为种子 store 持有它们的闭包，而视觉插件的文件同样随包发行，只是未被列出、因而从不挂载，理由见[它自己的笔记](../bug-fix/2026-10-16-desktop-vision-plugin-config-forms.zh.md)。记忆插件自带的 bundle patch 只有一条 insert，另外两者也各自带有自己的 patch，因此没有任何桌面补丁层为它们新增行。
 
 种子体积门禁从默认开启改为按需开启：除非 `HARNESS_CN_SEED_LIMIT_MB` 给出上限，构建会发布它产出的任何东西。这是有意的——上限属于构建无法替之决定的发布决策，而发布流程已经不再需要它。
 

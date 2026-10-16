@@ -11,6 +11,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
+import accountRemote from '@deepseek-ai/dsh-api-account-controller/remote'
 import { AccountSection, type AccountSectionInjected } from '../src/client/AccountSection.tsx'
 import { apply, inject } from '../src/client/index.ts'
 import { en, zh, type AccountSettingsKey } from '../src/client/locales.ts'
@@ -111,8 +112,9 @@ interface RegisteredRow {
 
 /**
  * Build one fake client Context plus every registration the case inspects: the
- * effect labels and disposers, the dictionary registration, the slot injection,
- * and the `settings.section` register call that injection performs.
+ * namespace mount, the effect labels and disposers, the dictionary
+ * registration, the slot injection, and the `settings.section` register call
+ * that injection performs.
  */
 function createHarness() {
   const account = {
@@ -173,15 +175,17 @@ function createHarness() {
     effectDisposers.push(dispose)
     return dispose
   })
+  const unmount = vi.fn(async () => {})
+  const mount = vi.fn(async () => unmount)
   const ctx = {
     effect,
     locale,
     slots,
-    remote: { account, $stream: remoteStream },
+    remote: { account, $mount: mount, $stream: remoteStream },
   } as unknown as Context
   created.push({ effectDisposers })
   return {
-    ctx, account, streamDispose, remoteStream, dictionaryDispose, localeRegistrations,
+    ctx, account, mount, unmount, streamDispose, remoteStream, dictionaryDispose, localeRegistrations,
     boundNamespaces, translate, effectLabels, effectDisposers, registered, register,
     slotInjections,
     /** Swap the dictionary the fake locale service hands back to the label thunk. */
@@ -213,14 +217,20 @@ afterEach(() => {
 
 describe('the account settings plugin', () => {
   it('declares the services the row waits on', () => {
-    expect(inject).toEqual(['slots', 'locale', 'remote', 'remote.account'])
+    expect(inject).toEqual(['slots', 'locale', 'remote'])
   })
 
-  it('registers the copy dictionaries and the account stream as effects', async () => {
+  it('mounts the account namespace, then registers the copy dictionaries and the account stream as effects', async () => {
     const h = createHarness()
-    apply(h.ctx)
+    await apply(h.ctx)
+
+    // The mount is what puts `remote.account` on this Client's Remote service:
+    // no workspace Client assembly selects the namespace, so this half owns it.
+    expect(h.mount).toHaveBeenCalledTimes(1)
+    expect(h.mount).toHaveBeenCalledWith(accountRemote)
 
     expect(h.effectLabels).toEqual([
+      'ui-settings-account-harness: account namespace',
       'ui-settings-account-harness: copy dictionaries',
       'ui-settings-account-harness: account state stream',
     ])
@@ -232,14 +242,17 @@ describe('the account settings plugin', () => {
 
     await settle()
 
+    // Effects unwind in reverse registration order, so the namespace — registered
+    // first — is the last thing to go.
     for (const dispose of h.effectDisposers) dispose()
     expect(h.dictionaryDispose).toHaveBeenCalledTimes(1)
     expect(h.streamDispose).toHaveBeenCalledTimes(1)
+    expect(h.unmount).toHaveBeenCalledTimes(1)
   })
 
-  it('registers the row only once the settings.section declaration arrives', () => {
+  it('registers the row only once the settings.section declaration arrives', async () => {
     const h = createHarness()
-    apply(h.ctx)
+    await apply(h.ctx)
 
     expect(h.slotInjections.map(entry => entry.name)).toEqual(['settings.section'])
     expect(h.register).not.toHaveBeenCalled()
@@ -264,7 +277,7 @@ describe('the account settings plugin', () => {
 
   it('wires every injected callback to the controller', async () => {
     const h = createHarness()
-    apply(h.ctx)
+    await apply(h.ctx)
     const { face } = installRow(h)
 
     const metadata: unknown = expect.objectContaining({ version: CLIENT_VERSION, locale: ACTIVE_LOCALE })
@@ -295,7 +308,7 @@ describe('the account settings plugin', () => {
   it('delivers a granted bonus through the injected notice callbacks', async () => {
     const h = createHarness()
     h.account.getUnnotifiedBonuses.mockResolvedValue(ok(bonusBatch([grantedNotice()])))
-    apply(h.ctx)
+    await apply(h.ctx)
     const { face } = installRow(h)
 
     face.begin()

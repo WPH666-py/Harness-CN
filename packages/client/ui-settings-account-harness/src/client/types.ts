@@ -1,16 +1,16 @@
 /**
- * Account domain types and the `account` Remote namespace surface.
+ * Account domain types the section renders, plus the `account` Remote
+ * namespace surface it calls.
  *
- * The namespace is served by the Desktop seed's account controller; no
- * workspace package declares it, and the generated Host FaceModel that
- * describes it is not part of this package set. The section therefore states
- * the wire facts it consumes and merges the namespace into
- * `TypertRemoteNamespaceMap`, which is what makes `ctx.remote.account`
- * resolvable.
+ * The namespace is served by the Desktop seed's account controller and its
+ * generated Remote contribution is what this plugin's browser half mounts
+ * (`./index.ts`), so `TypertRemoteNamespaceMap.account` is declared by that
+ * contribution's own declaration file — not restated here. What stays local is
+ * the payload vocabulary on screen; the Host serves the identical shapes.
  */
 
-import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { TypertRemoteNamespaceMap } from '@deepseek-ai/dsh-typert-protocol'
 
 /** Request identity sent with one account call. */
 export interface AccountClientMetadata {
@@ -137,41 +137,9 @@ export interface AccountBonusBatch {
   readonly bonuses: readonly AccountBonusNotification[]
 }
 
-/** Account Remote namespace as the Desktop account controller serves it. */
-export interface AccountRemote {
-  /** Acknowledge that one bonus notice was displayed. */
-  ackBonusNotified(
-    accountId: AccountUserId,
-    orderId: AccountBonusOrderId,
-    client: AccountClientMetadata,
-  ): Promise<RemoteResult<boolean>>
-  /** Cancel an in-flight sign-in attempt. */
-  cancelSignIn(attemptId: SignInAttemptId): Promise<RemoteResult<AccountView>>
-  /** Read the wallets. */
-  getBalance(client: AccountClientMetadata): Promise<RemoteResult<AccountDetails['balance'] | null>>
-  /** Read the display identity. */
-  getProfile(client: AccountClientMetadata): Promise<RemoteResult<AccountDetails['profile'] | null>>
-  /** Read the current sign-in state. */
-  getState(): Promise<RemoteResult<AccountView>>
-  /** Read the bonuses this account has not been shown yet. */
-  getUnnotifiedBonuses(client: AccountClientMetadata): Promise<RemoteResult<AccountBonusBatch | null>>
-  /** Report whether the Host is running tasks that use this credential. */
-  hasRunningAccountTasks(): Promise<RemoteResult<boolean>>
-  /** Drop the stored credential. */
-  signOut(client: AccountClientMetadata): Promise<RemoteResult<AccountView>>
-  /** Begin a sign-in attempt and open the Platform page for it. */
-  startSignIn(
-    client: AccountClientMetadata,
-    callbackOrigin: string,
-    loginSource: 'web' | 'desktop',
-  ): Promise<RemoteResult<AccountView>>
-  /** Follow the sign-in state until the caller's signal aborts. */
-  watch(signal?: AbortSignal): AsyncIterable<AccountView>
-}
-
-declare module '@deepseek-ai/dsh-typert-protocol' {
-  interface TypertRemoteNamespaceMap {
-    /** Desktop account controller namespace. */
-    account: AccountRemote
-  }
-}
+/**
+ * Account Remote namespace as the mounted account contribution serves it. The
+ * declaration comes from `@deepseek-ai/dsh-api-account-controller/remote`,
+ * which `./index.ts` mounts before anything here reads it.
+ */
+export type AccountRemote = TypertRemoteNamespaceMap['account']

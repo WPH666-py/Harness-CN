@@ -7,12 +7,15 @@ export interface BundledPlugin {
   /**
    * Whether a fresh profile lists the plugin in `dsh.profile.bundles`.
    *
-   * Every bundled plugin is installed either way. Three kinds are installed but not listed:
+   * Every bundled plugin is installed either way. Four kinds are installed but not listed:
    * a companion a sibling's bundle patch pulls in itself, a plugin whose first run would block
-   * startup on unrelated provisioning, and a plugin whose rows the Desktop Host's own patch
-   * layer mounts. A companion must stay out of the list because it declares no
-   * `dsh.bundle.patch`, which `inspectPlugin` rejects — the same reason the Host-mounted rows
-   * cannot be listed, since upstream mounts those from its own bundle compositions.
+   * startup on unrelated provisioning, a plugin whose rows the Desktop Host's own patch layer
+   * mounts, and a plugin whose browser half waits on a service only a later line provides. A
+   * companion must stay out of the list because it declares no `dsh.bundle.patch`, which
+   * `inspectPlugin` rejects — the same reason the Host-mounted rows cannot be listed, since
+   * upstream mounts those from its own bundle compositions — and an absent service has to stay
+   * absent from the mounted set because Cordis leaves the waiting fiber pending forever, which
+   * fails the whole Web boot (`packages/client/web/src/boot.ts:138-158`).
    */
   readonly active: boolean
 }
@@ -214,9 +217,27 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     // `@deepseek-ai/cordis` and `@deepseek-ai/schemastery`, and its client half asks for
     // `react`, a baseline platform module. Its peers are unconstrained, so no version of this
     // line can disagree with them.
+    //
+    // It stays installed but unlisted all the same, because its browser half cannot activate
+    // on this line. `lib/client.js` declares `inject = ['slots', 'locale', 'configForms']` and
+    // reads `ctx.configForms.get('vision-plugin')` at the top of `apply`, before it registers
+    // the `settings.section` seat this line does have. `configForms` is the 0.1.7-line plugin
+    // config-form service, and no package in this profile provides it, so the fiber waits
+    // forever — which the Client reports as `web boot: 2 entries did not activate` and renders
+    // as the `Failed to load plugins` screen, failing the boot for every other plugin too.
+    //
+    // The service this line has instead is `settingsScope.bind({ namespace })`
+    // (`packages/client/ui-settings/src/client/settings-scope.ts`), whose snapshot, subscribe,
+    // and mutate contract is the one this plugin's own duck-typed adapter expects. Providing a
+    // `configForms` alias over it was rejected: `dsh-chat-import`, a bundled plugin, probes for
+    // that service by name and, when it exists, drops its `settings.section` page for the
+    // 0.1.7-only `plugins.bundle.config` slot this line does not declare — one plugin's
+    // settings page would disappear to make room for another's. Patching the service name out
+    // of the published bundle is the same class of fix the account note already rejected,
+    // because it has to be re-verified against every upstream release.
     name: '@lp181818/dsh-vision-plugin',
     version: '1.2.3',
-    active: true,
+    active: false,
   },
   {
     // The WorkBuddy desktop app's own model serving, mounted as an `llm-workbuddy` provider row

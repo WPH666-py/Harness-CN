@@ -501,6 +501,14 @@ async function main(): Promise<void> {
   reportStartupProgress(1)
 
   /**
+   * Turn an update error state into the sentence its dialog shows.
+   * @param state - error state the coordinator published.
+   * @returns the coordinator's own message, else the shell's copy for its stable reason.
+   */
+  const updateFailureCopy = (state: DesktopUpdateState): string => state.message
+    ?? (state.reason === 'nothing-to-install' ? messages.updateNothingToInstall : messages.unknownError)
+
+  /**
    * Check the release channel and, on a manual check, report what it found.
    *
    * An automatic check stays silent on every outcome: a launch must not open an
@@ -518,7 +526,7 @@ async function main(): Promise<void> {
         await dialog.showMessageBox({
           type: 'error',
           title: messages.updateCheckFailedTitle,
-          message: state.message ?? messages.unknownError,
+          message: updateFailureCopy(state),
         })
       }
       return
@@ -555,7 +563,7 @@ async function main(): Promise<void> {
       await dialog.showMessageBox({
         type: 'error',
         title: messages.updateFailedTitle,
-        message: installed.message ?? messages.unknownError,
+        message: updateFailureCopy(installed),
       })
     }
   }

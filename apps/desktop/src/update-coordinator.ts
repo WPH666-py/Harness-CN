@@ -145,7 +145,7 @@ export class DesktopUpdateCoordinator {
       // Nothing to install is still an answer the window has to receive. Throwing here was a 500
       // the page could not render, which is what a click that does nothing looks like.
       this.note('desktop update: install asked for with no release offered')
-      return this.publish({ phase: 'error', current: this.currentVersion, message: '没有可安装的更新，请先检查更新。' })
+      return this.publish({ phase: 'error', current: this.currentVersion, reason: 'nothing-to-install' })
     }
     const abort = new AbortController()
     this.downloading = abort

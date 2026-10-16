@@ -32,6 +32,9 @@ export interface DesktopApiKeyStatus {
   readonly source?: string
 }
 
+/** Cause of an update error state, which the shell renders in the user's locale. */
+export type DesktopUpdateFailure = 'nothing-to-install'
+
 /** Desktop release update state rendered by desktop-owned UI. */
 export interface DesktopUpdateState {
   readonly phase: 'idle' | 'checking' | 'available' | 'installing' | 'ready' | 'error'
@@ -55,6 +58,13 @@ export interface DesktopUpdateState {
   /** When the host published the offered version. */
   readonly publishedAt?: string
   readonly message?: string
+  /**
+   * Stable cause of an `error` state, when one is known.
+   *
+   * The coordinator carries no locale: it names the cause and the shell turns it into copy, so a
+   * translated sentence never has to live in the release logic.
+   */
+  readonly reason?: DesktopUpdateFailure
 }
 
 /** How far the launch has come, reported to the window shown while it runs. */

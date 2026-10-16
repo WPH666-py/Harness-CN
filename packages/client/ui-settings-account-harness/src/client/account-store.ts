@@ -116,12 +116,18 @@ export class AccountSectionController {
     this.notices.end()
   }
 
-  /** Report that a notice card finished a displayed frame. */
+  /**
+   * Report that a notice card finished a displayed frame.
+   * @param orderId - granted-bonus order the card shows.
+   */
   noticeShown(orderId: AccountBonusOrderId): void {
     this.notices.shown(orderId)
   }
 
-  /** Report that the user dismissed a notice card. */
+  /**
+   * Report that the user dismissed a notice card.
+   * @param orderId - granted-bonus order the card shows.
+   */
   noticeDismissed(orderId: AccountBonusOrderId): void {
     this.notices.dismiss(orderId)
   }

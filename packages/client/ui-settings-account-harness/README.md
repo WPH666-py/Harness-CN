@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-**Account & balance** is the DeepSeek account surface for the desktop distribution: a single Settings section row that signs in, shows both balance rows, surfaces granted bonus credits, and signs out. It registers one `settings.section` contribution through `ctx.slots.inject()`, so it appears only where the desktop host rows provide `remote.account` and applies nothing elsewhere. The row is the whole interface — no heading, description, or standing copy — and every view it renders, including a live sign-in phase and the notice card, is a snapshot subscription that the section's own mount owns.
+**Account & balance** is the DeepSeek account surface for the desktop distribution: a single Settings section row that signs in, shows both balance rows, surfaces granted bonus credits, and signs out. It mounts the account Remote contribution and registers one `settings.section` contribution through `ctx.slots.inject()`, so the row is available wherever this package loads and reads the namespace its own mount provides. The row is the whole interface — no heading, description, or standing copy — and every view it renders, including a live sign-in phase and the notice card, is a snapshot subscription that the section's own mount owns.
 
 ## Table of Contents
 
@@ -49,9 +49,9 @@ Unnotified granted credits are read once when the account enters the signed-in s
 
 The section is a pure render of one snapshot: `src/client/AccountSectionController` owns a `SnapshotStore<AccountSectionState>` and subscribes to the account state stream, so the view cannot drift from the state it was handed.
 
-### Registration
+### Mounting and registration
 
-The browser plugin registers one localized `settings.section` contribution with id `account`, `order: -10`, and `locale: 'settings.account'`; its label is the `nav` key. Registration goes through `ctx.slots.inject('settings.section', ...)` with `inject = ['slots', 'locale', 'remote', 'remote.account']`, so it follows late declaration, redeclaration, locale changes, and teardown without importing the section owner. There is no product gate: where the account host packages are absent, `remote.account` never appears and the plugin applies nothing. The upstream Client package (`@deepseek-ai/dsh-client-ui-settings-account`) registers into `settings.launcher`, `settings.models.sign-in`, and `shell.quota-notice`, none of which this line's slot registry declares, which is why this line owns its own browser half.
+The browser plugin first mounts the generated account Remote contribution — `@deepseek-ai/dsh-api-account-controller/remote`, from the same `0.1.7-rc.2` package the desktop host rows load — and then registers one localized `settings.section` contribution with id `account`, `order: -10`, and `locale: 'settings.account'`; its label is the `nav` key. `inject` is `['slots', 'locale', 'remote']`: the mount is what puts `remote.account` on this Client's Remote service, so naming that namespace as a required service would be circular. The mount registers as the plugin's first effect, which makes it the last thing Cordis unwinds — after the row and its state stream are gone. No workspace Client assembly selects the namespace (`packages/api/remotes/src/client/index.ts` mounts a fixed list without it), and the generated contribution is a sanctioned inline for a browser bundle. A Host that serves no account rows is no longer a boot gate: the mount succeeds locally and the reads come back as Remote failures, which the row renders as its failed state. Registration itself goes through `ctx.slots.inject('settings.section', ...)`, so it follows late declaration, redeclaration, locale changes, and teardown without importing the section owner. The upstream Client package (`@deepseek-ai/dsh-client-ui-settings-account`) registers into `settings.launcher`, `settings.models.sign-in`, and `shell.quota-notice`, none of which this line's slot registry declares, which is why this line owns its own browser half.
 
 ### State and lifecycle
 
