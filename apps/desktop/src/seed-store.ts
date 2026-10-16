@@ -237,6 +237,11 @@ export async function mergePnpmStore(
  *
  * A content-addressed entry that is already present is left untouched: its name is its
  * digest, and the size check only guards against a copy an earlier run left half-written.
+ *
+ * Copies are issued in concurrent batches. The work is one file per entry, so overlapping
+ * them costs nothing and hides the per-entry latency Windows charges for each new name,
+ * which is what dominates this pass on a cold machine. Two entries in a batch are two
+ * different paths, so a batch cannot race itself.
  * @param source - extracted seed store.
  * @param destination - persistent store that receives the missing entries.
  * @param skipped - store-relative paths the caller merges itself, such as `index.db`.
@@ -274,17 +279,15 @@ async function copyStoreEntries(
     mkdirSync(join(destination, ...directory.split('/')), { recursive: true, mode: 0o700 })
   }
   let examined = 0
-  for (const relativePath of files) {
-    const from = join(source, ...relativePath.split('/'))
-    const to = join(destination, ...relativePath.split('/'))
-    if (needsStoreCopy(relativePath, from, to)) {
-      copyFileSync(from, to)
-    }
-    examined += 1
-    if (examined % COOPERATIVE_BATCH_ENTRIES === 0) {
-      onProgress?.(examined / files.length)
-      await yieldToEventLoop()
-    }
+  for (let start = 0; start < files.length; start += COOPERATIVE_BATCH_ENTRIES) {
+    await Promise.all(files.slice(start, start + COOPERATIVE_BATCH_ENTRIES).map(async (relativePath) => {
+      const from = join(source, ...relativePath.split('/'))
+      const to = join(destination, ...relativePath.split('/'))
+      if (needsStoreCopy(relativePath, from, to)) await copyFile(from, to)
+    }))
+    examined += COOPERATIVE_BATCH_ENTRIES
+    onProgress?.(Math.min(examined / files.length, 1))
+    await yieldToEventLoop()
   }
   onProgress?.(1)
 }

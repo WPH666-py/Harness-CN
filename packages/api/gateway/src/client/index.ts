@@ -5,7 +5,7 @@
  */
 
 import { Service } from '@deepseek-ai/cordis'
-import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
+import { RemoteError, remoteErrorOf, typertSchemaOf } from '@deepseek-ai/dsh-typert-protocol'
 export type { TypertGatewayFaultDetails } from '../remote-error-codes.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
@@ -725,6 +725,9 @@ function requireStrictCodec(codec: TypertCodec, endpoint: string, field: string)
   if (codec.mode !== 'strict') {
     throw new Error(`client api: generated Remote ${endpoint} field ${JSON.stringify(field)} has no strict codec`)
   }
+  if (typertSchemaOf(codec) === undefined) {
+    throw new Error(`client api: generated Remote ${endpoint} field ${JSON.stringify(field)} has no runtime schema`)
+  }
 }
 
 function parseInput(codec: TypertCodec, value: unknown, endpoint: string, field: string): unknown {
@@ -732,7 +735,11 @@ function parseInput(codec: TypertCodec, value: unknown, endpoint: string, field:
     throw new Error(`client api: generated Remote ${endpoint} field ${JSON.stringify(field)} has no strict codec`)
   }
   try {
-    return codec.schema.parse(value)
+    const schema = typertSchemaOf(codec)
+    if (schema === undefined) {
+      throw new Error(`client api: generated Remote ${endpoint} field ${JSON.stringify(field)} has no runtime schema`)
+    }
+    return schema.parse(value)
   } catch (cause) {
     throw new Error(`client api: ${endpoint} rejected ${JSON.stringify(field)}`, { cause })
   }

@@ -20,11 +20,14 @@ import { spawn } from 'node:child_process'
 import { DesktopHostProcess } from '../../desktop/src/host-process.ts'
 import { DesktopLogBuffer, type DesktopLogSnapshot } from '../../desktop/src/log-buffer.ts'
 import { resolveDesktopLocale, type DesktopMessages } from '../../desktop/src/locale.ts'
-import { resolveDesktopPaths } from '../../desktop/src/paths.ts'
+import { resolveDesktopPaths, type DesktopPaths } from '../../desktop/src/paths.ts'
+import { adoptHarnessCnHome, describeHomeMigration, migrateLegacyHarnessHome } from '../../desktop/src/product-home.ts'
 import {
+  describeDesktopRecovery,
   DesktopProjectManager,
   type DesktopProjectHooks,
   type DesktopProjectMutation,
+  type DesktopRecoveryReport,
 } from '../../desktop/src/project-manager.ts'
 import {
   ApiKeyError,
@@ -206,14 +209,84 @@ function describeUpdateFailure(message: string): string {
 }
 
 /**
+ * Adopt the Harness-CN home, and copy the Harness data an earlier Harness-CN left in the shared home.
+ *
+ * Both entry points run this before they resolve any desktop path, because the home decides where
+ * the profile, the package store, and the Host's sessions, storages, attachments, and credentials
+ * live. The migration never writes to, renames, or removes the legacy home; when that home also
+ * carries the other desktop product, it copies nothing and the log says so.
+ * @param log - sink for the migration lines.
+ * @returns the resolved Harness-CN home to hand to the path resolver.
+ */
+function adoptHome(log: (text: string) => void): string {
+  const home = adoptHarnessCnHome()
+  for (const line of describeHomeMigration(migrateLegacyHarnessHome({ home }))) log(line)
+  return home
+}
+
+/**
+ * Report an interrupted activation repair into the run log.
+ *
+ * Recovery runs before anything else reads the profile and is silent by construction, so a
+ * launch that killed a directory replacement would otherwise leave only the absence of a step
+ * to guess from.
+ * @param report - what the manager repaired, or undefined when the previous launch committed.
+ * @param log - sink for the recovery lines.
+ */
+function reportRecovery(report: DesktopRecoveryReport | undefined, log: (text: string) => void): void {
+  if (report === undefined) return
+  for (const line of describeDesktopRecovery(report)) log(line)
+}
+
+/**
+ * Boot the runtime the installer just built, then stop it, so the first launch starts warm.
+ *
+ * Every file of a freshly composed profile is being read for the first time on this machine, and
+ * that first touch — the operating system filling its cache and the antivirus scanning a path it has
+ * never seen — is what makes a cold launch spend about a minute before the backend prints its first
+ * line, against the roughly fifteen seconds the same profile costs once it is warm. The installer is
+ * the one caller that can pay that minute where nobody is waiting on a splash screen, so it boots
+ * the activated profile here and the launch inherits the warmed files.
+ *
+ * Booting also turns the prebuild into install-time evidence: a profile whose plugin tree cannot
+ * compose fails into the installer's log rather than on the user's first launch. That failure is
+ * reported and swallowed, because the installer falls back to the first launch's own build either
+ * way and this process still has to close its log buffer.
+ * @param options - the parsed shell arguments, which name the bundled Node the Host runs on.
+ * @param paths - the resolved desktop paths; their profile is the runtime to warm.
+ * @param logs - the run log the Host writes its own output into.
+ * @param note - sink for the warm-up lines.
+ */
+async function warmRuntime(
+  options: ShellArguments,
+  paths: DesktopPaths,
+  logs: DesktopLogBuffer,
+  note: (text: string) => void,
+): Promise<void> {
+  const compileCacheDir = join(paths.root, COMPILE_CACHE_DIRECTORY)
+  mkdirSync(compileCacheDir, { recursive: true })
+  const startedAt = Date.now()
+  const probe = new DesktopHostProcess(options.node, paths.profile, undefined, logs, false, compileCacheDir)
+  try {
+    const ready = await probe.start()
+    const seconds = Math.round((Date.now() - startedAt) / 1000)
+    note(`desktop runtime warmed: dsh ${ready.dshVersion} in ${String(seconds)} s`)
+  } catch (error) {
+    note(`desktop runtime warm-up failed: ${errorOf(error, 'the backend did not start').message}`)
+  } finally {
+    await probe.stop().catch(() => undefined)
+  }
+}
+
+/**
  * Build the desktop runtime now instead of on the first launch.
  *
  * The installer runs this once its files are in place. It obtains the offline package exactly as a
  * launch would — bundled, cached, or fetched — and then runs the same transaction, so a profile
  * this builds is byte-for-byte the profile the first launch would have built and the launch is left
- * with nothing to do but start the backend. The Host is deliberately not started: composing the
- * runtime is the long part, and booting it here would cost the fifty seconds the structural check
- * exists to avoid.
+ * with nothing to do but start the backend. Once that runtime is activated it is booted once and
+ * stopped again, because this is the only place the first touch of every one of its files can be
+ * paid while nobody is watching a splash screen.
  *
  * Nothing here publishes a handshake or opens a window; the installer is the only reader, and it
  * ignores the exit code so a failure falls back to the first launch's own build.
@@ -221,14 +294,14 @@ function describeUpdateFailure(message: string): string {
  */
 async function prebuild(argv: readonly string[]): Promise<void> {
   const options = parseArguments(argv)
-  const paths = resolveDesktopPaths()
+  const logs = new DesktopLogBuffer(join(options.logDirectory, 'harness.log'))
+  const note = (text: string): void => { logs.line('shell', `prebuild: ${text}`) }
+  const paths = resolveDesktopPaths(adoptHome(note))
   for (const required of [options.node, options.pnpm]) {
     if (!existsSync(required)) throw new Error(`dsh shell: bundled resource is missing: ${required}`)
   }
-  const logs = new DesktopLogBuffer(join(options.logDirectory, 'harness.log'))
-  const note = (text: string): void => { logs.line('shell', `prebuild: ${text}`) }
   const manager = new DesktopProjectManager(paths, { node: options.node, pnpm: options.pnpm })
-  manager.recover()
+  reportRecovery(manager.recover(), note)
   note(`building ${options.version} into ${paths.profile}`)
   const seed = await ensureSeedPackage({
     version: options.version,
@@ -247,6 +320,7 @@ async function prebuild(argv: readonly string[]): Promise<void> {
     note,
   })
   note(activated ? 'desktop runtime installed during setup' : 'desktop runtime already matches the release')
+  await warmRuntime(options, paths, logs, note)
   await logs.close()
 }
 
@@ -254,7 +328,9 @@ async function main(): Promise<void> {
   const options = parseArguments(process.argv.slice(2))
   const locale = resolveDesktopLocale(options.locale)
   const messages = locale.messages
-  const paths = resolveDesktopPaths()
+  const logs = new DesktopLogBuffer(join(options.logDirectory, 'harness.log'))
+  const logShell = (text: string): void => { logs.line('shell', text) }
+  const paths = resolveDesktopPaths(adoptHome(logShell))
 
   // Node's own on-disk compile cache is what makes the backend's second start cheaper than its
   // first: every module it loads is compiled once and the bytecode is reused afterwards. It must
@@ -270,8 +346,6 @@ async function main(): Promise<void> {
     if (!existsSync(required)) throw new Error(`dsh shell: bundled resource is missing: ${required}`)
   }
 
-  const logs = new DesktopLogBuffer(join(options.logDirectory, 'harness.log'))
-  const logShell = (text: string): void => { logs.line('shell', text) }
   let status: ShellStatus = { phase: 'starting', progress: 0.05, version: options.version }
   let updateState: DesktopUpdateState = { phase: 'idle' }
   let host: DesktopHostProcess | undefined
@@ -288,7 +362,7 @@ async function main(): Promise<void> {
   }
 
   const manager = new DesktopProjectManager(paths, { node: options.node, pnpm: options.pnpm })
-  manager.recover()
+  reportRecovery(manager.recover(), logShell)
 
   /** Start the Host from one project directory, sharing this process's run log. */
   const startHost = async (projectDir: string): Promise<DesktopHostProcess> => {

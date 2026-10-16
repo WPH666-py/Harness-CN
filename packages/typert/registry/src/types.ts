@@ -71,10 +71,18 @@ export interface TypertPackageModel {
   readonly objects: readonly TypertObjectModel[]
 }
 
-/** One generated live Zod schema. */
+/**
+ * One generated live Zod schema declaration. Both generated forms are accepted:
+ * the eager `schema` this line's generator emits, and the lazy `create()`
+ * factory newer generators emit for self-referential schemas. Registration
+ * materializes the declaration, so live records always carry `schema`.
+ */
 export interface TypertSchema {
   readonly name: string
-  readonly schema: z.ZodType
+  /** Eager runtime schema. */
+  readonly schema?: z.ZodType
+  /** Lazy runtime-schema factory accepted in place of `schema`. */
+  readonly create?: () => z.ZodType
 }
 
 /** One generated package contribution registered and withdrawn atomically. */
@@ -87,8 +95,10 @@ export interface TypertContribution {
   readonly invocations: readonly InvocationDescriptor[]
 }
 
-/** A live schema plus its contribution identity. */
-export interface TypertSchemaRecord extends TypertSchema {
+/** A live schema plus its contribution identity, with the declaration materialized. */
+export interface TypertSchemaRecord {
+  readonly name: string
+  readonly schema: z.ZodType
   readonly package: string
   readonly face: TypertFace
   readonly key: string

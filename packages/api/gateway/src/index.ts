@@ -17,6 +17,7 @@ import {
   RemoteError,
   remoteErrorOf,
   remoteMethods,
+  typertSchemaOf,
   type InvocationDescriptor,
   type InvocationParameterDescriptor,
   type TypertCodec,
@@ -1140,7 +1141,11 @@ function decode(
 ): unknown {
   try {
     if (codec.mode === 'strict') {
-      value = codec.schema.parse(value)
+      const schema = typertSchemaOf(codec)
+      if (schema === undefined) {
+        throw new Error(`strict codec for wire field ${JSON.stringify(field)} declares no runtime schema`)
+      }
+      value = schema.parse(value)
       /* v8 ignore next -- generated optional-input codecs are the only strict codecs that return undefined. */
       if (value === undefined) return value
     }

@@ -55,3 +55,32 @@
 
     - id: ui-directory-picker-native
       name: '@deepseek-ai/dsh-client-ui-directory-picker-native'
+
+    # DeepSeek account sign-in and the balance/bonus surface it feeds. The three host rows come
+    # from the official product's own composition — `dsh-base` mounts `authorization` and
+    # `deepseek-account`, `dsh-web-app` mounts `account-controller` — but this line carries none
+    # of them, so the packages would sit unused in the profile.
+    #
+    # They belong to this file rather than a bundle patch: the packages are installed only by the
+    # Desktop seed, and a bundle layer is shared with every other profile this line can serve,
+    # where an insert naming an absent package fails the whole plugin tree at boot.
+    #
+    # The platform package branches on the carrier it runs under. Its own default is `null`
+    # (send no client-platform header); the official desktop composition passes the host OS, so
+    # the service stamps `x-client-platform: desktop-win` / `desktop-mac` on Platform requests.
+    - id: authorization
+      name: '@deepseek-ai/dsh-authorization'
+
+    - id: deepseek-account
+      name: '@deepseek-ai/dsh-deepseek-account-platform'
+      config:
+        desktopPlatform: !!js "['darwin', 'win32'].includes(process.platform) ? process.platform : null"
+
+    - id: account-controller
+      name: '@deepseek-ai/dsh-api-account-controller'
+
+    # The browser half is this line's own package, not the official one: the official client
+    # registers into `settings.launcher`, `settings.models.sign-in` and `shell.quota-notice`,
+    # none of which exist here, so it would mount without ever rendering an entry.
+    - id: ui-settings-account-harness
+      name: '@deepseek-ai/dsh-client-ui-settings-account-harness'

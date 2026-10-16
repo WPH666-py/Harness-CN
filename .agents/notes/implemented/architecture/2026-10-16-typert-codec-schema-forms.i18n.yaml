@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-10-16-typert-codec-schema-forms.md
+2026-10-16-typert-codec-schema-forms.md: f1c326d0f8aa9a8380a091c45846743a2982fd21
+2026-10-16-typert-codec-schema-forms.zh.md: 90733cadebb5abc176850e86e01d2638a898cfdd

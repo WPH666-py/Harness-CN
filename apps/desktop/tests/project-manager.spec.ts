@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, cpSync, existsSync, mkdtempSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -8,6 +8,7 @@ import { bundledPluginNames, bundledPluginPackageNames } from '../src/bundled-pl
 import { resolveDesktopPaths } from '../src/paths.ts'
 import {
   createSeedMetadata,
+  describeDesktopRecovery,
   DesktopProjectManager,
   packageNameFromSpec,
   verifySeedIntegrity,
@@ -628,6 +629,133 @@ describe('desktop project transactions', () => {
     expect(manager.listPlugins()).toEqual([{ name: '@scope/plugin', version: '2.0.0', bundled: false }])
     expect(existsSync(stagingProfile)).toBe(false)
     expect(existsSync(paths.pending)).toBe(false)
+  })
+
+  it('reports the runtime an interrupted activation put back', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    createTestSeedMetadata(seed, release())
+    writeFileSync(join(seed, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    writeLinkedProfileSeed(seed, release())
+    archiveStore(seed)
+    writeIntegrity(seed)
+    const paths = resolveDesktopPaths(join(root, '.dsh'))
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+    await manager.applyRelease(seed, '1.0.0', hooks())
+    const stagingProfile = join(paths.staging, 'interrupted', 'profile')
+    mkdirSync(stagingProfile, { recursive: true })
+    rmSync(paths.rollback, { recursive: true, force: true })
+    mkdirSync(dirname(paths.rollback), { recursive: true })
+    renameSync(paths.profile, paths.rollback)
+    writeFileSync(paths.pending, `${JSON.stringify({
+      schemaVersion: 1,
+      id: 'interrupted',
+      stagingProfile,
+      step: 'prepared',
+    })}\n`)
+
+    const report = manager.recover()
+
+    // The shell prints these lines, so they are the whole record of a repair that would
+    // otherwise be invisible: recovery runs before anything reads the profile and says nothing.
+    if (report === undefined) throw new Error('expected the interrupted activation to be reported')
+    expect(describeDesktopRecovery(report)).toEqual([
+      'activation recovery: the previous launch stopped at prepared',
+      `activation recovery: restored ${paths.rollback} as the active profile`,
+      "activation recovery: discarded the interrupted launch's staging tree",
+    ])
+  })
+
+  it('discards a superseded runtime copy when the replacement already committed', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    createTestSeedMetadata(seed, release())
+    writeFileSync(join(seed, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    writeLinkedProfileSeed(seed, release())
+    archiveStore(seed)
+    writeIntegrity(seed)
+    const paths = resolveDesktopPaths(join(root, '.dsh'))
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+    await manager.applyRelease(seed, '1.0.0', hooks())
+    const stagingProfile = join(paths.staging, 'interrupted', 'profile')
+    mkdirSync(stagingProfile, { recursive: true })
+    rmSync(paths.rollback, { recursive: true, force: true })
+    cpSync(paths.profile, paths.rollback, { recursive: true })
+    writeFileSync(paths.pending, `${JSON.stringify({
+      schemaVersion: 1,
+      id: 'interrupted',
+      stagingProfile,
+      step: 'staging-activated',
+    })}\n`)
+
+    const report = manager.recover()
+
+    // Both trees exist because the replacement booted and the launch stopped before the journal
+    // was cleared: the runtime beside the profile is the one it replaced, and the profile it
+    // was replaced by is the one to keep.
+    expect(report).toEqual({
+      step: 'staging-activated',
+      rollback: paths.rollback,
+      restored: false,
+      discardedRollback: true,
+      discardedStaging: true,
+    })
+    expect(manager.dshVersion()).toBe('1.0.0')
+    expect(existsSync(paths.rollback)).toBe(false)
+    expect(existsSync(paths.pending)).toBe(false)
+  })
+
+  it('keeps the active profile when the replacement cannot move it aside', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    createTestSeedMetadata(seed, release())
+    writeFileSync(join(seed, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    writeLinkedProfileSeed(seed, release())
+    archiveStore(seed)
+    writeIntegrity(seed)
+    const paths = resolveDesktopPaths(join(root, '.dsh'))
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+    await manager.applyRelease(seed, '1.0.0', hooks())
+    // A path the moved-aside copy cannot occupy stands in for every failure that lands before
+    // the profile moves. The cleanup must then leave the profile alone: it is still the runtime
+    // the user has, and removing it is what turned one failure into a lost installation.
+    rmSync(paths.rollback, { recursive: true, force: true })
+    mkdirSync(dirname(paths.rollback), { recursive: true })
+    writeFileSync(paths.rollback, 'occupied')
+
+    await expect(manager.mutate({ type: 'plugin-add', spec: '@scope/plugin@2.0.0' }, hooks()))
+      .rejects.toThrow(/owned directory path is not a directory/u)
+
+    expect(existsSync(paths.profile)).toBe(true)
+    expect(manager.dshVersion()).toBe('1.0.0')
+    expect(manager.listPlugins()).toEqual([])
+    // Nothing moved, so the journal names no repair a later launch would have to make.
+    expect(existsSync(paths.pending)).toBe(false)
+  })
+
+  it.skipIf(process.platform !== 'win32')('names the runtime an open handle keeps in place', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    createTestSeedMetadata(seed, release())
+    writeFileSync(join(seed, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    writeLinkedProfileSeed(seed, release())
+    archiveStore(seed)
+    writeIntegrity(seed)
+    const paths = resolveDesktopPaths(join(root, '.dsh'))
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+    await manager.applyRelease(seed, '1.0.0', hooks())
+    // Windows refuses to rename a directory while any process holds a handle inside it, which
+    // is the state a second launch — or another program reading the same home — leaves behind.
+    const held = openSync(join(paths.profile, 'package.json'), 'r')
+    try {
+      await expect(manager.mutate({ type: 'plugin-add', spec: '@scope/plugin@2.0.0' }, hooks()))
+        .rejects.toThrow(/is in use and could not be moved/u)
+    } finally {
+      closeSync(held)
+    }
+
+    expect(existsSync(paths.profile)).toBe(true)
+    expect(manager.dshVersion()).toBe('1.0.0')
   })
 
   it('records the live pnpm worker as transaction owner until it exits', async ({ task, signal }) => {

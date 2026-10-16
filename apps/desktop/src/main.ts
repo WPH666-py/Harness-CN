@@ -14,7 +14,9 @@ import {
   type IpcMainInvokeEvent,
 } from 'electron'
 import { resolveDesktopPaths } from './paths.ts'
+import { adoptHarnessCnHome, describeHomeMigration, migrateLegacyHarnessHome } from './product-home.ts'
 import {
+  describeDesktopRecovery,
   DesktopProjectManager,
   type DesktopProjectHooks,
   type DesktopProjectMutation,
@@ -186,12 +188,21 @@ async function serveShellAsset(request: Request): Promise<Response> {
 
 async function main(): Promise<void> {
   const resources = runtimeResources()
-  const paths = resolveDesktopPaths()
+  const logs = new DesktopLogBuffer(join(app.getPath('logs'), 'harness.log'))
+  const logShell = (text: string): void => { logs.line('shell', text) }
+  // The home decides where the profile, the package store, and the Host's sessions, storages,
+  // attachments, and credentials live, so it is adopted before any desktop path is resolved.
+  const home = adoptHarnessCnHome()
+  for (const line of describeHomeMigration(migrateLegacyHarnessHome({ home }))) logShell(line)
+  const paths = resolveDesktopPaths(home)
   const development = developmentProject()
   const activeProject = development ?? paths.profile
   const hostInspectPort = developmentHostInspectPort(development !== undefined)
   const manager = new DesktopProjectManager(paths, resources)
-  if (development === undefined) manager.recover()
+  if (development === undefined) {
+    const recovery = manager.recover()
+    if (recovery !== undefined) for (const line of describeDesktopRecovery(recovery)) logShell(line)
+  }
   let host: DesktopHostProcess | undefined
   let mainWindow: BrowserWindow | undefined
   let pluginWindow: BrowserWindow | undefined
@@ -204,8 +215,6 @@ async function main(): Promise<void> {
   const messages = locale.messages
   const appPreload = fileURLToPath(new URL('./preload-app.cjs', import.meta.url))
   const managementPreload = fileURLToPath(new URL('./preload.cjs', import.meta.url))
-  const logs = new DesktopLogBuffer(join(app.getPath('logs'), 'harness.log'))
-  const logShell = (text: string): void => { logs.line('shell', text) }
   let logWindow: BrowserWindow | undefined
   let startupWindow: BrowserWindow | undefined
   let apiKeyWindow: BrowserWindow | undefined

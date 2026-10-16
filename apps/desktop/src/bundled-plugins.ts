@@ -1,4 +1,4 @@
-/** Third-party plugins that Harness-CN ships and activates in every fresh profile. */
+/** The plugin set Harness-CN installs into every fresh Desktop profile. */
 
 /** One bundled plugin pinned to the exact version its seed store entry was warmed for. */
 export interface BundledPlugin {
@@ -7,10 +7,12 @@ export interface BundledPlugin {
   /**
    * Whether a fresh profile lists the plugin in `dsh.profile.bundles`.
    *
-   * Every bundled plugin is installed either way. Two kinds are installed but not listed:
-   * a companion a sibling's bundle patch pulls in itself, and a plugin whose first run
-   * would block startup on unrelated provisioning. A companion must stay out of the list
-   * because it declares no `dsh.bundle.patch`, which `inspectPlugin` rejects.
+   * Every bundled plugin is installed either way. Three kinds are installed but not listed:
+   * a companion a sibling's bundle patch pulls in itself, a plugin whose first run would block
+   * startup on unrelated provisioning, and a plugin whose rows the Desktop Host's own patch
+   * layer mounts. A companion must stay out of the list because it declares no
+   * `dsh.bundle.patch`, which `inspectPlugin` rejects — the same reason the Host-mounted rows
+   * cannot be listed, since upstream mounts those from its own bundle compositions.
    */
   readonly active: boolean
 }
@@ -191,6 +193,90 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     version: '1.4.0',
     active: true,
   },
+  {
+    // White-box long-term memory: a host row plus the knowledge tree its tools read. Its own
+    // bundle patch is a single insert, and every package it imports at runtime
+    // (`dsh-session`, `dsh-system-prompt`, `dsh-tools`) is one this profile provides, as are
+    // its peers (`dsh-llm`, `schemastery >=3.0.0`, `@deepseek-ai/cordis >=4.0.1`).
+    //
+    // It is the largest package bundled here by two orders of magnitude — 25.7 MB across 1594
+    // files, most of it a Python knowledge base that ships with skills and documentation. That
+    // weight lands in the seed store and in every installed profile, which is the cost of
+    // carrying it at all; nothing about it is fetched at run time.
+    name: '@furongjun1999/dsh-memory',
+    version: '0.8.1',
+    active: true,
+  },
+  {
+    // Image recognition for text-only models, configured from its own Settings page. Distinct
+    // from `@anionex/dsh-vision-toolkit` above, which is inactive because it provisions a
+    // Python runtime on first use: this one is 44 KB of JavaScript, its host half imports only
+    // `@deepseek-ai/cordis` and `@deepseek-ai/schemastery`, and its client half asks for
+    // `react`, a baseline platform module. Its peers are unconstrained, so no version of this
+    // line can disagree with them.
+    name: '@lp181818/dsh-vision-plugin',
+    version: '1.2.3',
+    active: true,
+  },
+  {
+    // The WorkBuddy desktop app's own model serving, mounted as an `llm-workbuddy` provider row
+    // (its patch starts no OAuth flow and does not change the profile's default model).
+    //
+    // Pinned to the last release of its 0.1.5 corridor: 0.7.0 and later fix every dsh peer at
+    // `0.2.0-rc.2`, a line this product does not carry, while 0.6.5 declares
+    // `^0.1.5-rc.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || ^0.2.0-rc.1` for the seven seams it
+    // needs. Its one peer outside that corridor, `@earendil-works/pi-ai`, is already installed
+    // here at exactly the version it asks for: `dsh-llm-pi-ai` depends on it, so the provider
+    // resolves the same copy the DeepSeek pi-ai adapter uses.
+    name: 'dsh-workbuddy-connect',
+    version: '0.6.5',
+    active: true,
+  },
+  {
+    // DeepSeek account sign-in, and the platform reads behind the balance card.
+    //
+    // Installed but not listed, for a different reason than the companions above: this package
+    // declares no `dsh.bundle.patch` at all. Upstream mounts its rows from its own `dsh-base`
+    // and `dsh-web-app` compositions; this line mounts them from the Desktop Host's patch layer
+    // (`apps/desktop-host/config/desktop.cordis.patch.yml`), which is the only layer that can
+    // name them — they are installed only by the Desktop seed, and a bundle layer is shared with
+    // every other profile, where an insert naming an absent package fails the whole tree.
+    //
+    // Its peers are `@deepseek-ai/dsh-authorization`, `dsh-credentials`, `dsh-host-webserver`,
+    // and its own base package at `^0.1.7-alpha.1`, while this line carries 0.1.5-rc.26. That
+    // range is declared, not enforced: the profile workspace sets `autoInstallPeers: false`, so
+    // pnpm warns instead of installing a second copy of the seams, and the APIs this package
+    // calls are the ones the line already has — `credentials.readRecord` / `modifyRecord` /
+    // `deleteRecord`, the `credentials/record-updated` event, `authorization.registerFlow` /
+    // `begin` / `cancel`, and `webServer.register`.
+    //
+    // 0.1.7-rc.2 is the release this line needs, not the newest one it could take: the
+    // bonus-credit reads and acknowledgements (赠金) exist in no earlier package, and rc.2 was
+    // booted here to `ready` with its rows mounted, `getState`/`getBalance`/`startSignIn` and
+    // `getUnnotifiedBonuses`/`ackBonusNotified` all present. The `0.2.0-rc.2` peer pinning that
+    // rules out later releases belongs to the 0.2 line, not to rc.2.
+    name: '@deepseek-ai/dsh-deepseek-account-platform',
+    version: '0.1.7-rc.2',
+    active: false,
+  },
+  {
+    // The authenticated Remote surface the browser half calls — `getState`, `getProfile`,
+    // `getBalance`, `startSignIn`, `cancelSignIn`, `signOut`, `watch`, and the bonus pair
+    // `getUnnotifiedBonuses` / `ackBonusNotified` — and the codecs that carry it. Those codecs
+    // are emitted in the newer `create()` schema form, which this line's typert loader, registry,
+    // and gateway now accept alongside the eager `schema` form they emit themselves (see the
+    // Agent Note for 0.1.5-rc.26).
+    name: '@deepseek-ai/dsh-api-account-controller',
+    version: '0.1.7-rc.2',
+    active: false,
+  },
+  // No third-party Client package is listed here on purpose. Upstream's account UI registers
+  // its rows into `settings.launcher`, `settings.models.sign-in` and `shell.quota-notice`, none
+  // of which exist in this line's Client (which has `settings.section` and `shell.overlay`), and
+  // its 0.1.7-rc.2 build additionally injects a `configForms` service this line does not have —
+  // so it mounts without ever rendering an entry. The browser half is instead this repository's
+  // own `@deepseek-ai/dsh-client-ui-settings-account-harness`, packed with the desktop package
+  // set and mounted from the same Host patch layer as the two rows above.
 ]
 
 /**
@@ -218,6 +304,16 @@ export interface BundledPluginDependency {
  */
 export const BUNDLED_PLUGIN_DEPENDENCIES: readonly BundledPluginDependency[] = [
   { name: 'acp-kernel', version: '0.0.101', requiredBy: 'billion-context-dsh' },
+  {
+    // The account platform extends this service rather than declaring its own, and names it as a
+    // peer, so pnpm never installs it on the platform's behalf. Both the platform and its
+    // controller import it at load time, which makes it the same kind of missing piece
+    // `acp-kernel` was: reachable through another package's tree and therefore absent, unless
+    // the profile is told to carry it.
+    name: '@deepseek-ai/dsh-deepseek-account',
+    version: '0.1.7-rc.2',
+    requiredBy: '@deepseek-ai/dsh-deepseek-account-platform',
+  },
 ]
 
 /**

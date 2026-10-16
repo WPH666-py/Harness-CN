@@ -611,13 +611,18 @@ export class TypertRegistry extends Service implements TypertRegistryContract {
     const batch = new Set<string>()
     for (const schema of contribution.schemas) {
       validateSegment('schema name', schema.name)
+      const materialized = materializedSchema(schema)
+      if (materialized === undefined) {
+        throw new Error(`typert: schema "${schema.name}" declares neither a schema nor a create() factory`)
+      }
       const key = typertKey(contribution.package, schema.name)
       if (batch.has(key) || this.schemas.has(key)) {
         throw new Error(`typert: schema "${key}" is already registered`)
       }
       batch.add(key)
       records.push({
-        ...schema,
+        name: schema.name,
+        schema: materialized,
         package: contribution.package,
         face: contribution.face,
         key,
@@ -697,9 +702,23 @@ function validateInvocation(descriptor: InvocationDescriptor): void {
 function validateCodec(codec: InvocationDescriptor['result'], subject: string): void {
   if (codec.mode === 'src-json') return
   validateNonempty(`${subject} type symbol`, codec.typeSymbol)
-  if (typeof codec.schema.parse !== 'function') {
+  const schema = materializedSchema(codec)
+  if (schema === undefined || typeof schema.parse !== 'function') {
     throw new Error(`typert: ${subject} strict codec has no parse() method`)
   }
+}
+
+/**
+ * Resolve one generated schema declaration. Both generated forms are accepted:
+ * the eager `schema` this line's generator emits, and the lazy `create()`
+ * factory newer generators emit for self-referential schemas.
+ * @param source - codec or named-schema record carrying the declaration.
+ * @returns the runtime schema, or `undefined` when neither form is present.
+ */
+function materializedSchema(source: { mode?: unknown; schema?: unknown; create?: unknown }): z.ZodType | undefined {
+  if (source.schema !== undefined) return source.schema as z.ZodType
+  if (typeof source.create !== 'function') return undefined
+  return (source.create as () => z.ZodType)()
 }
 
 function validateWireName(subject: string, value: string): void {

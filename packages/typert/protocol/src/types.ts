@@ -218,12 +218,44 @@ export interface TypertSchema<Output = unknown> {
   parse(value: unknown): Output
 }
 
+/**
+ * Either generated runtime-schema form: the eager `schema` this line's
+ * generator emits, or the lazy `create()` factory newer generators emit. The
+ * generated module memoizes the factory's result, so resolution may call it on
+ * every use. A declaration carrying neither form is a defect the validating
+ * boundary reports.
+ */
+export interface TypertSchemaSource {
+  /** Codec discriminant, present when the declaration is a codec. */
+  readonly mode?: string
+  /** Eager runtime schema. */
+  readonly schema?: TypertSchema
+  /** Lazy runtime-schema factory. */
+  readonly create?: () => TypertSchema
+}
+
+/**
+ * Resolve one generated schema declaration. Both generated forms are accepted:
+ * the eager `schema` this line's generator emits, and the lazy `create()`
+ * factory emitted by newer generators (upstream 0.2.x), which build
+ * self-referential schemas on demand.
+ * @param source - codec or named-schema record carrying the declaration.
+ * @returns the runtime schema, or `undefined` when neither form is present.
+ */
+export function typertSchemaOf(source: TypertSchemaSource): TypertSchema | undefined {
+  if (source.schema !== undefined) return source.schema
+  return typeof source.create === 'function' ? source.create() : undefined
+}
+
 /** Codec attached to one invocation parameter or result. */
 export type TypertCodec =
   | {
     readonly mode: 'strict'
     readonly typeSymbol: string
-    readonly schema: TypertSchema
+    /** Eager runtime schema. */
+    readonly schema?: TypertSchema
+    /** Lazy runtime-schema factory accepted in place of `schema`. */
+    readonly create?: () => TypertSchema
   }
   | {
     readonly mode: 'src-json'

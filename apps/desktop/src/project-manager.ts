@@ -87,6 +87,9 @@ const DESKTOP_PROJECT_FILES = [
   DESKTOP_PACKAGE_SET_FILE,
 ] as const
 
+/** Manifest that marks a directory as a desktop project; the move-aside takes it with the tree. */
+const DESKTOP_PROJECT_MANIFEST_FILE = DESKTOP_PROJECT_FILES[0]
+
 /** Number of seed files hashed at once when verifying a seed's integrity. */
 const SEED_HASH_CONCURRENCY = 8
 
@@ -115,12 +118,32 @@ interface DesktopProjectManifest {
   }
 }
 
-/** Journaled activation step used for crash recovery. */
+/**
+ * Journaled activation step used for crash recovery.
+ *
+ * `prepared` is written before the active profile moves, `active-moved` once it has, and
+ * `staging-activated` only after the replacement booted — which is what makes the last step the
+ * record that separates an activation to keep from one to repair.
+ */
 interface DesktopPendingTransaction {
   readonly schemaVersion: 1
   readonly id: string
   readonly stagingProfile: string
   readonly step: 'prepared' | 'active-moved' | 'staging-activated'
+}
+
+/** What an interrupted activation left behind and what recovery did about it. */
+export interface DesktopRecoveryReport {
+  /** Journaled step the interrupted launch reached before it stopped. */
+  readonly step: 'prepared' | 'active-moved' | 'staging-activated'
+  /** Directory that held the previous runtime when the interrupted launch moved it aside. */
+  readonly rollback: string
+  /** Whether the previous runtime was put back as the active profile. */
+  readonly restored: boolean
+  /** Whether a superseded runtime copy left beside the active profile was discarded. */
+  readonly discardedRollback: boolean
+  /** Whether the interrupted launch's staging tree was discarded. */
+  readonly discardedStaging: boolean
 }
 
 /** Exact executables the desktop shell bundles. */
@@ -326,6 +349,28 @@ export function registryTransportEnvironment(): {
 
 function errorOf(reason: unknown, fallback: string): Error {
   return reason instanceof Error ? reason : new Error(fallback)
+}
+
+/**
+ * Name the runtime a refused directory move was trying to take, and what the user can do.
+ *
+ * Windows refuses to rename a directory while any process holds a handle inside it, and the
+ * desktop runtime is exactly such a tree: a Host started by another launch keeps the profile
+ * undisplaceable for as long as it runs. The move reports only `EPERM`, `EACCES`, or `EBUSY`,
+ * which names neither the tree nor the remedy, so the transaction has to say both itself.
+ * @param held - directory the move tried to take.
+ * @param reason - failure raised by the move.
+ * @returns the failure to raise in its place.
+ */
+function renameConflictError(held: string, reason: unknown): Error {
+  const report = errorOf(reason, `desktop project: could not move ${held}`)
+  const code = (report as { code?: unknown }).code
+  if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY') return report
+  return new Error(
+    `desktop project: the Harness-CN runtime at ${held} is in use and could not be moved;`
+    + ' close every Harness-CN window and any other program using this home, then start again',
+    { cause: report },
+  )
 }
 
 /**
@@ -688,9 +733,19 @@ export class DesktopProjectManager {
     readonly runtime: DesktopRuntimeExecutables,
   ) {}
 
-  /** Recover an interrupted directory replacement before reading the active project. */
-  recover(): void {
-    if (!existsSync(this.paths.pending)) return
+  /**
+   * Recover an interrupted directory replacement before reading the active project.
+   *
+   * The journal exists only while an activation is uncommitted, so the runtime the move-aside
+   * took is the only one here that was ever working: it goes back unless the journal already
+   * recorded that the replacement booted, in which case the copy beside it is superseded. The
+   * journal is removed only once the tree it names is settled, so a repair that cannot finish —
+   * a directory another process still holds — is retried by the next launch instead of being
+   * forgotten.
+   * @returns what the interrupted launch left behind, or undefined when it left no journal.
+   */
+  recover(): DesktopRecoveryReport | undefined {
+    if (!existsSync(this.paths.pending)) return undefined
     const value = readJson(this.paths.pending)
     if (!isRecord(value) || value.schemaVersion !== 1
       || typeof value.id !== 'string' || typeof value.stagingProfile !== 'string'
@@ -704,12 +759,47 @@ export class DesktopProjectManager {
       stagingProfile: value.stagingProfile,
       step: value.step,
     }
-    if (!existsSync(this.paths.profile) && existsSync(this.paths.rollback)) {
+    let restored = false
+    let discardedRollback = false
+    let discardedStaging = false
+    // `prepared` is journaled before the move-aside runs, so the journal alone cannot tell a
+    // launch that stopped before the move from one that stopped between the move and the next
+    // step. The manifest the move carries with the profile is that evidence: an empty rollback
+    // directory is one this launch created and never filled.
+    const rollbackHoldsRuntime = existsSync(join(this.paths.rollback, DESKTOP_PROJECT_MANIFEST_FILE))
+    if (rollbackHoldsRuntime && pending.step === 'staging-activated') {
+      removeOwnedDirectory(this.paths.rollback)
+      discardedRollback = true
+    } else if (rollbackHoldsRuntime) {
+      // Anything at the profile path now is the replacement this transaction staged: the
+      // move-aside is what emptied the path, and only this transaction writes there.
+      removeOwnedDirectory(this.paths.profile)
       mkdirSync(dirname(this.paths.profile), { recursive: true })
-      renameOwnedDirectory(this.paths.rollback, this.paths.profile)
+      try {
+        renameOwnedDirectory(this.paths.rollback, this.paths.profile)
+      } catch (error) {
+        throw renameConflictError(this.paths.rollback, error)
+      }
+      restored = true
     }
-    removeOwnedDirectory(pending.stagingProfile)
+    if (existsSync(pending.stagingProfile)) {
+      removeOwnedDirectory(pending.stagingProfile)
+      discardedStaging = true
+    }
     unlinkSync(this.paths.pending)
+    return { step: pending.step, rollback: this.paths.rollback, restored, discardedRollback, discardedStaging }
+  }
+
+  /**
+   * Recover an interrupted activation and report it into the transaction log.
+   *
+   * Recovery is otherwise silent: it runs before anything else reads the profile, so a launch
+   * that killed a directory replacement would leave only the absence of a step to notice.
+   */
+  private recoverNoted(): void {
+    const report = this.recover()
+    if (report === undefined) return
+    for (const line of describeDesktopRecovery(report)) this.note?.(line)
   }
 
   /** Read the active desktop plugin inventory. */
@@ -804,7 +894,7 @@ export class DesktopProjectManager {
       progress(from + completed * (to - from))
     }
     return this.withLock(async () => {
-      this.recover()
+      this.recoverNoted()
       // The release identity is read before the seed is verified so an installed profile can
       // answer first. A launch that reuses its profile never reads seed content, and hashing
       // the seed's store archives to decide that would charge every launch for the work of
@@ -994,7 +1084,7 @@ export class DesktopProjectManager {
     this.note = (message) => { hooks.note?.(message) }
     try {
       await this.withLock(async () => {
-        this.recover()
+        this.recoverNoted()
         if (!existsSync(this.paths.profile)) throw new Error('desktop project: active profile is not installed')
         verifyDesktopCorePackageSet(this.paths.profile, this.releaseVersion())
         const stagingProfile = this.newStagingProfile()
@@ -1119,22 +1209,59 @@ export class DesktopProjectManager {
     try {
       removeOwnedDirectory(this.paths.rollback)
       mkdirSync(dirname(this.paths.rollback), { recursive: true, mode: 0o700 })
-      writeJson(this.paths.pending, { ...pending, step: 'active-moved' } satisfies DesktopPendingTransaction)
       if (existsSync(this.paths.profile)) {
-        renameOwnedDirectory(this.paths.profile, this.paths.rollback)
+        try {
+          renameOwnedDirectory(this.paths.profile, this.paths.rollback)
+        } catch (error) {
+          throw renameConflictError(this.paths.profile, error)
+        }
         activeMoved = true
+        // Journaled only now: a step claiming a move that never happened sends the next
+        // launch's recovery looking for a tree that is still exactly where it always was.
+        writeJson(this.paths.pending, { ...pending, step: 'active-moved' } satisfies DesktopPendingTransaction)
       }
       mkdirSync(dirname(this.paths.profile), { recursive: true, mode: 0o700 })
-      writeJson(this.paths.pending, { ...pending, step: 'staging-activated' } satisfies DesktopPendingTransaction)
-      renameOwnedDirectory(stagingProfile, this.paths.profile)
+      try {
+        renameOwnedDirectory(stagingProfile, this.paths.profile)
+      } catch (error) {
+        throw renameConflictError(stagingProfile, error)
+      }
       await hooks.afterActivate()
+      // The commit record: written only once the replacement booted, so a launch that stops
+      // before this line is repaired back to the runtime the user had.
+      writeJson(this.paths.pending, { ...pending, step: 'staging-activated' } satisfies DesktopPendingTransaction)
       unlinkSync(this.paths.pending)
     } catch (error) {
-      if (existsSync(this.paths.profile)) removeOwnedDirectory(this.paths.profile)
-      if (activeMoved && existsSync(this.paths.rollback)) renameOwnedDirectory(this.paths.rollback, this.paths.profile)
-      if (existsSync(this.paths.pending)) unlinkSync(this.paths.pending)
+      // Undo only what this transaction changed. The cleanup that used to run here removed the
+      // active profile whenever the move-aside had failed, which turned a profile another
+      // process refused to release into a lost runtime and a second, unrelated failure.
+      const settled = this.settleActivation(activeMoved)
+      if (settled && existsSync(this.paths.pending)) unlinkSync(this.paths.pending)
       await hooks.afterActivate().catch(() => undefined)
       throw error
+    }
+  }
+
+  /**
+   * Undo an activation that did not commit and put the runtime the user had back.
+   *
+   * What sits at the profile path is this transaction's only when the move-aside ran: that move
+   * is what emptied the path, so with it done anything there is the replacement this transaction
+   * staged. Without it the active runtime was never touched and there is nothing to undo.
+   * @param activeMoved - whether this transaction moved the active profile aside.
+   * @returns whether the active profile is settled and the journal may be cleared.
+   */
+  private settleActivation(activeMoved: boolean): boolean {
+    if (!activeMoved) return true
+    try {
+      removeOwnedDirectory(this.paths.profile)
+      mkdirSync(dirname(this.paths.profile), { recursive: true, mode: 0o700 })
+      renameOwnedDirectory(this.paths.rollback, this.paths.profile)
+      return true
+    } catch {
+      // Names what it swallows: a runtime copy another process still holds. The journal stays
+      // on disk, so the next launch's recovery repeats this same repair.
+      return false
     }
   }
 
@@ -1291,6 +1418,22 @@ export class DesktopProjectManager {
       unlinkSync(this.paths.lock)
     }
   }
+}
+
+/**
+ * Describe one repaired activation in the words the run log uses.
+ * @param report - what the interrupted launch left behind and what recovery did about it.
+ * @returns one line per fact a later diagnosis needs.
+ */
+export function describeDesktopRecovery(report: DesktopRecoveryReport): readonly string[] {
+  const lines = [`activation recovery: the previous launch stopped at ${report.step}`]
+  if (report.restored) lines.push(`activation recovery: restored ${report.rollback} as the active profile`)
+  if (report.discardedRollback) lines.push(`activation recovery: discarded the superseded runtime at ${report.rollback}`)
+  if (report.discardedStaging) lines.push("activation recovery: discarded the interrupted launch's staging tree")
+  if (!report.restored && !report.discardedRollback && !report.discardedStaging) {
+    lines.push('activation recovery: the previous launch committed; nothing was left to repair')
+  }
+  return lines
 }
 
 /**

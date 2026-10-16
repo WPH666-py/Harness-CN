@@ -102,7 +102,8 @@ export function validateTypertManifest(pkgName: string, exported: unknown): Type
     }
     const schema = value as Record<string, unknown>
     requireString(pkgName, schema, 'name', 'schema')
-    if (typeof schema.schema !== 'object' || schema.schema === null || !('_zod' in schema.schema)) {
+    const resolved = generatedSchema(schema)
+    if (typeof resolved !== 'object' || resolved === null || !('_zod' in resolved)) {
       throw new Error(`typert-loader: ${pkgName} TYPERT schema "${schema.name as string}" is not a zod v4 schema instance`)
     }
   }
@@ -267,12 +268,25 @@ function requireStrictCodec(pkgName: string, value: unknown, subject: string): v
     throw new Error(`typert-loader: ${pkgName} ${subject} must use a strict codec`)
   }
   requireString(pkgName, codec, 'typeSymbol', subject)
-  if (typeof codec.schema !== 'object'
-    || codec.schema === null
-    || !('_zod' in codec.schema)
-    || typeof (codec.schema as { parse?: unknown }).parse !== 'function') {
+  const schema = generatedSchema(codec)
+  if (typeof schema !== 'object'
+    || schema === null
+    || !('_zod' in schema)
+    || typeof (schema as { parse?: unknown }).parse !== 'function') {
     throw new Error(`typert-loader: ${pkgName} ${subject} is not backed by a zod v4 schema`)
   }
+}
+
+/**
+ * Resolve one generated schema declaration. Both generated forms are accepted:
+ * the eager `schema` this line's generator emits, and the lazy `create()`
+ * factory newer generators emit for self-referential schemas.
+ * @param source - codec or named-schema record carrying the declaration.
+ * @returns the runtime schema, or `undefined` when neither form is present.
+ */
+function generatedSchema(source: Record<string, unknown>): unknown {
+  if (source.schema !== undefined) return source.schema
+  return typeof source.create === 'function' ? (source.create as () => unknown)() : undefined
 }
 
 /**

@@ -150,11 +150,16 @@ process.stdout.write(`prepare-shell: offline package ${archive} (${megabytes} MB
 
 // Gitee refuses an attachment over 100 MB, and publishing is all-or-nothing across both hosts, so a
 // package past the cap is one nobody can download. Fail the build here instead of at the upload.
-const GITEE_ATTACHMENT_LIMIT = 100 * 1024 * 1024
-if (archiveBytes > GITEE_ATTACHMENT_LIMIT) {
+//
+// `HARNESS_CN_SEED_LIMIT_MB` is the deliberate way out for a release that is not going to Gitee:
+// set it to the largest attachment this release's hosts accept, or to 0 to skip the check. The
+// default stays Gitee's cap, so an ordinary build still fails loudly when the seed grows past it.
+const limitMb = Number(process.env.HARNESS_CN_SEED_LIMIT_MB ?? '100')
+const limitBytes = limitMb * 1024 * 1024
+if (limitMb > 0 && archiveBytes > limitBytes) {
   throw new Error(
-    `prepare-shell: the offline package is ${megabytes} MB and Gitee caps an attachment at 100 MB; ` +
-      `raise HARNESS_CN_ZSTD_LEVEL above ${String(level)} or drop a bundled plugin`,
+    `prepare-shell: the offline package is ${megabytes} MB and the configured attachment limit is ${String(limitMb)} MB; ` +
+      `raise HARNESS_CN_ZSTD_LEVEL above ${String(level)}, raise HARNESS_CN_SEED_LIMIT_MB, or drop a bundled plugin`,
   )
 }
 

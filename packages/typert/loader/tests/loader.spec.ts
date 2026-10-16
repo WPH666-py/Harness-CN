@@ -163,7 +163,8 @@ describe('typert loader', () => {
     })
     expect(descriptor?.parameters[0]?.codec.mode).toBe('strict')
     if (descriptor?.parameters[0]?.codec.mode === 'strict') {
-      expect(descriptor.parameters[0].codec.schema.parse('request')).toBe('request')
+      const codec = descriptor.parameters[0].codec
+      expect((codec.schema ?? codec.create?.())?.parse('request')).toBe('request')
     }
 
     await fiber.dispose()

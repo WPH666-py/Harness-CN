@@ -9,6 +9,7 @@ import { Service, type Context } from '@deepseek-ai/cordis'
 import type { TypertContextMap } from './types.ts'
 
 export { RemoteError, remoteErrorOf } from './remote-error.ts'
+export { typertSchemaOf } from './types.ts'
 
 const TYPERT_REMOTE_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
@@ -64,6 +65,7 @@ export type {
   TypertRegistryChange,
   TypertRegistryListener,
   TypertSchema,
+  TypertSchemaSource,
   TypertRegistryContract,
 } from './types.ts'
 
