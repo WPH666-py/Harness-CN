@@ -53,6 +53,28 @@ const SESSION_TTL_TO = '\tconst sessionTtlMs = integer(value.sessionTtlMs, "sess
 const PAIR_WINDOW_FROM = '\t\tpairingTtlMs: integer(value.pairingTtlMs, "pairingTtlMs", 12e4, 1e4, 6e5),'
 const PAIR_WINDOW_TO = '\t\tpairingTtlMs: integer(value.pairingTtlMs, "pairingTtlMs", 6e5, 1e4, 6e5),'
 
+/**
+ * Node stores a timer delay in a signed 32-bit integer: anything above 2147483647 ms fires after
+ * 1 ms instead. A year-long session used to hit that ceiling and drop its streams immediately.
+ */
+const EXPIRY_TIMER_ABORT_FROM =
+  '\t\tconst timer = setTimeout(abort, Math.max(1, authorization.expiresAt - Date.now()));'
+const EXPIRY_TIMER_ABORT_TO = [
+  '\t\t// DSH_MOBILE_EXPIRY_TIMER_CLAMP: node fires a timer above 2^31-1 ms after 1 ms instead,',
+  '\t\t// so a year-long session would sever its streams at once; cap the wait below the limit.',
+  '\t\tconst timer = setTimeout(abort, Math.min(Math.max(1, authorization.expiresAt - Date.now()), 2147483647));',
+].join('\n')
+
+const EXPIRY_TIMER_CLOSE_FROM =
+  '\t\tconst timer = setTimeout(closeBoth, Math.max(1, authorization.expiresAt - Date.now()));'
+const EXPIRY_TIMER_CLOSE_TO = [
+  '\t\t// DSH_MOBILE_EXPIRY_TIMER_CLAMP: see the request timer above.',
+  '\t\tconst timer = setTimeout(closeBoth, Math.min(Math.max(1, authorization.expiresAt - Date.now()), 2147483647));',
+].join('\n')
+
+/** The clamped delay text, present once per patched timer. */
+const EXPIRY_TIMER_MARKER = 'expiresAt - Date.now()), 2147483647));'
+
 /** The pair route ends with a bare 404 once its window closed. */
 const PAIR_CLOSED_FROM = '\t\t\tif (!this.access.pairingStatus().open) throw new HttpError(404, "not_found");'
 
@@ -73,6 +95,92 @@ const PAIR_CLOSED_TO = [
   '\t\t\t\treturn;',
   '\t\t\t}',
 ].join('\n')
+
+/**
+ * The mobile page installs its own transport override and throws when one already exists. On a
+ * desktop install the page is served by the shell front door, which installs its own override
+ * first, so the throw aborted the boot script before `__DSH_BOOT__` was assigned and the phone
+ * got "Failed to load plugins" instead of the app.
+ */
+const TRANSPORT_OVERRIDE_FROM =
+  "const MOBILE_AUTHENTICATED_TRANSPORT_BOOTSTRAP = `(()=>{if(window.__DSH_TRANSPORT__!==undefined)throw new Error('DSH Mobile cannot replace an existing transport override');window.__DSH_TRANSPORT__={fetch:(input,init)=>window.fetch(input,init),ownsHost:true},window.__DSH_FILE_UPLOAD__={fetch:(input,init)=>window.fetch(input,init)}})();`;"
+
+const TRANSPORT_OVERRIDE_TO =
+  "const MOBILE_AUTHENTICATED_TRANSPORT_BOOTSTRAP = `(()=>{if(window.__DSH_TRANSPORT__===undefined)window.__DSH_TRANSPORT__={fetch:(input,init)=>window.fetch(input,init),ownsHost:true};if(window.__DSH_FILE_UPLOAD__===undefined)window.__DSH_FILE_UPLOAD__={fetch:(input,init)=>window.fetch(input,init)}})();`; // DSH_MOBILE_TRANSPORT_BOOTSTRAP"
+
+/**
+ * The gateway proxies the app from `ctx.webServer.port`. On a desktop install that port belongs to
+ * the shell's front door, which is where the page and its `/api` proxy actually live, while the
+ * host's own listener answers no index. The shell exports its origin so the plugin can use it.
+ */
+const UPSTREAM_ANCHOR = 'function loopbackTemplate(loaded, webServerPort) {'
+
+const UPSTREAM_HELPER = [
+  '/** DSH_MOBILE_DESKTOP_UPSTREAM: the desktop shell announces the front door it serves. */',
+  'function desktopShellUpstreamOrigin(webServerPort) {',
+  '\tconst declared = process.env.DSH_SHELL_ORIGIN?.trim();',
+  '\tif (declared !== void 0 && declared !== "") {',
+  '\t\ttry {',
+  '\t\t\tconst parsed = new URL(declared);',
+  '\t\t\tif (parsed.protocol === "http:" && parsed.port !== "") return parsed.origin;',
+  '\t\t} catch {}',
+  '\t}',
+  '\treturn `http://127.0.0.1:${String(webServerPort)}`;',
+  '}',
+  '',
+].join('\n')
+
+const UPSTREAM_ORIGIN_FROM = 'const activeUpstreamOrigin = `http://127.0.0.1:${String(webServerPort)}`;'
+const UPSTREAM_ORIGIN_TO = 'const activeUpstreamOrigin = desktopShellUpstreamOrigin(webServerPort);'
+
+/**
+ * The launch-token exchange expects `303 + Set-Cookie` with a Max-Age. The desktop front door
+ * answers `200` and a session cookie without Max-Age, which is still a usable cookie for the
+ * proxy, so accept it and give it the exchange's own hour-long lifetime.
+ */
+const EXCHANGE_FROM = [
+  '\t\t\tif (proxied.statusCode !== 303 || pair === void 0 || pair.length > 4096 || !UPSTREAM_COOKIE_PAIR.test(pair) || !Number.isSafeInteger(expiresAt) || maxAgeSeconds <= 0) throw new HttpError(502, "upstream_unavailable");',
+  '\t\t\tthis.upstreamCookie = pair;',
+  '\t\t\tthis.upstreamCookieExpiresAt = expiresAt;',
+  '\t\t\treturn pair;',
+].join('\n')
+
+const EXCHANGE_TO = [
+  '\t\t\t// DSH_MOBILE_DESKTOP_UPSTREAM: the front door answers 200 with a session cookie that',
+  '\t\t\t// carries no Max-Age; that cookie still authenticates the proxy, so keep it for an hour.',
+  '\t\t\tconst lifetime = Number.isSafeInteger(maxAgeSeconds) && maxAgeSeconds > 0 ? maxAgeSeconds * 1e3 : 36e5;',
+  '\t\t\tconst acceptedExpiry = Date.now() + lifetime;',
+  '\t\t\tif ((proxied.statusCode !== 303 && proxied.statusCode !== 200) || pair === void 0 || pair.length > 4096 || !UPSTREAM_COOKIE_PAIR.test(pair) || !Number.isSafeInteger(acceptedExpiry)) throw new HttpError(502, "upstream_unavailable");',
+  '\t\t\tthis.upstreamCookie = pair;',
+  '\t\t\tthis.upstreamCookieExpiresAt = acceptedExpiry;',
+  '\t\t\treturn pair;',
+].join('\n')
+
+/**
+ * `materializeManagedSetup` re-signs the leaf certificate on every start, so a phone that trusted
+ * the previous leaf meets a new "not private" warning after each restart. Keep a leaf that still
+ * covers the interface address and stays valid for a week; issue only when it does not.
+ */
+const CERT_ANCHOR = 'async function refreshManagedServerCertificate(setup, address) {'
+
+const CERT_HELPER = [
+  '/** DSH_MOBILE_CERT_REUSE: keep an issued leaf while it still covers the address. */',
+  'async function ensureServerCertificateFresh(setup, address) {',
+  '\ttry {',
+  '\t\tconst existing = new X509Certificate(await readFile(setup.tls.certFile, "utf8"));',
+  '\t\tconst covers = existing.checkIP(address) !== void 0;',
+  '\t\tconst remaining = Date.parse(existing.validTo) - Date.now();',
+  '\t\tif (covers && remaining > 6048e5) return;',
+  '\t} catch (error) {',
+  '\t\tif (error.code !== "ENOENT") throw error;',
+  '\t}',
+  '\tawait refreshManagedServerCertificate(setup, address);',
+  '}',
+  '',
+].join('\n')
+
+const CERT_CALL_FROM = '\tawait refreshManagedServerCertificate(setup, network.address);'
+const CERT_CALL_TO = '\tawait ensureServerCertificateFresh(setup, network.address);'
 
 /** Page renderer inserted above the pairing page it replaces. */
 const PAIR_PAGE_ANCHOR = 'function renderPairPage(locale) {'
@@ -153,6 +261,8 @@ function rewrite(before, file) {
   }
   replaceLine(DEVICE_TTL_FROM, DEVICE_TTL_TO)
   replaceLine(SESSION_TTL_FROM, SESSION_TTL_TO)
+  replaceLine(EXPIRY_TIMER_ABORT_FROM, EXPIRY_TIMER_ABORT_TO)
+  replaceLine(EXPIRY_TIMER_CLOSE_FROM, EXPIRY_TIMER_CLOSE_TO)
   replaceLine(PAIR_WINDOW_FROM, PAIR_WINDOW_TO)
   replaceLine(PAIR_CLOSED_FROM, PAIR_CLOSED_TO)
   replaceLine(PAIR_AUTOSUBMIT_FROM, PAIR_AUTOSUBMIT_TO)
@@ -163,7 +273,25 @@ function rewrite(before, file) {
     )
   }
   lines.splice(renderIndex, 0, ...PAGE_RENDERER)
-  return lines.join(newline)
+
+  let text = lines.join(newline)
+  const replaceOnce = (from, to) => {
+    const at = text.indexOf(from)
+    if (at === -1) {
+      throw new Error(`${file} has no anchor (${from.trim().slice(0, 80)}); the bundle changed shape`)
+    }
+    if (text.indexOf(from, at + 1) !== -1) {
+      throw new Error(`${file} repeats the anchor (${from.trim().slice(0, 80)}); the patch needs a narrower one`)
+    }
+    text = text.slice(0, at) + to + text.slice(at + from.length)
+  }
+  replaceOnce(TRANSPORT_OVERRIDE_FROM, TRANSPORT_OVERRIDE_TO)
+  replaceOnce(UPSTREAM_ANCHOR, `${UPSTREAM_HELPER}${newline}${UPSTREAM_ANCHOR}`)
+  replaceOnce(UPSTREAM_ORIGIN_FROM, UPSTREAM_ORIGIN_TO)
+  replaceOnce(EXCHANGE_FROM, EXCHANGE_TO)
+  replaceOnce(CERT_ANCHOR, `${CERT_HELPER}${newline}${CERT_ANCHOR}`)
+  replaceOnce(CERT_CALL_FROM, CERT_CALL_TO)
+  return text
 }
 
 /** Parse the patched module with Node before it is written over the installed one. */
@@ -186,6 +314,17 @@ function assertParses(file, source) {
   }
 }
 
+/** Every marker a patched module must still carry; shared by the patch and its verification. */
+const REQUIRED_MARKERS = [
+  MARKER,
+  'renderExpiredPairingPage',
+  'DSH_MOBILE_PAIR_AUTOSUBMIT',
+  'DSH_MOBILE_EXPIRY_TIMER_CLAMP',
+  'DSH_MOBILE_TRANSPORT_BOOTSTRAP',
+  'DSH_MOBILE_DESKTOP_UPSTREAM',
+  'DSH_MOBILE_CERT_REUSE',
+]
+
 export function patchMobileSession(root) {
   const file = join(root, LISTENER_PATH)
   if (!existsSync(file)) return { root, status: 'absent' }
@@ -194,8 +333,12 @@ export function patchMobileSession(root) {
     return { root, status: 'already', bytes: statSync(file).size }
   }
   const after = rewrite(before, file)
-  for (const marker of [MARKER, 'renderExpiredPairingPage', 'DSH_MOBILE_PAIR_AUTOSUBMIT', SESSION_TTL_TO.trim(), PAIR_CLOSED_TO.trim()]) {
+  for (const marker of REQUIRED_MARKERS) {
     if (!after.includes(marker)) throw new Error(`${file}: the patched source lost ${marker}`)
+  }
+  const clamped = after.split(EXPIRY_TIMER_MARKER).length - 1
+  if (clamped !== 2) {
+    throw new Error(`${file}: the patched source clamps ${String(clamped)} of 2 session timers`)
   }
   assertParses(file, after)
   // The rename below publishes the content, so the checks above run on the exact bytes it writes.
@@ -210,8 +353,12 @@ export function verifyMobileSession(root) {
   const file = join(root, LISTENER_PATH)
   if (!existsSync(file)) return 'absent'
   const body = readFileSync(file, 'utf8')
-  for (const marker of [MARKER, 'renderExpiredPairingPage', 'DSH_MOBILE_PAIR_AUTOSUBMIT', SESSION_TTL_TO.trim(), PAIR_CLOSED_TO.trim()]) {
+  for (const marker of REQUIRED_MARKERS) {
     if (!body.includes(marker)) throw new Error(`${file}: installed dsh-mobile is missing ${marker}`)
+  }
+  const clamped = body.split(EXPIRY_TIMER_MARKER).length - 1
+  if (clamped !== 2) {
+    throw new Error(`${file}: installed dsh-mobile clamps ${String(clamped)} of 2 session timers`)
   }
   return 'patched'
 }

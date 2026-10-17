@@ -28,7 +28,8 @@
 // Usage: node scripts/patch-mobile-listen.mjs <node_modules-root> [<node_modules-root> ...]
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -134,7 +135,9 @@ function rewrite(before, file) {
 
 /** Parse the patched module with Node before it is written over the installed one. */
 function assertParses(file, source) {
-  const temporary = `${file}.patch-check.mjs`
+  // A scratch file in the temp directory: the installed tree must not grow a second copy of
+  // the module, and the copy is removed even when the check fails.
+  const temporary = join(tmpdir(), `dsh-mobile-listen-${String(process.pid)}-${String(Date.now())}.mjs`)
   try {
     writeFileSync(temporary, source, 'utf8')
     const result = spawnSync(process.execPath, ['--check', temporary], { encoding: 'utf8' })
@@ -143,9 +146,9 @@ function assertParses(file, source) {
     }
   } finally {
     try {
-      renameSync(temporary, `${temporary}.done`)
+      unlinkSync(temporary)
     } catch {
-      // The check file is temporary; failing to rename it is not a patch failure.
+      // The check file is temporary; failing to remove it is not a patch failure.
     }
   }
 }

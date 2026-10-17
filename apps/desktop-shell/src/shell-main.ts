@@ -560,6 +560,10 @@ async function main(): Promise<void> {
   })
   logShell(`Harness-CN ${options.version} starting; control surface on ${running.origin}`)
   handshake({ type: 'listen', port: running.port })
+  // The mobile gateway proxies the whole app, so it must read pages from this front door and not
+  // from the host's private listener: dsh-mobile prefers DSH_SHELL_ORIGIN when it starts, and the
+  // host it starts below inherits the variable.
+  process.env.DSH_SHELL_ORIGIN = running.origin
 
   // The viewers drain one coalesced batch per interval rather than one push per line: Host
   // output arrives in bursts, and this keeps the event stream off the logging path.
