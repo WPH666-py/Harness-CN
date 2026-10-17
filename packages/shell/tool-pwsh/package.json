@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-tool-pwsh",
   "description": "Model-facing pwsh tool over the bash executor seam",
-  "version": "0.1.5-rc.30",
+  "version": "0.1.5-rc.31",
   "publishConfig": {
     "access": "public"
   },
