@@ -51,8 +51,13 @@ mobile-access (dsh-mobile): listen EADDRINUSE: address already in use 192.168.1.
 - **长期连接补丁**：同一个 `lib/index.mjs` 再变为 717 257 字节，sha256 `782c1bed7bffcf0508f27533b2a12303ccfee21d579b00ba563d88360f00c9e6`；会话/设备字面量改写为 `31536e6`、配对窗口改写为 `6e5, 1e4, 6e5`，`node --check` 通过，重复执行报「already patched」。
 - 单跑 `prepare:seed` 通过，日志含 `patch-mobile-session: patched … (717257 bytes, sha256 782c1bed…)`，`verifyOfflineInstallation` 的两项移动补丁校验均通过（退出码 0，186 秒）。
 - 门禁：Agent Note 格式 347 篇、分类 347 篇、双语配对 813 对，全过；改动文件 `oxlint` 0 warnings / 0 errors。
-- **rc.32 产物原样验证**：（构建完成后回填）
+- **装好 rc.32 之后的复验**：安装包静默安装退出码 0，`harness-cn.exe` 版本 `0.1.5-rc.32`；首次启动从 `~/.harness-cn/desktop/seed/downloads` 里的离线包重建运行时（`desktop runtime installed from the bundled seed`），profile 的 `dsh-mobile/lib/index.mjs` 为 717 257 字节、sha256 `782c1bed…`，两个标记 `DSH_MOBILE_LISTEN_PORT_FALLBACK` / `DSH_MOBILE_SESSION_LONGEVITY` 都在，TTL 字面量为 `31536e6` / `31536e6` / `6e5, 1e4, 6e5`。
+- 再占住 `192.168.1.16:3443` 重启：日志 `(node:16424) [DSH_MOBILE_LISTEN_PORT_FALLBACK] Warning: DSH Mobile: 192.168.1.16:3443 is already in use; listening on 192.168.1.16:3444 instead.`，`/api/mobile-access/lan/control` 回 `{"running":true,"origin":"https://192.168.1.16:3444","extensions":{"loaded":1,"failed":0}}`，`setup.json` 改写为 `listenPort: 3444`，3444 的配对页可达。
+- 配对窗口关闭时 `GET /mobile-access/pair` 回 `200 text/html`：英文 `This pairing link has expired`，带 `Accept-Language: zh-CN` 时是「这个配对链接已过期」，页面里带自动 `POST /mobile-access/auth/renew` 的脚本——不再是一行 `{"error":"not_found"}`。
+- **rc.32 产物原样验证**：`pnpm run package:desktop:win:x64` 与 `apps/desktop-shell` 的 `build` 都以退出码 0 结束；`prepare:seed` 日志里两条补丁的输出是 `patch-mobile-listen: patched … (714003 bytes, sha256 ad6af19b…)` 与 `patch-mobile-session: patched … (717257 bytes, sha256 782c1bed…)`，其后 `desktop seed: recorded 31527 profile files as store links, archived 279 files and 4527 directories`；安装包签名为 `Valid`，签名主体 `CN=水哥`。
 
 ## 安装包校验和
 
-（构建完成后回填）
+- `Harness-CN_0.1.5-rc.32_x64-setup.exe` — 28 937 896 字节，sha256 `FA6BC86FC5E7C28765622CE0B4C453F3CD5C5CA680C1BA8707FF25363055FD29`
+- `Harness-CN-seed-0.1.5-rc.32.tar.zst` — 128 018 571 字节，sha256 `82123A60A7E7BAA152A4E31249277FAB36548F9676440074EACD2F54D5B3A356`
+- Gitee 分卷：`…tar.zst.part1of2` 67 108 864 字节 sha256 `DF0ED20E82615D55C186D9B7B665AFEB7020F6B79192A771A33DF7C6DB7F81D9`；`…part2of2` 60 909 707 字节 sha256 `D4789C47FC3A401A146751F09A0BF96B71726F73DD9143203A82EC97BE0B0E22`；`…parts.txt` 1 096 字节。两个分卷按名次拼接后与上面整包一致。
