@@ -175,6 +175,37 @@ async function verifyWeChatIdentityPatch(root: string): Promise<void> {
   module.verifyWeChatIdentity(root)
 }
 
+function patchInstalledMobileListen(root: string): Promise<void> {
+  // dsh-mobile binds its LAN port while the plugin tree loads, so a port that another DSH
+  // desktop already holds fails the whole app instead of one feature. The patched bytes walk
+  // forward to a free port, persist it, and keep a bind failure from failing the boot. See
+  // scripts/patch-mobile-listen.mjs for why this cannot be configuration.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-mobile-listen.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: mobile listen patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
+/** Read the port fallback back out of the installed dsh-mobile in a tree the seed produced. */
+async function verifyMobileListenPatch(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-mobile-listen.mjs')
+  const module = await import(pathToFileURL(script).href) as {
+    verifyMobileListen?: (tree: string) => string
+  }
+  if (typeof module.verifyMobileListen !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyMobileListen`)
+  }
+  // The seed always ships dsh-mobile through the desktop profile bundles, so a tree without
+  // it means the bundle list changed and the patch silently stopped applying.
+  if (module.verifyMobileListen(root) !== 'patched') {
+    throw new Error('desktop seed: the profile the seed produced has no patched dsh-mobile')
+  }
+}
+
 /** Read the engine's classification table back out of a tree the seed produced. */
 async function verifyRuleEnginePatch(root: string): Promise<void> {
   const catalog = join(root, 'node_modules', 'dsh-rule-engine', 'lib', 'core', 'tool-catalog.js')
@@ -231,6 +262,8 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     await verifyWeChatSessionsPatch(materialized)
     // And it has to come out of it answering to this product's name.
     await verifyWeChatIdentityPatch(materialized)
+    // And its LAN listener has to survive a port another instance already holds.
+    await verifyMobileListenPatch(materialized)
   } finally {
     rmSync(materialized, { recursive: true, force: true })
   }
@@ -259,6 +292,7 @@ async function main(): Promise<void> {
     await patchInstalledRuleEngine(join(SEED_ROOT, 'node_modules'))
     await patchInstalledWeChatSessions(join(SEED_ROOT, 'node_modules'))
     await patchInstalledWeChatIdentity(join(SEED_ROOT, 'node_modules'))
+    await patchInstalledMobileListen(join(SEED_ROOT, 'node_modules'))
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
     let signedMachOFiles: number | undefined
