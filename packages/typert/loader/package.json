@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-typert-loader",
   "description": "Loader integration for generated Typert package contributions",
-  "version": "0.1.5-rc.31",
+  "version": "0.1.5-rc.32",
   "publishConfig": {
     "access": "public"
   },
