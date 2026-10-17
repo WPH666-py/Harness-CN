@@ -418,6 +418,49 @@ describe('notice containment', () => {
   })
 })
 
+describe('the session commit', () => {
+  /** A flow that commits through the session, the contract newer flows are written against. */
+  function sessionCommittingFlow(): AuthorizationFlow {
+    return {
+      key: KEY,
+      label: 'ChatGPT (Codex)',
+      methods: [{ id: 'oauth', label: 'Sign in with ChatGPT' }],
+      async run(session) {
+        await session.commit({ kind: 'grant', payload: { token: 'granted' } })
+      },
+    }
+  }
+
+  it('commits a record through the session and settles authorized', async () => {
+    const ctx = await harness()
+    ctx.authorization.registerFlow(sessionCommittingFlow())
+
+    await expect(ctx.authorization.begin({ key: KEY, interaction: surface() }))
+      .resolves.toEqual({ status: 'authorized' })
+
+    expect(await ctx.credentials.readRecord(KEY)).toEqual({ kind: 'grant', payload: { token: 'granted' } })
+  })
+
+  it('refuses a commit once the attempt was withdrawn', async () => {
+    const ctx = await harness()
+    ctx.authorization.registerFlow({
+      key: KEY,
+      label: 'ChatGPT (Codex)',
+      methods: [{ id: 'oauth', label: 'Sign in with ChatGPT' }],
+      async run(session) {
+        ctx.authorization.cancel(KEY)
+        await new Promise(resolve => setTimeout(resolve, 0))
+        await session.commit({ kind: 'grant', payload: { token: 'granted' } })
+      },
+    })
+
+    await expect(ctx.authorization.begin({ key: KEY, interaction: surface() }))
+      .resolves.toEqual({ status: 'cancelled' })
+
+    expect(await ctx.credentials.readRecord(KEY)).toBeUndefined()
+  })
+})
+
 describe('the settled fan-out', () => {
   it('keeps a throwing listener from changing a finished attempt, and later listeners still run', async () => {
     const ctx = await harness()
