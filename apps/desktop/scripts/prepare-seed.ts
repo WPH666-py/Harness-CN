@@ -235,6 +235,35 @@ async function verifyMobileSessionPatch(root: string): Promise<void> {
   }
 }
 
+function patchInstalledMobilePanel(root: string): Promise<void> {
+  // dsh-mobile's panel was built phone-first: the QR code sits behind a "copy key" shortcut and
+  // the rest of the surface is update cards, tabs and diagnostics. The patched bundle shows the
+  // code on its own and keeps three controls. See scripts/patch-mobile-panel.mjs for why this
+  // cannot be configuration.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-mobile-panel.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: mobile panel patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
+/** Read the simplified panel back out of the installed dsh-mobile in a tree the seed produced. */
+async function verifyMobilePanelPatch(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-mobile-panel.mjs')
+  const module = await import(pathToFileURL(script).href) as {
+    verifyMobilePanel?: (tree: string) => string
+  }
+  if (typeof module.verifyMobilePanel !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyMobilePanel`)
+  }
+  if (module.verifyMobilePanel(join(root, 'node_modules')) !== 'patched') {
+    throw new Error('desktop seed: the profile the seed produced has no simplified dsh-mobile panel')
+  }
+}
+
 /** Read the engine's classification table back out of a tree the seed produced. */
 async function verifyRuleEnginePatch(root: string): Promise<void> {
   const catalog = join(root, 'node_modules', 'dsh-rule-engine', 'lib', 'core', 'tool-catalog.js')
@@ -295,6 +324,8 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     await verifyMobileListenPatch(materialized)
     // And a phone paired once has to stay signed in after the session it opened has lapsed.
     await verifyMobileSessionPatch(materialized)
+    // And the panel has to show the code instead of asking the user to copy a secret.
+    await verifyMobilePanelPatch(materialized)
   } finally {
     rmSync(materialized, { recursive: true, force: true })
   }
@@ -325,6 +356,7 @@ async function main(): Promise<void> {
     await patchInstalledWeChatIdentity(join(SEED_ROOT, 'node_modules'))
     await patchInstalledMobileListen(join(SEED_ROOT, 'node_modules'))
     await patchInstalledMobileSession(join(SEED_ROOT, 'node_modules'))
+    await patchInstalledMobilePanel(join(SEED_ROOT, 'node_modules'))
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
     let signedMachOFiles: number | undefined

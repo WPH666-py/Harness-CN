@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-plugin-package-inventory-deepseek",
   "description": "Active Loader-backed plugin package inventory for official DeepSeek LLM API requests",
-  "version": "0.1.5-rc.32",
+  "version": "0.1.5-rc.33",
   "publishConfig": {
     "access": "public"
   },

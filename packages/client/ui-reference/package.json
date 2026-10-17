@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-client-ui-reference",
   "description": "Unified Web @file and @session reference source",
-  "version": "0.1.5-rc.32",
+  "version": "0.1.5-rc.33",
   "publishConfig": {
     "access": "public"
   },
