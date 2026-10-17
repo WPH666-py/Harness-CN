@@ -201,8 +201,37 @@ async function verifyMobileListenPatch(root: string): Promise<void> {
   }
   // The seed always ships dsh-mobile through the desktop profile bundles, so a tree without
   // it means the bundle list changed and the patch silently stopped applying.
-  if (module.verifyMobileListen(root) !== 'patched') {
+  if (module.verifyMobileListen(join(root, 'node_modules')) !== 'patched') {
     throw new Error('desktop seed: the profile the seed produced has no patched dsh-mobile')
+  }
+}
+
+function patchInstalledMobileSession(root: string): Promise<void> {
+  // dsh-mobile expires a phone's session after 48 minutes and its device after 90 days, so a
+  // phone that was paired once falls back to the login page and, eventually, to pairing again.
+  // The patched bytes keep both for a year and answer an expired pair link with a page instead
+  // of a 404. See scripts/patch-mobile-session.mjs for why this cannot be configuration.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-mobile-session.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: mobile session patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
+/** Read the long-lived sessions back out of the installed dsh-mobile in a tree the seed produced. */
+async function verifyMobileSessionPatch(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-mobile-session.mjs')
+  const module = await import(pathToFileURL(script).href) as {
+    verifyMobileSession?: (tree: string) => string
+  }
+  if (typeof module.verifyMobileSession !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyMobileSession`)
+  }
+  if (module.verifyMobileSession(join(root, 'node_modules')) !== 'patched') {
+    throw new Error('desktop seed: the profile the seed produced has no long-lived dsh-mobile sessions')
   }
 }
 
@@ -264,6 +293,8 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     await verifyWeChatIdentityPatch(materialized)
     // And its LAN listener has to survive a port another instance already holds.
     await verifyMobileListenPatch(materialized)
+    // And a phone paired once has to stay signed in after the session it opened has lapsed.
+    await verifyMobileSessionPatch(materialized)
   } finally {
     rmSync(materialized, { recursive: true, force: true })
   }
@@ -293,6 +324,7 @@ async function main(): Promise<void> {
     await patchInstalledWeChatSessions(join(SEED_ROOT, 'node_modules'))
     await patchInstalledWeChatIdentity(join(SEED_ROOT, 'node_modules'))
     await patchInstalledMobileListen(join(SEED_ROOT, 'node_modules'))
+    await patchInstalledMobileSession(join(SEED_ROOT, 'node_modules'))
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
     let signedMachOFiles: number | undefined
