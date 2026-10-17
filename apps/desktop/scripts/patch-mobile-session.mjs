@@ -77,6 +77,21 @@ const PAIR_CLOSED_TO = [
 /** Page renderer inserted above the pairing page it replaces. */
 const PAIR_PAGE_ANCHOR = 'function renderPairPage(locale) {'
 
+/** The pair page prefills the code from the scanned fragment, then waits for a typed name. */
+const PAIR_AUTOSUBMIT_FROM = '  if (supplied) token.value = supplied'
+
+/** …and now it connects by itself: the server derives a device label when none is sent. */
+const PAIR_AUTOSUBMIT_TO = [
+  PAIR_AUTOSUBMIT_FROM,
+  '  // DSH_MOBILE_PAIR_AUTOSUBMIT: the scanned link already carries the code and the server',
+  '  // derives a device label, so the phone connects without typing a name.',
+  '  if (supplied) {',
+  "    label.closest('label')?.setAttribute('hidden', '')",
+  "    status.value = ${JSON.stringify(copy.pairing)}",
+  '    window.setTimeout(() => { form.requestSubmit() }, 400)',
+  '  }',
+].join('\n')
+
 const PAGE_RENDERER = [
   '// DSH_MOBILE_SESSION_LONGEVITY: sessions and paired devices last a year, and the pairing',
   '// window stays open for ten minutes, so scanning once keeps a phone connected.',
@@ -140,6 +155,7 @@ function rewrite(before, file) {
   replaceLine(SESSION_TTL_FROM, SESSION_TTL_TO)
   replaceLine(PAIR_WINDOW_FROM, PAIR_WINDOW_TO)
   replaceLine(PAIR_CLOSED_FROM, PAIR_CLOSED_TO)
+  replaceLine(PAIR_AUTOSUBMIT_FROM, PAIR_AUTOSUBMIT_TO)
   const renderIndex = lines.indexOf(PAIR_PAGE_ANCHOR)
   if (renderIndex === -1) {
     throw new Error(
@@ -178,7 +194,7 @@ export function patchMobileSession(root) {
     return { root, status: 'already', bytes: statSync(file).size }
   }
   const after = rewrite(before, file)
-  for (const marker of [MARKER, 'renderExpiredPairingPage', SESSION_TTL_TO.trim(), PAIR_CLOSED_TO.trim()]) {
+  for (const marker of [MARKER, 'renderExpiredPairingPage', 'DSH_MOBILE_PAIR_AUTOSUBMIT', SESSION_TTL_TO.trim(), PAIR_CLOSED_TO.trim()]) {
     if (!after.includes(marker)) throw new Error(`${file}: the patched source lost ${marker}`)
   }
   assertParses(file, after)
@@ -194,7 +210,7 @@ export function verifyMobileSession(root) {
   const file = join(root, LISTENER_PATH)
   if (!existsSync(file)) return 'absent'
   const body = readFileSync(file, 'utf8')
-  for (const marker of [MARKER, 'renderExpiredPairingPage', SESSION_TTL_TO.trim(), PAIR_CLOSED_TO.trim()]) {
+  for (const marker of [MARKER, 'renderExpiredPairingPage', 'DSH_MOBILE_PAIR_AUTOSUBMIT', SESSION_TTL_TO.trim(), PAIR_CLOSED_TO.trim()]) {
     if (!body.includes(marker)) throw new Error(`${file}: installed dsh-mobile is missing ${marker}`)
   }
   return 'patched'
