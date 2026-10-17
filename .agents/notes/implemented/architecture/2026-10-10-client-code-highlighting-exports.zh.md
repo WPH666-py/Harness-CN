@@ -49,4 +49,4 @@ Status: implemented
 
 ## 相关
 
-- [Harness-CN GitHub 发布通道](2026-10-07-harness-cn-github-release-channel.md) 拥有分发这些 bundle 的那一侧；本 note 拥有"基线必须导出什么，其中一个 bundle 才能加载"这一侧。
+- [Harness-CN GitHub 发布通道](2026-10-07-harness-cn-github-release-channel.zh.md) 拥有分发这些 bundle 的那一侧；本 note 拥有"基线必须导出什么，其中一个 bundle 才能加载"这一侧。
