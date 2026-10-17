@@ -152,14 +152,23 @@ export class AccountSectionController {
       draft.busy = true
       draft.failed = false
     })
-    const result = await this.account()
-      .startSignIn(this.client(), window.location.origin, 'desktop')
-      .catch(() => null)
-    this.store.update((draft) => {
-      draft.busy = false
-      draft.failed = result === null || !result.ok
-      if (result !== null && result.ok) draft.view = result.value
-    })
+    try {
+      const result = await this.account()
+        .startSignIn(this.client(), window.location.origin, 'desktop')
+        .catch(() => null)
+      this.store.update((draft) => {
+        draft.busy = false
+        draft.failed = result === null || !result.ok
+        if (result !== null && result.ok) draft.view = result.value
+      })
+    } catch {
+      // A local failure (no mounted namespace) must not strand the row in its
+      // busy frame: reset it and render the failed arm instead.
+      this.store.update((draft) => {
+        draft.busy = false
+        draft.failed = true
+      })
+    }
   }
 
   /**
@@ -170,12 +179,19 @@ export class AccountSectionController {
     this.store.update((draft) => {
       draft.busy = true
     })
-    const result = await this.account().cancelSignIn(attemptId).catch(() => null)
-    this.store.update((draft) => {
-      draft.busy = false
-      draft.failed = result === null || !result.ok
-      if (result !== null && result.ok) draft.view = result.value
-    })
+    try {
+      const result = await this.account().cancelSignIn(attemptId).catch(() => null)
+      this.store.update((draft) => {
+        draft.busy = false
+        draft.failed = result === null || !result.ok
+        if (result !== null && result.ok) draft.view = result.value
+      })
+    } catch {
+      this.store.update((draft) => {
+        draft.busy = false
+        draft.failed = true
+      })
+    }
   }
 
   /**
@@ -192,16 +208,23 @@ export class AccountSectionController {
     this.store.update((draft) => {
       draft.busy = true
     })
-    const result = await this.account().signOut(this.client()).catch(() => null)
-    this.store.update((draft) => {
-      draft.busy = false
-      draft.failed = result === null || !result.ok
-      if (result !== null && result.ok) {
-        draft.view = result.value
-        draft.profile = undefined
-        draft.balance = undefined
-      }
-    })
+    try {
+      const result = await this.account().signOut(this.client()).catch(() => null)
+      this.store.update((draft) => {
+        draft.busy = false
+        draft.failed = result === null || !result.ok
+        if (result !== null && result.ok) {
+          draft.view = result.value
+          draft.profile = undefined
+          draft.balance = undefined
+        }
+      })
+    } catch {
+      this.store.update((draft) => {
+        draft.busy = false
+        draft.failed = true
+      })
+    }
     this.notices.end()
   }
 
@@ -254,8 +277,18 @@ export class AccountSectionController {
     return result.value
   }
 
+  /**
+   * The account namespace this plugin mounts.
+   *
+   * `apply` mounts the contribution from its own body, so naming
+   * `remote.account` in the plugin's `inject` would deadlock the fiber against
+   * itself; read the installed service from the registry instead of projecting
+   * it through `ctx.remote`, whose dotted lookup demands that declaration.
+   */
   private account(): AccountRemote {
-    return this.ctx.remote.account
+    const namespace = this.ctx.get('remote.account') as AccountRemote | undefined
+    if (namespace === undefined) throw new Error('ui-settings-account-harness: remote.account is not mounted')
+    return namespace
   }
 
   private client(): AccountClientMetadata {

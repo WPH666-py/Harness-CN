@@ -182,6 +182,7 @@ function createHarness() {
     locale,
     slots,
     remote: { account, $mount: mount, $stream: remoteStream },
+    get: (name: string): unknown => (name === 'remote.account' ? account : undefined),
   } as unknown as Context
   created.push({ effectDisposers })
   return {

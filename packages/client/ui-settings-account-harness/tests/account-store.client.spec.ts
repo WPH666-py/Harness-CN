@@ -289,13 +289,12 @@ function createAccountRemote(queue: ScriptedQueue<AccountView>) {
  * Build one controller over a fake Context and register it for teardown.
  * @returns the controller plus every handle the case needs to drive it.
  */
-function createHarness() {
+function createHarness(options: { readonly namespaceMounted?: boolean } = {}) {
   const watch = new ScriptedQueue<AccountView>()
   const account = createAccountRemote(watch)
   const streams: ScriptedRemoteStream<AccountView>[] = []
   const streamOptions: ScriptedStreamOptions<AccountView>[] = []
   const remote = {
-    account,
     $stream: (options: ScriptedStreamOptions<AccountView>): ScriptedRemoteStream<AccountView> => {
       streamOptions.push(options)
       const stream = new ScriptedRemoteStream(options)
@@ -303,8 +302,12 @@ function createHarness() {
       return stream
     },
   }
+  // The controller mounts its own contribution, so the namespace lives in the
+  // service registry rather than on the `remote` projection it injected.
+  const services = new Map<string, unknown>(options.namespaceMounted === false ? [] : [['remote.account', account]])
   const ctx = {
     remote,
+    get: (name: string): unknown => services.get(name),
     locale: { getLocale: () => ({ active: ACTIVE_LOCALE }) },
   } as unknown as Context
   const controller = new AccountSectionController(ctx)
@@ -554,6 +557,17 @@ describe('AccountSectionController', () => {
       expect(state.busy).toBe(false)
       expect(state.failed).toBe(false)
       expect(state.view).toMatchObject({ status: 'credential-stored' })
+    })
+
+    it('resets busy and reports failure when the namespace is not mounted', async () => {
+      const h = createHarness({ namespaceMounted: false })
+
+      await h.controller.signIn()
+
+      const state = h.controller.store.getSnapshot()
+      expect(state.busy).toBe(false)
+      expect(state.failed).toBe(true)
+      expect(h.account.startSignIn).not.toHaveBeenCalled()
     })
 
     it('clears an earlier failure when a later attempt succeeds', async () => {
