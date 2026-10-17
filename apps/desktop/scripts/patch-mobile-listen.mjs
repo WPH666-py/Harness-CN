@@ -29,7 +29,8 @@
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /** The module the listener lives in, relative to a node_modules root. */
 const LISTENER_PATH = join('dsh-mobile', 'lib', 'index.mjs')
@@ -180,22 +181,26 @@ export function verifyMobileListen(root) {
   return 'patched'
 }
 
-const roots = process.argv.slice(2)
-if (roots.length === 0) {
-  process.stderr.write('patch-mobile-listen: give at least one node_modules root\n')
-  process.exit(2)
-}
-for (const root of roots) {
-  const result = patchMobileListen(root)
-  if (result.status === 'absent') {
-    process.stdout.write(`patch-mobile-listen: no dsh-mobile under ${root}; nothing to patch\n`)
-  } else if (result.status === 'already') {
-    process.stdout.write(
-      `patch-mobile-listen: ${root} already falls back to a free LAN port (${String(result.bytes)} bytes)\n`,
-    )
-  } else {
-    process.stdout.write(
-      `patch-mobile-listen: patched ${root} (${String(result.bytes)} bytes, sha256 ${String(result.sha256)})\n`,
-    )
+// Run only as a command: prepare-seed imports verifyMobileListen from this file, and an
+// unguarded CLI block would end that process on this argument check instead of returning.
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const roots = process.argv.slice(2)
+  if (roots.length === 0) {
+    process.stderr.write('patch-mobile-listen: give at least one node_modules root\n')
+    process.exit(2)
+  }
+  for (const root of roots) {
+    const result = patchMobileListen(root)
+    if (result.status === 'absent') {
+      process.stdout.write(`patch-mobile-listen: no dsh-mobile under ${root}; nothing to patch\n`)
+    } else if (result.status === 'already') {
+      process.stdout.write(
+        `patch-mobile-listen: ${root} already falls back to a free LAN port (${String(result.bytes)} bytes)\n`,
+      )
+    } else {
+      process.stdout.write(
+        `patch-mobile-listen: patched ${root} (${String(result.bytes)} bytes, sha256 ${String(result.sha256)})\n`,
+      )
+    }
   }
 }
