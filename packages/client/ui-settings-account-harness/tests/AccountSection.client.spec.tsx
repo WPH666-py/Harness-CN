@@ -202,6 +202,8 @@ describe('AccountSection', () => {
       expect(screen.queryByRole('status')?.textContent).toBe(status)
       expect(screen.queryByRole('button', { name: en.cancel }) === null).toBe(!active)
       expect(screen.queryByRole('link', { name: en.open }) === null).toBe(!active)
+      // An attempt the browser is holding replaces the start button rather than sitting beside it.
+      expect(screen.queryByRole('button', { name: en.signIn }) === null).toBe(active)
     }
   })
 
@@ -247,13 +249,17 @@ describe('AccountSection', () => {
   it('calls the injected action for each signed-out gesture', async () => {
     const row = createRow()
     renderRow(row)
+
+    // The idle panel is the only place that starts a sign-in.
+    fireEvent.click(screen.getByRole('button', { name: en.signIn }))
+    expect(row.signIn).toHaveBeenCalledTimes(1)
+
+    // Once the browser holds the attempt, the same row offers the cancel and the page instead.
     await row.update({
       view: signedOutView({ id: ATTEMPT_ID, phase: 'waiting-browser', authorizeUrl: AUTHORIZE_URL }),
     })
 
-    fireEvent.click(screen.getByRole('button', { name: en.signIn }))
-    expect(row.signIn).toHaveBeenCalledTimes(1)
-
+    expect(screen.queryByRole('button', { name: en.signIn })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: en.cancel }))
     expect(row.cancel).toHaveBeenCalledWith(ATTEMPT_ID)
 

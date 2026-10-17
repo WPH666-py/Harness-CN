@@ -150,6 +150,9 @@ export function AccountSection(props: AccountSectionProps): ReactNode {
   }, [attempt])
 
   const phaseCopy = attempt === null ? undefined : PHASE_COPY[attempt.phase]
+  // An attempt the browser is holding open: the panel shows its progress and the cancel that ends
+  // it, never a second way to start one.
+  const attempting = attempt !== null && ACTIVE_PHASES.includes(attempt.phase)
   const statusText = phaseCopy === undefined ? undefined : t(phaseCopy)
   const profile = state.profile
   const profileText = profile === undefined
@@ -200,14 +203,21 @@ export function AccountSection(props: AccountSectionProps): ReactNode {
             </div>
             {state.failed ? <p className={css.status} role="alert">{t('failed')}</p> : null}
             <div className={css.actions}>
-              <Button
-                size="sm"
-                disabled={state.busy}
-                onClick={() => { void signIn() }}
-              >
-                {t('signIn')}
-              </Button>
-              {attempt !== null && ACTIVE_PHASES.includes(attempt.phase)
+              {/* One sign-in at a time: while the browser holds the attempt, the button that starts
+                  it would only replace that attempt, so it stays out of the row until the attempt
+                  ends and the panel goes back to its signed-out state. */}
+              {attempting
+                ? null
+                : (
+                  <Button
+                    size="sm"
+                    disabled={state.busy}
+                    onClick={() => { void signIn() }}
+                  >
+                    {t('signIn')}
+                  </Button>
+                )}
+              {attempting
                 ? (
                   <Button
                     variant="outline"
@@ -223,7 +233,7 @@ export function AccountSection(props: AccountSectionProps): ReactNode {
                 ? null
                 : (
                   <a
-                    className={css.link}
+                    className={`${css.link} ${css.actionLink}`}
                     href={attempt.authorizeUrl}
                     target="_blank"
                     rel="noreferrer"

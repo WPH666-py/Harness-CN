@@ -268,10 +268,20 @@ async function main() {
   // show the log rather than nothing at all.
   if (locale !== undefined) applyLocale(locale)
 
-  // The snapshot is read on its own and first: it is what this window exists to show, and it has to
-  // survive a live stream that cannot be opened. The stream is attached before the wiring below, so
-  // a line arriving while the snapshot is read is kept — `merge` drops it by sequence number when
-  // the snapshot turns out to carry it too.
+  // The snapshot is read before the live stream is attached. Both are requests to the same
+  // loopback origin, and a browser holds only a few connections per origin: the stream is
+  // long-lived, so attaching it first can take the slot the snapshot needs and leave the window
+  // showing nothing while it waits. Reading first makes the list independent of that budget, and
+  // `merge` drops anything the snapshot already carried when the stream then replays it.
+  const snapshot = await readSnapshot()
+  entries = []
+  dropped = snapshot.dropped
+  logFile = snapshot.file
+  merge(snapshot.entries)
+  renderAll()
+  // The list is on screen, so a notice about retrying the read has served its purpose.
+  clearBootFailure('snapshot')
+
   let liveAttached = false
   try {
     subscribeEvents({
@@ -284,15 +294,6 @@ async function main() {
   } catch (error) {
     reportBootFailure(`实时日志流不可用，仅显示已读取的记录：${messageOf(error)}`)
   }
-
-  const snapshot = await readSnapshot()
-  entries = []
-  dropped = snapshot.dropped
-  logFile = snapshot.file
-  merge(snapshot.entries)
-  renderAll()
-  // The list is on screen, so a notice about retrying the read has served its purpose.
-  clearBootFailure('snapshot')
   if (!liveAttached) updateStatus()
 
   document.querySelector('#source').addEventListener('change', (event) => {
