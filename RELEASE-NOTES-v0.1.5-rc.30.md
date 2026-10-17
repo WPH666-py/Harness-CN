@@ -28,14 +28,15 @@
 
 ## 验证
 
-- 已安装的 rc.29 副本上复现两处：等待态一行含「登录」，运行日志窗口只有外壳、无状态行。
-- 热替换修好的客户端包与 `log-viewer.js` 后（WebView2 调试端口驱动）：
-  - 点「登录」→「请在浏览器中继续」且 `hasSignIn: false`、`buttons: [取消]`；点「取消」回到空闲面板，「登录」回来；
-  - 重开 运行日志 → `显示 65 条，内存保留 65 条，已丢弃 0 条。` 与 65 行记录；
-  - 同一页面里用 iframe 复现旧顺序：快照请求被流挡住，只剩空列表 —— 顺序调整后不再出现。
-- `pnpm exec vitest run packages/client/ui-settings-account-harness` → 8 个文件 / 95 个用例通过（含新增的相位矩阵断言）。
-- `pnpm run typecheck:contracts-ready` 通过；`oxlint` 对改动文件 0 warnings / 0 errors；Agent Note 344 篇格式与分类校验通过；新增中英配对已提交。
-- 本版安装包安装后仍需复验一次（安装 → 设置 → 账号与余额 → 登录 → 运行日志）。
+- rc.29 上复现两处缺陷：等待态一行含「登录」，运行日志窗口只有外壳、无状态行。
+- 开发期热替换验证：点「登录」→「请在浏览器中继续」且 `hasSignIn: false`、按钮只剩「取消」；点「取消」回到空闲面板，「登录」回来；重开 运行日志 → `显示 65 条，内存保留 65 条，已丢弃 0 条。`；同一页面里用 iframe 复现旧顺序，快照请求被 SSE 流挡住，只剩空列表 —— 顺序调整后不再出现。
+- **rc.30 产物原样验证**：把安装包里的 `harness-cn.exe` 与 `resources/` 按安装器布局铺到 `%LOCALAPPDATA%\Harness-CN`，启动后用 WebView2 调试端口驱动界面：
+  - 设置 → 账号与余额 → 点「登录」→ 面板文案「请在浏览器中继续」，按钮集合只剩 `取消`（`hasSignIn: false`、`hasCancel: true`），链接为 `打开浏览器`；
+  - 点「取消」→ 回到空闲面板，`登录` 回来（`hasSignIn: true`、`hasCancel: false`）；
+  - 运行日志 → `显示 65 条，内存保留 65 条，已丢弃 0 条。`，列表 65 行，来源下拉「全部来源 / 桌面外壳 / 后端输出 / 后端错误」齐全。
+- 发布物内容与上面跑的这份逐字节一致：`resources/shell/log-viewer.js` 的 sha256 = `AB7F2721DF5739435B32A29102B0BC1ABC0BC48164E32FB1AD74C41B5795805B`；离线包内 `deepseek-ai-dsh-client-ui-settings-account-harness-0.1.5-rc.30.tgz` 解出的 `lib/client.js`（194 120 字节）sha256 = `DCAD4685530FA77CC89D341C5ACF6D0220D46514BA3C583822A4D4C4560ED479`，与仓库构建产物一致。
+- `pnpm exec vitest run packages/client/ui-settings-account-harness` → 8 个文件 / 95 个用例通过（含新增的相位矩阵断言）；`pnpm run typecheck:contracts-ready` 通过；`oxlint` 对改动文件 0 warnings / 0 errors；Agent Note 344 篇格式与分类校验通过（新增中英配对已提交）。
+- 本机安装器的静默安装（`/S`）在当前会话里失败（进程退出码 2、未落盘），因此没有做安装器级 e2e；上面的验证跑的是安装包内同一份 payload，发布物哈希列在下方，可与下载件比对。
 
 ## 安装包校验和
 
