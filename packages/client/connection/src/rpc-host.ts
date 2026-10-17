@@ -15,6 +15,7 @@ import type { BrowserAuth } from './browser-auth.ts'
 import type {
   ConnectionIndexRequest,
   ConnectionIndexResponse,
+  ConnectionFetchFallback,
   ConnectionFetchRoute,
   ConnectionFetchHandler,
   HostConnectionFetch,
@@ -112,26 +113,29 @@ export class HostConnectionService extends Service implements HostConnectionHand
   /**
    * Compose one shared-channel Fetch handler from exact routes and its interceptor.
    * @param channel - shared channel mounted by Connection.
+   * @param fallback - owner of a request no exact route and no intercepted endpoint claims.
    * @returns Fetch handler that selects one owner or returns 404.
    */
   createSharedFetchHandler(
     channel: '/api',
+    fallback?: ConnectionFetchFallback,
   ): ConnectionFetchHandler {
     return {
       requestBodyMode: ({ method, url }) => {
         const route = this.fetchRoutes.get(url.pathname)
         return route?.methods.has(method) === true ? route.requestBody : 'buffered'
       },
-      fetch: (request) => {
+      fetch: async (request) => {
         const pathname = new URL(request.url).pathname
         const route = this.fetchRoutes.get(pathname)
         if (route?.methods.has(request.method) === true) return route.fetch(request)
         const endpoint = endpointFromPath(channel, pathname)
         const interceptor = this.interceptors.get(channel)
-        if (endpoint === undefined || interceptor === undefined || !interceptor.matches(endpoint)) {
-          return Promise.resolve(new Response('not found', { status: 404 }))
+        if (endpoint !== undefined && interceptor !== undefined && interceptor.matches(endpoint)) {
+          return interceptor.fetchHandler.fetch(request)
         }
-        return interceptor.fetchHandler.fetch(request)
+        if (fallback === undefined) return new Response('not found', { status: 404 })
+        return fallback(request)
       },
     }
   }

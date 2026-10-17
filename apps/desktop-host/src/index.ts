@@ -304,7 +304,6 @@ export async function runDesktopHost(
     throw new Error('dsh desktop: composition did not provide connection, typertGateway, and clientModules')
   }
   const webServer = ctx.get('webServer')
-  const api = connection.createSharedFetchHandler('/api')
   const assets = assetHandler(ctx, absoluteProject)
   const streams = remoteStreamHandler(ctx)
   const requests = new Map<number, AbortController>()
@@ -342,6 +341,19 @@ export async function runDesktopHost(
       ? assets.fetch(request)
       : routed
   }
+
+  /**
+   * Answer `/api` requests this carrier claims itself.
+   *
+   * Exact Fetch routes and the shared RPC interceptor answer first. A request neither
+   * owns still belongs to the composed webserver, whose longest-prefix dispatch serves
+   * plugin Host routes registered under `/api` — the Mobile access admin API is one. In
+   * the browser the webserver already sits in front of this handler; here the carrier is
+   * the front door, so the webserver's dispatch has to be supplied as the fallback.
+   * @param request - authenticated `/api` request carried from the WebView.
+   * @returns the in-process owner's response, the plugin route's, or the asset answer.
+   */
+  const api = connection.createSharedFetchHandler('/api', pluginRoutes)
 
   const dispose = async (): Promise<void> => {
     disposing ??= (async () => {

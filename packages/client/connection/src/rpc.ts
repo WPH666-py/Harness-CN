@@ -124,6 +124,20 @@ export interface ConnectionFetchRoute {
   readonly fetch: (request: Request) => Promise<Response>
 }
 
+/**
+ * Owner of one `/api` request that neither an exact Fetch route nor the shared-channel
+ * interceptor claimed.
+ *
+ * A browser carrier mounts the shared handler behind the composed webserver, whose
+ * longest-prefix dispatch already gives plugin Web routes their turn, so it omits this
+ * fallback. A carrier that answers `/api` itself — the desktop transport — supplies the
+ * composed webserver here, so a plugin route registered under `/api` stays reachable
+ * instead of collapsing into this handler's own 404.
+ * @param request - already-authenticated request no in-process owner claimed.
+ * @returns the fallback owner's response.
+ */
+export type ConnectionFetchFallback = (request: Request) => Promise<Response>
+
 /** Host registry for exact Fetch routes that cannot use JSON Remote invocation. */
 export interface HostConnectionFetch {
   /**
@@ -171,9 +185,13 @@ export interface HostConnectionHandle {
   /**
    * Compose exact Fetch routes and the shared-channel RPC interceptor.
    * @param channel - shared channel mounted by Connection.
+   * @param fallback - owner of a request no exact route and no intercepted endpoint claims.
    * @returns Fetch handler for trusted, authenticated requests.
    */
-  createSharedFetchHandler(channel: '/api'): ConnectionFetchHandler
+  createSharedFetchHandler(
+    channel: '/api',
+    fallback?: ConnectionFetchFallback,
+  ): ConnectionFetchHandler
 
   /**
    * Apply Connection's Host/Origin checks and browser authentication to

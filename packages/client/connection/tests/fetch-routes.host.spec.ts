@@ -53,6 +53,37 @@ describe('Connection exact Fetch routes', () => {
     await disposeFiber()
   })
 
+  it('hands a request no owner claimed to the carrier fallback', async () => {
+    const { connection, dispose: disposeFiber } = await mounted()
+    const route = vi.fn(async () => Response.json({ owner: 'route' }))
+    const fallback = vi.fn(async (request: Request) =>
+      Response.json({ owner: 'fallback', path: new URL(request.url).pathname }))
+    const dispose = connection.fetch.register({
+      path: '/api/session.export',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: route,
+    })
+    const shared = connection.createSharedFetchHandler('/api', fallback)
+
+    const claimed = await shared.fetch(new Request('http://host/api/session.export'))
+    expect(await claimed.json()).toEqual({ owner: 'route' })
+    expect(fallback).not.toHaveBeenCalled()
+
+    const unclaimed = await shared.fetch(new Request('http://host/api/mobile-access/lan/control'))
+    expect(unclaimed.status).toBe(200)
+    expect(await unclaimed.json()).toEqual({ owner: 'fallback', path: '/api/mobile-access/lan/control' })
+    expect(fallback).toHaveBeenCalledOnce()
+
+    const unfallbacked = connection.createSharedFetchHandler('/api')
+    const notFound = await unfallbacked.fetch(new Request('http://host/api/mobile-access/lan/control'))
+    expect(notFound.status).toBe(404)
+    expect(await notFound.text()).toBe('not found')
+
+    await dispose()
+    await disposeFiber()
+  })
+
   it('rejects invalid and duplicate registrations', async () => {
     const { connection, dispose: disposeFiber } = await mounted()
     const fetch = async (): Promise<Response> => new Response()
