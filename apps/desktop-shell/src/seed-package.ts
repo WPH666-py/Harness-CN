@@ -16,8 +16,8 @@
  * (`verifySeedIntegrity`), so "downloaded" is not a weaker claim than "shipped".
  */
 
-import { createReadStream, createWriteStream, existsSync, statSync } from 'node:fs'
-import { mkdir, readdir, rename, rm } from 'node:fs/promises'
+import { createReadStream, existsSync, statSync } from 'node:fs'
+import { mkdir, open, readdir, rename, rm } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { Transform } from 'node:stream'
@@ -167,11 +167,20 @@ async function downloadSeedParts(options: {
 
   const merged = join(directory, `${SEED_ARCHIVE_PREFIX}${options.version}${SEED_ARCHIVE_EXTENSIONS[0]}`)
   await rm(merged, { force: true })
-  const sink = createWriteStream(merged)
+  // Positional writes into one handle rather than one pipeline per part: a pipeline over a shared
+  // write stream attaches its own error and close listeners every time, which trips Node's emitter
+  // limit at ten parts and prints a leak warning into the user's run log.
+  const handle = await open(merged, 'w')
   try {
-    for (const file of downloaded) await pipeline(createReadStream(file.path), sink, { end: false })
+    let offset = 0
+    for (const file of downloaded) {
+      for await (const chunk of createReadStream(file.path)) {
+        await handle.write(chunk, 0, chunk.length, offset)
+        offset += chunk.length
+      }
+    }
   } finally {
-    sink.end()
+    await handle.close()
   }
   const expected = downloaded.reduce((sum, file) => sum + file.bytes, 0)
   const actual = statSync(merged).size
