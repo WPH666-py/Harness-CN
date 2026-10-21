@@ -2,8 +2,9 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { readFile } from 'node:fs/promises'
-import { extname, join, normalize, resolve, sep } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createGzip } from 'node:zlib'
@@ -108,6 +109,12 @@ export interface ShellApi {
 export interface ShellServerOptions {
   /** Absolute directory holding the shell's static pages under `shell/`. */
   readonly resourceDir: string
+  /**
+   * Installation root, used to find the pid file an orphaned sidecar leaves behind.
+   *
+   * Optional so tests can start the server without an installation on disk.
+   */
+  readonly installDir?: string | undefined
   /** Control surface the pages and the Rust shell drive. */
   readonly api: ShellApi
   /**
@@ -522,6 +529,75 @@ async function serveShellAsset(message: ServerResponse, resourceDir: string, pat
  * @param options - static root, control surface, and the LAN door.
  * @returns the running server with its bound port and event fan-out.
  */
+/** Where a running sidecar records its process id, so a later launch can tell an orphan from a peer. */
+function sidecarPidPath(installDir: string): string {
+  return join(installDir, 'data', 'desktop', 'sidecar.pid')
+}
+
+/**
+ * Whether a process id currently belongs to a node process.
+ *
+ * The id alone is not enough on Windows: ids are reused, and killing an unrelated program because it
+ * inherited a dead sidecar's number would be worse than leaving the port busy.
+ * @param pid - process id to inspect.
+ * @returns true when the id exists and is node.
+ */
+function isNodeProcess(pid: number): boolean {
+  try {
+    const output = execFileSync('tasklist.exe', ['/FI', `PID eq ${String(pid)}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true })
+    const image = output.trim().split(',')[0]?.replace(/^"|"$/gu, '') ?? ''
+    return /^node\.exe$/iu.test(image)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Kill the sidecar a previous, killed shell left running.
+ *
+ * A forced kill of the shell (Task Manager, a crash, `Stop-Process`) does not run the shutdown path
+ * that stops the sidecar, and that orphan keeps the fixed port and the profile's locks. Reclaiming it
+ * here is safe because the shell enforces a single instance: if this process is starting, no peer is.
+ * @param installDir - installation root holding the recorded pid.
+ * @param note - sink for the run log.
+ * @returns true when an orphan was found and killed.
+ */
+async function reapOrphanSidecar(installDir: string | undefined, note: ((line: string) => void) | undefined): Promise<boolean> {
+  if (installDir === undefined) return false
+  const file = sidecarPidPath(installDir)
+  let recorded: number
+  try {
+    recorded = Number((await readFile(file, 'utf8')).trim())
+  } catch {
+    return false
+  }
+  if (!Number.isSafeInteger(recorded) || recorded <= 0 || recorded === process.pid) return false
+  if (!isNodeProcess(recorded)) return false
+  note?.(`reclaiming the fixed port from an orphaned sidecar (pid ${String(recorded)})`)
+  try {
+    process.kill(recorded, 'SIGKILL')
+  } catch {
+    return false
+  }
+  // The socket is released asynchronously by the OS; give the process a moment to disappear.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (!isNodeProcess(recorded)) return true
+    await new Promise((settle) => setTimeout(settle, 100))
+  }
+  return false
+}
+
+/** Record this sidecar's process id for the next launch's orphan check. */
+async function recordSidecarPid(installDir: string | undefined): Promise<void> {
+  if (installDir === undefined) return
+  try {
+    const file = sidecarPidPath(installDir)
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, String(process.pid), 'utf8')
+  } catch {
+    // A missing pid file only costs the next launch its orphan check.
+  }
+}
 export async function startShellServer(options: ShellServerOptions): Promise<ShellServer> {
   const token = randomBytes(32).toString('hex')
   const clients = new Set<ServerResponse>()
@@ -804,9 +880,23 @@ export async function startShellServer(options: ShellServerOptions): Promise<She
   try {
     server = await bindWorkspace(preferredLanPort)
   } catch (error) {
-    options.note?.(`LAN port ${String(preferredLanPort)} is busy (${errorOf(error, 'bind failed').message}); the phone link will use a random port`)
-    server = await bindWorkspace(0)
+    // The port is usually held by a sidecar this installation left behind: the shell enforces one
+    // instance, so a recorded sidecar still alive when this one starts cannot be a live peer.
+    // Reclaiming it is what keeps the phone link on its fixed port instead of quietly moving.
+    const reclaimed = await reapOrphanSidecar(options.installDir, options.note)
+    if (!reclaimed) {
+      options.note?.(`LAN port ${String(preferredLanPort)} is busy (${errorOf(error, 'bind failed').message}); the phone link will use a random port`)
+      server = await bindWorkspace(0)
+    } else {
+      try {
+        server = await bindWorkspace(preferredLanPort)
+      } catch (retry) {
+        options.note?.(`LAN port ${String(preferredLanPort)} is still busy after reclaiming an orphan (${errorOf(retry, 'bind failed').message}); the phone link will use a random port`)
+        server = await bindWorkspace(0)
+      }
+    }
   }
+  await recordSidecarPid(options.installDir)
   /**
    * The shell origin: /shell/* and /shell-api/* only, loopback only.
    *

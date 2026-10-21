@@ -586,6 +586,7 @@ async function main(): Promise<void> {
   }
 
   const running = await startShellServer({
+    installDir: options.installDir,
     resourceDir: options.resourceDir,
     api,
     note: (text) => { logShell(text) },

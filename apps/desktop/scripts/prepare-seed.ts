@@ -179,6 +179,19 @@ function patchInstalledRemoteSshEmptyState(root: string): Promise<void> {
     })
   })
 }
+function patchInstalledQqbotConsole(root: string): Promise<void> {
+  // The shell's QQ console window hides everything but the plugin's dock panel and then calls
+  // `window.__qqbotOpenConsole()`; the shipped bundle has no such entry point, so an unpatched seed
+  // produces a blank window. See scripts/patch-qqbot-console.mjs.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-qqbot-console.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: qqbot console patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
 function patchInstalledWeChatIdentity(root: string): Promise<void> {
   // WeChat's contact name for the bot belongs to Tencent's iLink platform, so the only name this
   // product controls is the one the bridge chats under: the built-in surface prompt the plugin
@@ -329,6 +342,7 @@ await patchInstalledRuleEngine(join(SEED_ROOT, 'node_modules'))
     await patchInstalledWeChatIdentity(join(SEED_ROOT, 'node_modules'))
   await patchInstalledWorkBuddyModelNull(join(SEED_ROOT, 'node_modules'))
 await patchInstalledRemoteSshEmptyState(join(SEED_ROOT, 'node_modules'))
+await patchInstalledQqbotConsole(join(SEED_ROOT, 'node_modules'))
 await applySeedPluginPatches(SEED_ROOT)
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
