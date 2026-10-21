@@ -232,8 +232,14 @@ const MAX_PNPM_DIAGNOSTIC_BYTES = 64 * 1024
  * registry, and an installation that ignored that would refuse to install anything on the machines
  * that need it most. What still holds is the shape — the value this product acts on is a registry
  * origin it validated, never something a page or a package spec can name.
+ *
+ * It is not npmjs, because the machines this product ships to reach npmjs through a proxy that
+ * drops most of a package's metadata requests: a restore of one ordinary plugin sat in
+ * `restoring desktop plugins` for over half an hour, and the same restore against this mirror
+ * finished in under a minute. A machine that states npmjs or its own registry still wins — this
+ * only decides the case where nothing was stated.
  */
-const DEFAULT_REGISTRY = 'https://registry.npmjs.org/'
+const DEFAULT_REGISTRY = 'https://registry.npmmirror.com/'
 
 /**
  * Environment names that carry a registry choice, in the order npm itself prefers them.
@@ -414,7 +420,7 @@ function workspaceFile(overrides: Readonly<Record<string, string>> = {}): string
   const coreBuildKey = coreBuildSpec === undefined
     ? CORE_BUILD_PACKAGE
     : `${CORE_BUILD_PACKAGE}@${coreBuildSpec.replace('file:./', 'file:')}`
-  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}allowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
+  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}allowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n  cloudflared: false\n  cpu-features: false\n  ssh2: false\n  onnxruntime-node: false\n`
 }
 
 function releaseFile(projectDir: string): DesktopRelease {

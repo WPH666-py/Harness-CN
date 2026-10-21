@@ -44,22 +44,11 @@
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.harnesscn.desktop_is1"
 !macroend
 
-; Build the desktop runtime at the end of the installation, so the first launch has nothing to
-; assemble. The cost this moves is a one-time cost either way, and paying it here means it happens
-; while the user is already waiting for setup rather than in front of a window that looks stuck.
-;
-; The build runs from the Node runtime the installer just laid down, using the same sidecar
-; entry point the application uses: `--prebuild` takes the launch path's transaction and stops
-; short of starting the backend. The seed is not bundled — a normal installer fetches it — so this
-; is the one step that can fail on a machine with no network, and the exit code is therefore not
-; inspected: a prebuild that fails is not an installation that failed, and the first launch builds
-; exactly the same runtime with the exactly same code. The timeout bounds a slow or stalled fetch
-; so setup can never hang on it; a run that is cut short leaves a partial profile behind, which
-; the next launch's own transaction discards and rebuilds.
-;
-; The log directory is the application's own, so a prebuild that fails leaves its reason where the
-; run-log viewer will show it.
+; Building the runtime during setup was removed. It ran the sidecar with `--prebuild`, which on a
+; machine without network fetched the seed before setup could finish: the step was bounded only by
+; a twenty-minute timeout, so an installer that looked hung was one waiting on a download nobody
+; asked for. Setup now lays files down and returns; the first launch performs the same transaction
+; in front of the progress window that exists to show it, and the fetch happens once behind that
+; window instead of inside the installer's own silence.
 !macro NSIS_HOOK_POSTINSTALL
-  nsExec::ExecToLog /TIMEOUT=1200000 '"$INSTDIR\resources\runtime\node\node.exe" "$INSTDIR\resources\sidecar\shell.mjs" --prebuild --resource-dir "$INSTDIR\resources" --version "${VERSION}" --log-dir "$LOCALAPPDATA\com.harnesscn.desktop\logs" --install-dir "$INSTDIR"'
-  Pop $0
 !macroend

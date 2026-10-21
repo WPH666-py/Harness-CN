@@ -14,14 +14,14 @@
  */
 
 import { existsSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { spawn } from 'node:child_process'
 import { DesktopHostProcess } from '../../desktop/src/host-process.ts'
 import { DesktopLogBuffer, type DesktopLogSnapshot } from '../../desktop/src/log-buffer.ts'
 import { resolveDesktopLocale, type DesktopMessages } from '../../desktop/src/locale.ts'
 import { resolveDesktopPaths, type DesktopPaths } from '../../desktop/src/paths.ts'
-import { adoptHarnessCnHome, describeHomeMigration, migrateLegacyHarnessHome } from '../../desktop/src/product-home.ts'
+import { adoptHarnessCnHome, describeHomeMigration, HARNESS_CN_HOME_ENV, migrateLegacyHarnessHome } from '../../desktop/src/product-home.ts'
 import {
   describeDesktopRecovery,
   DesktopProjectManager,
@@ -40,6 +40,8 @@ import { DesktopUpdateCoordinator } from '../../desktop/src/update-coordinator.t
 import { DesktopUpdateSkipStore } from '../../desktop/src/update-skip-store.ts'
 import type { DesktopApiKeyStatus, DesktopUpdateState } from '../../desktop/src/ipc.ts'
 import { startShellServer, type ShellApi } from './shell-server.ts'
+import { LanAccess } from './lan-access.ts'
+import { MonoHostProcess, resolveMonoScript } from './mono-host.ts'
 import { ensureSeedPackage } from './seed-package.ts'
 import { verifyStagedRuntime } from './staged-runtime-check.ts'
 import type { ShellArguments, ShellCommand, ShellHandshake, ShellStatus } from './shell-types.ts'
@@ -215,11 +217,26 @@ function describeUpdateFailure(message: string): string {
  * the profile, the package store, and the Host's sessions, storages, attachments, and credentials
  * live. The migration never writes to, renames, or removes the legacy home; when that home also
  * carries the other desktop product, it copies nothing and the log says so.
+ *
+ * A `data` directory beside the installed executable wins over the per-user default, because a user
+ * who looks for their sessions opens the installation directory first. A fresh installation has no
+ * such directory and keeps using the per-user home, so nothing moves without the user asking for it.
  * @param log - sink for the migration lines.
+ * @param resourceDir - the installation's `resources` directory, whose parent is searched for `data`.
  * @returns the resolved Harness-CN home to hand to the path resolver.
  */
-function adoptHome(log: (text: string) => void): string {
-  const home = adoptHarnessCnHome()
+function adoptHome(log: (text: string) => void, resourceDir?: string): string {
+  // An explicit variable is the user's own instruction and is never overridden here.
+  if (process.env[HARNESS_CN_HOME_ENV]?.trim() === undefined || process.env[HARNESS_CN_HOME_ENV]?.trim() === '') {
+    const installed = resourceDir === undefined ? undefined : join(resourceDir, '..', 'data')
+    if (installed !== undefined && existsSync(installed)) {
+      process.env[HARNESS_CN_HOME_ENV] = resolve(installed)
+      log(`home: using the installation data directory ${resolve(installed)}`)
+    }
+  }
+  // The Rust shell marks an installed launch, so the sidecar makes the same choice the Electron
+  // main makes: an inherited `DSH_HOME` is the other desktop product's and is not adopted here.
+  const home = adoptHarnessCnHome(process.env, { packaged: process.env.HARNESS_CN_PACKAGED === '1' })
   for (const line of describeHomeMigration(migrateLegacyHarnessHome({ home }))) log(line)
   return home
 }
@@ -296,7 +313,7 @@ async function prebuild(argv: readonly string[]): Promise<void> {
   const options = parseArguments(argv)
   const logs = new DesktopLogBuffer(join(options.logDirectory, 'harness.log'))
   const note = (text: string): void => { logs.line('shell', `prebuild: ${text}`) }
-  const paths = resolveDesktopPaths(adoptHome(note))
+  const paths = resolveDesktopPaths(adoptHome(note, options.resourceDir))
   for (const required of [options.node, options.pnpm]) {
     if (!existsSync(required)) throw new Error(`dsh shell: bundled resource is missing: ${required}`)
   }
@@ -330,7 +347,7 @@ async function main(): Promise<void> {
   const messages = locale.messages
   const logs = new DesktopLogBuffer(join(options.logDirectory, 'harness.log'))
   const logShell = (text: string): void => { logs.line('shell', text) }
-  const paths = resolveDesktopPaths(adoptHome(logShell))
+  const paths = resolveDesktopPaths(adoptHome(logShell, options.resourceDir))
 
   // Node's own on-disk compile cache is what makes the backend's second start cheaper than its
   // first: every module it loads is compiled once and the bytecode is reused afterwards. It must
@@ -349,7 +366,11 @@ async function main(): Promise<void> {
   let status: ShellStatus = { phase: 'starting', progress: 0.05, version: options.version }
   let updateState: DesktopUpdateState = { phase: 'idle' }
   let host: DesktopHostProcess | undefined
+  /** Monolith bridge, present only when this launch runs in mono mode. */
+  let mono: MonoHostProcess | undefined
   let stopping = false
+  /** Whether the running Host has mounted the plugins its launch deferred. */
+  let deferredPluginsReady = false
   /** Periodic release-channel re-check, owned here so the stop that ends this process clears it. */
   let recheck: ReturnType<typeof setInterval> | undefined
 
@@ -367,6 +388,13 @@ async function main(): Promise<void> {
   /** Start the Host from one project directory, sharing this process's run log. */
   const startHost = async (projectDir: string): Promise<DesktopHostProcess> => {
     const next = new DesktopHostProcess(options.node, projectDir, undefined, logs, false, compileCacheDir)
+    // Registered before the handshake, because the Host announces this within seconds of it: a
+    // listener attached afterwards would miss the launch it describes.
+    deferredPluginsReady = false
+    next.onDeferredReady = () => {
+      deferredPluginsReady = true
+      logShell('deferred plugins mounted; the window may reload to pick their panels up')
+    }
     const ready = await next.start()
     logShell(`backend ready: dsh ${ready.dshVersion} from ${projectDir}`)
     return next
@@ -546,7 +574,11 @@ async function main(): Promise<void> {
     }),
     deferApiKey: () => { logShell('API key binding deferred by the user') },
     quit: () => { void shutdown(0) },
+    // The restart belongs to the shell: it holds the single-instance claim and owns the
+    // executable being replaced, so this process reports the request and lets the shell act.
+    restart: () => { void restartInPlace() },
     fetchHost: async (request: Request): Promise<Response> => {
+      if (mono !== undefined) return await mono.fetch(request)
       const active = host
       if (active === undefined) return new Response('backend unavailable', { status: 503 })
       return await active.fetch(request)
@@ -557,13 +589,50 @@ async function main(): Promise<void> {
     resourceDir: options.resourceDir,
     api,
     note: (text) => { logShell(text) },
+    lan: new LanAccess(join(paths.root, 'lan-access.json')),
+    deferredReady: () => deferredPluginsReady,
   })
-  logShell(`Harness-CN ${options.version} starting; control surface on ${running.origin}`)
-  handshake({ type: 'listen', port: running.port })
-  // The mobile gateway proxies the whole app, so it must read pages from this front door and not
-  // from the host's private listener: dsh-mobile prefers DSH_SHELL_ORIGIN when it starts, and the
-  // host it starts below inherits the variable.
-  process.env.DSH_SHELL_ORIGIN = running.origin
+  logShell(`Harness-CN ${options.version} starting; workspace on ${running.origin}, shell windows on ${running.shellOrigin}`)
+  handshake({ type: 'listen', port: running.port, shellPort: running.shellPort })
+
+  /** Guards {@link restartInPlace} against a second request while one is running. */
+  let restarting = false
+
+  /**
+   * Restart the workspace without restarting the process.
+   *
+   * The window is the expensive part of a relaunch: creating one costs the WebView2 cold start,
+   * which on a machine with a large runtime directory measured ten seconds, and a second window
+   * also shows the user a second splash. Replacing the Host behind the same listener keeps the
+   * window, the port and the LAN pairing cookie; the page reloads against the new Host because the
+   * shell forwards every request to whatever Host is current.
+   */
+  const restartInPlace = async (): Promise<void> => {
+    if (restarting) return
+    restarting = true
+    logShell('restart requested; replacing the Host in place')
+    try {
+      const active = host
+      host = undefined
+      if (active !== undefined) {
+        const stopped = await within(active.stop().catch((error: unknown) => {
+          logShell(`backend stop failed during restart: ${errorOf(error, 'backend stop failed').message}`)
+        }), HOST_STOP_BUDGET_MS)
+        if (!stopped) logShell('backend stop did not finish in time; starting a fresh Host anyway')
+      }
+      host = await startHost(paths.profile)
+      publishStatus({ phase: 'ready', progress: 1, version: options.version })
+      handshake({ type: 'ready', port: running.port, shellPort: running.shellPort, needsApiKey: false })
+      logShell('workspace restarted in place')
+    } catch (error) {
+      // Falling back to the process restart keeps the menu working when the in-place path cannot
+      // finish: a relaunch is slower, but it is the option that always exists.
+      logShell(`in-place restart failed, falling back to a relaunch: ${errorOf(error, 'restart failed').message}`)
+      handshake({ type: 'restart' })
+    } finally {
+      restarting = false
+    }
+  }
 
   // The viewers drain one coalesced batch per interval rather than one push per line: Host
   // output arrives in bursts, and this keeps the event stream off the logging path.
@@ -593,6 +662,7 @@ async function main(): Promise<void> {
         process.exit(code)
       }
     }
+    await mono?.stop().catch(() => undefined)
     await running.close().catch(() => undefined)
     await within(logs.close().catch(() => undefined), LOG_FLUSH_BUDGET_MS)
     process.exit(code)
@@ -600,6 +670,8 @@ async function main(): Promise<void> {
 
   try {
     publishStatus({ phase: 'starting', progress: 0.05, version: options.version })
+    /** Boot the dsh Host: the seed, the runtime transaction, and the API-key gate. */
+    const bootDsh = async (): Promise<void> => {
     // The offline package is obtained before anything can be installed from it. A first launch on
     // a normal installation fetches it once; every later launch finds it where it was left, and an
     // offline installer ships it beside the runtime so nothing is fetched at all.
@@ -685,7 +757,36 @@ async function main(): Promise<void> {
       // opens: the user keeps a working shell and can bind the key from the menu.
       logShell(`credential check failed; skipping the binding gate: ${errorOf(error, 'credential check failed').message}`)
     }
-    handshake({ type: 'ready', port: running.port, needsApiKey })
+    handshake({ type: 'ready', port: running.port, shellPort: running.shellPort, needsApiKey })
+    }
+
+    /**
+     * Boot the monolith bridge instead of the dsh Host.
+     *
+     * Nothing of the dsh pipeline runs here: no seed, no runtime transaction, no profile. That is
+     * the point of the mode — it is how the shell is tried against the monolith without the
+     * installation losing the runtime it already has.
+     */
+    const bootMono = async (): Promise<void> => {
+      const script = resolveMonoScript(options.resourceDir)
+      if (script === undefined) throw new Error('mono mode: the installation carries no mono bridge')
+      const bridge = new MonoHostProcess(options.node, script, {
+        // Its own subtree: the dsh runtime keeps data/sessions/<hash>/*.zstd, and the monolith
+        // keeps flat JSONL. Sharing one directory would leave two formats interleaved in a tree
+        // the user is meant to read.
+        MONO_DATA: join(options.resourceDir, '..', 'data', 'mono'),
+        ...(process.env.DEEPSEEK_API_KEY === undefined ? {} : { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY }),
+      })
+      const { origin } = await bridge.start()
+      mono = bridge
+      logShell(`mono bridge ready at ${origin}`)
+      publishStatus({ phase: 'ready', progress: 1, version: options.version })
+      // The monolith owns its own credential story, so this launch never asks for a key.
+      handshake({ type: 'ready', port: running.port, shellPort: running.shellPort, needsApiKey: false })
+    }
+
+    if (process.env.HARNESS_CN_MONO === '1') await bootMono()
+    else await bootDsh()
 
     const timer = setTimeout(() => { void updates.check(false) }, AUTOMATIC_UPDATE_CHECK_MS)
     timer.unref()

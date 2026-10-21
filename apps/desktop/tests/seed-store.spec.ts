@@ -24,6 +24,7 @@ import {
   materializeLinkedProfile,
   mergePnpmStore,
   removePnpmProjectRegistrations,
+  removePnpmStagingDirectories,
   SEED_PROFILE_LINK_MANIFEST,
   SEED_STORE_ARCHIVE_DIR,
   SEED_STORE_ARCHIVE_MANIFEST,
@@ -65,6 +66,22 @@ describe('desktop seed store cleanup', () => {
     expect(existsSync(join(storeRoot, 'v12', 'projects'))).toBe(false)
     expect(existsSync(join(storeRoot, 'v11', 'package-data'))).toBe(true)
     expect(existsSync(join(storeRoot, 'metadata', 'projects'))).toBe(true)
+  })
+
+  it('removes the transient staging trees without removing store content', () => {
+    const storeRoot = temporaryRoot()
+    mkdirSync(join(storeRoot, 'v11', 'tmp', '_tmp_1_abc', 'src'), { recursive: true })
+    mkdirSync(join(storeRoot, 'v11', 'files', 'ab'), { recursive: true })
+    writeFileSync(join(storeRoot, 'v11', 'tmp', '_tmp_1_abc', 'src', 'pairing.js'), 'module.exports = 1\n')
+    writeFileSync(join(storeRoot, 'v11', 'files', 'ab', 'content'), 'content')
+    mkdirSync(join(storeRoot, 'v12'), { recursive: true })
+    mkdirSync(join(storeRoot, 'metadata', 'tmp'), { recursive: true })
+
+    removePnpmStagingDirectories(storeRoot)
+
+    expect(existsSync(join(storeRoot, 'v11', 'tmp'))).toBe(false)
+    expect(existsSync(join(storeRoot, 'v11', 'files', 'ab', 'content'))).toBe(true)
+    expect(existsSync(join(storeRoot, 'metadata', 'tmp'))).toBe(true)
   })
 })
 

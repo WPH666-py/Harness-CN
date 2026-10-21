@@ -1,0 +1,178 @@
+/* Server manager page: list the paired remote-development hosts and add another one. */
+
+* {
+  box-sizing: border-box;
+}
+
+/* The two add-forms share one container rule; without this the hidden one stays laid out. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+  font: 14px/1.6 system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+  color: #1f2328;
+  background: #fff;
+}
+
+main {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+
+#intro {
+  margin: 0 0 20px;
+  color: #59636e;
+}
+
+.card {
+  border: 1px solid #e6e8eb;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.hosts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.hosts li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid #eef0f2;
+}
+
+.hosts li:first-child {
+  border-top: 0;
+}
+
+.hosts .name {
+  font-weight: 600;
+}
+
+.hosts .meta {
+  color: #59636e;
+  font-size: 12px;
+}
+
+.hosts .online {
+  color: #15803d;
+}
+
+.hosts .offline {
+  color: #b91c1c;
+}
+
+.hosts .spacer {
+  flex: 1;
+}
+
+button {
+  font: inherit;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid #d8dce1;
+  background: #f7f8fa;
+  color: inherit;
+  cursor: pointer;
+}
+
+button[type="submit"] {
+  background: #4d6bfe;
+  border-color: #4d6bfe;
+  color: #fff;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.tab[aria-selected="true"] {
+  background: #e8ecff;
+  border-color: #4d6bfe;
+  color: #23389c;
+}
+
+.form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  align-items: end;
+}
+
+.form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #59636e;
+}
+
+.form input {
+  font: inherit;
+  color: #1f2328;
+  padding: 8px 10px;
+  border: 1px solid #d8dce1;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.form button {
+  grid-column: span 2;
+  justify-self: start;
+}
+
+.note,
+.status {
+  margin: 10px 0 0;
+  color: #59636e;
+  font-size: 12px;
+  min-height: 18px;
+}
+
+.status[data-tone="error"] {
+  color: #b91c1c;
+}
+
+.status[data-tone="ok"] {
+  color: #15803d;
+}
+
+@media (max-width: 640px) {
+  body {
+    padding: 16px;
+  }
+
+  .form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .form button {
+    grid-column: auto;
+  }
+}

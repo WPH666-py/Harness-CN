@@ -192,7 +192,10 @@ async function main(): Promise<void> {
   const logShell = (text: string): void => { logs.line('shell', text) }
   // The home decides where the profile, the package store, and the Host's sessions, storages,
   // attachments, and credentials live, so it is adopted before any desktop path is resolved.
-  const home = adoptHarnessCnHome()
+  // A packaged launch ignores an inherited `DSH_HOME` so the other desktop product's environment
+  // cannot point this one at a home it does not own; `HARNESS_CN_HOME` is the variable that moves
+  // this product's home instead.
+  const home = adoptHarnessCnHome(process.env, { packaged: app.isPackaged })
   for (const line of describeHomeMigration(migrateLegacyHarnessHome({ home }))) logShell(line)
   const paths = resolveDesktopPaths(home)
   const development = developmentProject()

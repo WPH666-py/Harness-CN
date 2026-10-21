@@ -19,6 +19,7 @@ import {
   type DesktopHostResponseFrame,
 } from './host-protocol.ts'
 import type { DesktopLogBuffer } from './log-buffer.ts'
+import { WORKBUDDY_AI_BINARY_ENV, resolveWorkbuddyAiBinary } from './workbuddy-ai.ts'
 
 interface PendingResponse {
   readonly resolve: (response: Response) => void
@@ -66,6 +67,15 @@ export interface DesktopHostReady {
   readonly dshVersion: string
 }
 
+/**
+ * Text the Host prints once it has mounted the plugins its launch deferred.
+ *
+ * The marker travels as an ordinary stdout line rather than a protocol message because the shell
+ * already mirrors this stream into its run log: the completion is observable there either way, and
+ * a diagnostic line is the cheapest thing that crosses the process boundary.
+ */
+const DEFERRED_READY_STDOUT = 'deferred plugins ready'
+
 /** One dsh backend running under the bundled upstream Node.js executable. */
 export class DesktopHostProcess {
   private child: ChildProcess | undefined
@@ -108,9 +118,18 @@ export class DesktopHostProcess {
     private readonly compileCacheDir?: string,
   ) {}
 
+  /**
+   * Called once when the Host reports that the plugins this launch deferred are mounted.
+   *
+   * The window is already usable when that happens — the deferred bundles are the ones that made it
+   * wait — so this is the shell's cue to reload the page and pick their panels up.
+   */
+  onDeferredReady?: (() => void) | undefined
+
   /** Start the child once and resolve only after its complete composition is active. */
   async start(): Promise<DesktopHostReady> {
     if (this.child !== undefined) return this.readyPromise
+    const workbuddyAi = resolveWorkbuddyAiBinary()
     const entry = join(this.projectDir, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js')
     const child = spawn(this.node, [
       ...(this.inspectPort === undefined ? [] : [`--inspect=127.0.0.1:${String(this.inspectPort)}`]),
@@ -124,6 +143,14 @@ export class DesktopHostProcess {
           name !== 'NODE_OPTIONS' && name !== 'NODE_COMPILE_CACHE'
           && !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
         ))),
+        // The WorkBuddy AI card reads the account file its desktop app writes, and it refuses to do
+        // so until it knows where that app lives. See {@link resolveWorkbuddyAiBinary} for why the
+        // plugin cannot find it on its own.
+        ...(workbuddyAi === undefined ? {} : { [WORKBUDDY_AI_BINARY_ENV]: workbuddyAi }),
+        // The WorkBuddy AI card reads the account file its desktop app writes, and it refuses to do
+        // so until it knows where that app lives. See {@link resolveWorkbuddyAiBinary} for why the
+        // plugin cannot find it on its own.
+        ...(workbuddyAi === undefined ? {} : { [WORKBUDDY_AI_BINARY_ENV]: workbuddyAi }),
         ...(this.compileCacheDir === undefined ? {} : { NODE_COMPILE_CACHE: this.compileCacheDir }),
       },
       stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe', 'ipc'],
@@ -145,7 +172,16 @@ export class DesktopHostProcess {
     // stdout stays piped to the shell's own stdout; decoding it as text is safe because
     // the request and response carriers use dedicated descriptor pipes, not descriptor 1.
     child.stdout?.setEncoding('utf8')
-    child.stdout?.on('data', (chunk: string) => { this.logs?.append('host-out', chunk) })
+    child.stdout?.on('data', (chunk: string) => {
+      this.logs?.append('host-out', chunk)
+      // The deferred bundles announce themselves on this stream; one call is all the shell needs,
+      // and a chunk that carries the marker twice is still one completion.
+      if (this.onDeferredReady !== undefined && chunk.includes(DEFERRED_READY_STDOUT)) {
+        const announce = this.onDeferredReady
+        this.onDeferredReady = undefined
+        announce()
+      }
+    })
     if (this.mirrorStdout) child.stdout?.pipe(process.stdout)
     responsePipe.on('data', (chunk: Buffer) => { this.acceptResponseBytes(chunk) })
     responsePipe.once('end', () => {

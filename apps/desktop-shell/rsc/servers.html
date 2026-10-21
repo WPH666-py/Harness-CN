@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:">
+    <title>服务器管理</title>
+    <link rel="stylesheet" href="./servers.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>服务器管理</h1>
+        <p id="intro">这里列出已添加的远程开发主机。添加后，主界面顶部的「服务器」按钮就能连上去。</p>
+      </header>
+
+      <section class="card">
+        <div class="cardHead">
+          <strong>已添加</strong>
+          <button id="refresh" type="button">刷新</button>
+        </div>
+        <ul id="hosts" class="hosts"></ul>
+        <p id="hostsNote" class="note"></p>
+      </section>
+
+      <section class="card">
+        <div class="cardHead">
+          <strong>添加服务器</strong>
+          <div class="tabs" role="tablist">
+            <button id="tab-pair" class="tab" type="button" role="tab" aria-selected="true">配对码</button>
+            <button id="tab-ssh" class="tab" type="button" role="tab" aria-selected="false">SSH</button>
+          </div>
+        </div>
+
+        <form id="pairForm" class="form">
+          <label>地址<input id="pairAddress" type="text" placeholder="192.168.1.20:17890" autocomplete="off" required></label>
+          <label>配对码<input id="pairCode" type="text" placeholder="六位配对码" autocomplete="off" required></label>
+          <label>备注名<input id="pairName" type="text" placeholder="可选" autocomplete="off"></label>
+          <button type="submit">添加</button>
+        </form>
+
+        <form id="sshForm" class="form" hidden>
+          <label>主机<input id="sshHost" type="text" placeholder="192.168.1.20 或域名" autocomplete="off" required></label>
+          <label>端口<input id="sshPort" type="number" min="1" max="65535" placeholder="22" value="22"></label>
+          <label>用户名<input id="sshUser" type="text" placeholder="root" autocomplete="off" required></label>
+          <label>密码<input id="sshPassword" type="password" autocomplete="new-password" required></label>
+          <label>备注名<input id="sshName" type="text" placeholder="可选" autocomplete="off"></label>
+          <button type="submit">添加</button>
+        </form>
+
+        <p id="status" class="status" role="status"></p>
+      </section>
+    </main>
+    <script type="module" src="./servers.js"></script>
+  </body>
+</html>

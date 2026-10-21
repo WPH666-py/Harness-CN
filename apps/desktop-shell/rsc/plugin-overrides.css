@@ -1,0 +1,167 @@
+/*
+ * Shell-injected presentation overrides.
+ *
+ * Loaded by every page the shell serves to the workspace, so a change here reaches both the desktop
+ * window and a phone without rebuilding any plugin bundle. Only appearance and layout are touched.
+ *
+ * The header's real structure (read from the live DOM, not guessed):
+ *
+ *   .Apc4AG_header
+ *   ├── .Apc4AG_titleRow
+ *   │   ├── .Apc4AG_titleCluster
+ *   │   │   ├── .Apc4AG_crumbs          the session title
+ *   │   │   └── .Apc4AG_headerActions   one child with `display: contents`, holding the mode chip
+ *   │   │                               and the remote-server chip
+ *   │   ├── .Apc4AG_headerUtilities     the RAM / alert-count badge
+ *   │   └── .Apc4AG_headerCorner        the overflow menu and the file button
+ *   └── .Apc4AG_tabs
+ */
+
+/* ---------------------------------------------------------------- server chip and its menu ---- */
+
+.remoteWorkspace__launcherButton {
+  background: #e8efff !important;
+  color: #16234a !important;
+  border: 1px solid #b9ccf5 !important;
+  border-radius: 8px !important;
+  white-space: nowrap !important;
+}
+
+.remoteWorkspace__launcherButton:hover {
+  background: #d9e6ff !important;
+}
+
+.remoteWorkspace__launcherButton:active {
+  background: #c6d8ff !important;
+}
+
+.remoteWorkspace__launcherButton:focus-visible {
+  outline: 2px solid #4d6bfe !important;
+  outline-offset: 2px !important;
+}
+
+/*
+ * The dropdown is a fixed layer, not an absolutely positioned child.
+ *
+ * A z-index on the panel could not lift it above the sidebar rail: the rail lives in a different
+ * stacking context, so the open menu kept its first characters covered. A fixed layer leaves that
+ * context entirely.
+ */
+.remoteWorkspace__serverMenu {
+  position: fixed !important;
+  z-index: 2147483000 !important;
+  top: 56px !important;
+  left: 376px !important;
+  right: auto !important;
+  background: #eaf1ff !important;
+  color: #16234a !important;
+  border: 1px solid #b9ccf5 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 8px 24px rgba(22, 35, 74, 0.18) !important;
+  max-width: min(86vw, 380px) !important;
+  padding: 8px !important;
+}
+
+.remoteWorkspace__serverOption {
+  color: #16234a !important;
+  border-radius: 8px !important;
+  padding: 8px 10px !important;
+}
+
+.remoteWorkspace__serverOption:hover,
+.remoteWorkspace__serverOption:focus-visible {
+  background: #d9e6ff !important;
+  outline: none !important;
+}
+
+.remoteWorkspace__treeMessage {
+  color: #3b4a6b !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+  line-height: 1.5 !important;
+}
+
+/* ------------------------------------------------------------------------- header layout ---- */
+
+/*
+ * The chips are laid out by three nested flex rows. Left alone, a narrow window splits each of them
+ * on its own, which is how the title, the mode chip and the server chip ended up scattered over four
+ * lines. These rules make the row wrap as a whole instead.
+ */
+.Apc4AG_titleRow {
+  flex-wrap: wrap !important;
+  row-gap: 6px !important;
+  align-items: center !important;
+}
+
+.Apc4AG_titleCluster {
+  flex-wrap: wrap !important;
+  row-gap: 6px !important;
+  align-items: center !important;
+  min-width: 0 !important;
+}
+
+.Apc4AG_crumbs {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+/* The mode and server chips share one line; wrapping inside this group is what looked broken. */
+.Apc4AG_headerActions {
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  column-gap: 8px !important;
+}
+
+.Apc4AG_headerCorner {
+  flex: 0 0 auto !important;
+}
+
+/*
+ * A phone cannot fit the monitor badges next to the title without squeezing every chip into a stack
+ * of single glyphs, and keeping the chips on the title's line made them overflow to the right and
+ * collide with the corner buttons. The badges are dropped and the title takes its own line, so the
+ * chips get a line of their own and nothing overlaps.
+ */
+@media (max-width: 760px) {
+  .Apc4AG_headerUtilities {
+    display: none !important;
+  }
+
+  /* The RAM / alert badge sits in the chip row as an unclassed div; drop it so the row fits. */
+  .Apc4AG_headerActions > div > div {
+    display: none !important;
+  }
+
+  .Apc4AG_titleCluster {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+  }
+
+  /* The title owns the first line and truncates instead of pushing the chips aside. */
+  .Apc4AG_crumbs {
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .Apc4AG_headerActions {
+    flex: 1 1 100% !important;
+    flex-wrap: wrap !important;
+    row-gap: 6px !important;
+    min-width: 0 !important;
+  }
+
+  .Apc4AG_headerCorner {
+    flex: 0 0 auto !important;
+  }
+
+  .remoteWorkspace__serverMenu {
+    top: 92px !important;
+    left: 12px !important;
+    right: 12px !important;
+    max-width: none !important;
+  }
+}

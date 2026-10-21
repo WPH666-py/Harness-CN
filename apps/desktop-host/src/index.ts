@@ -74,8 +74,44 @@ export interface DesktopHostController {
   fetch(command: DesktopHostFetchCommand, body: ReadableStream<Uint8Array> | null): Promise<void>
   /** Abort one in-flight request. */
   cancel(streamId: number): void
+  /** Mount the profile bundles this boot deferred, in order, reporting each one. */
+  mountDeferred(): Promise<void>
   /** Stop accepting messages and await complete host teardown. */
   dispose(): Promise<void>
+}
+
+/**
+ * Bundles whose Host half is mounted after the handshake instead of before it.
+ *
+ * Each one spends seconds inside `apply()` doing work no other plugin waits on: StudyMate starts a
+ * Node child and waits for it, WeChat opens a network login. Mounting them first held the window on
+ * the splash screen for the length of that work; the conversation now paints as soon as the core
+ * composition is up and these arrive behind it. `DSH_DESKTOP_DEFERRED` adds more, so a machine can
+ * defer a plugin this build does not know about.
+ */
+const DEFERRED_BUNDLES: readonly string[] = [
+  // Empty by default. Mounting a loader entry after `ready` extends the client module graph while
+  // the page's connection generation is already negotiating, and that generation then never becomes
+  // ready: the window reconnects forever instead of showing sessions. Until the client can be told to
+  // re-bootstrap against an extended graph, deferral stays opt-in per machine.
+  ...(process.env.DSH_DESKTOP_DEFERRED ?? '').split(',').map(name => name.trim()).filter(name => name !== ''),
+]
+
+/** One composed entry row, as `composeEntries` produces them. */
+type ComposedEntry = ReturnType<typeof composeEntries>[number]
+
+/**
+ * Line the Host prints when every deferred bundle has finished mounting.
+ *
+ * It crosses the process boundary as ordinary stdout, which the shell already mirrors into its run
+ * log, so the shell needs no protocol change to learn that the deferred panels exist.
+ */
+export const DEFERRED_READY_MARKER = '[dsh desktop] deferred plugins ready'
+
+/** One deferred bundle's patch rows, kept together so it mounts as one unit. */
+interface DeferredBundle {
+  readonly packageName: string
+  readonly rows: ComposedEntry[]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -96,29 +132,112 @@ const DESKTOP_PATCH = fileURLToPath(new URL('../config/desktop.cordis.patch.yml'
 const ROOT_CONFIG = '# Electron desktop composition root; package transactions own this file.\n[]\n'
 const ROOT_CONFIG_FILENAME = 'desktop.cordis.yml'
 const DESKTOP_STREAM_PATH = '/.dsh/remote-stream'
+/** Path the shell's multiplexer answers on; one socket carries every stream the page opens. */
+const DESKTOP_MUX_PATH = '/.dsh/stream-mux'
 
-const DESKTOP_TRANSPORT_SCRIPT = `globalThis.__DSH_TRANSPORT__={
-  ownsHost:true,
-  async *openStream(endpoint,payload,signal){
-    const response=await fetch(${JSON.stringify(DESKTOP_STREAM_PATH)},{
-      method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({endpoint,payload}),signal
-    })
-    if(!response.ok||response.body===null)throw new Error('desktop stream transport failed: HTTP '+response.status)
-    const reader=response.body.getReader(),decoder=new TextDecoder()
-    let pending=''
-    for(;;){
-      const {done,value}=await reader.read()
-      pending+=decoder.decode(value,{stream:!done})
-      let newline
-      while((newline=pending.indexOf('\\n'))!==-1){
-        const line=pending.slice(0,newline);pending=pending.slice(newline+1)
-        if(line!=='')yield JSON.parse(line)
-      }
-      if(done)break
-    }
-    if(pending!=='')yield JSON.parse(pending)
+const DESKTOP_TRANSPORT_SCRIPT = `globalThis.__DSH_TRANSPORT__=(function(){
+var MUX=${JSON.stringify(DESKTOP_MUX_PATH)},STREAM=${JSON.stringify(DESKTOP_STREAM_PATH)}
+var socket=null,nextId=0,muxBroken=false,pending={}
+function wake(entry){if(entry.notify){var notify=entry.notify;entry.notify=null;notify()}}
+function connect(){
+  if(socket!==null&&socket.readyState<=1)return socket
+  if(muxBroken)return null
+  var url=(location.protocol==='https:'?'wss://':'ws://')+location.host+MUX
+  var ws
+  try{ws=new WebSocket(url)}catch(error){muxBroken=true;return null}
+  ws.onmessage=function(event){
+    var message
+    try{message=JSON.parse(event.data)}catch(error){return}
+    var entry=pending[message.id]
+    if(entry===undefined)return
+    if(message.t==='frame')entry.queue.push(message.value)
+    else if(message.t==='end')entry.done=true
+    else if(message.t==='error')entry.error=new Error(message.message)
+    wake(entry)
   }
-}`
+  ws.onclose=function(){
+    socket=null;muxBroken=true
+    for(var key in pending){
+      var entry=pending[key]
+      if(!entry.done&&entry.error===null)entry.error=new Error('stream mux closed')
+      wake(entry)
+    }
+  }
+  ws.onerror=function(){muxBroken=true}
+  socket=ws
+  return ws
+}
+async function* fallback(endpoint,payload,signal){
+  var response=await fetch(STREAM,{
+    method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({endpoint:endpoint,payload:payload}),signal:signal
+  })
+  if(!response.ok||response.body===null)throw new Error('desktop stream transport failed: HTTP '+response.status)
+  var reader=response.body.getReader(),decoder=new TextDecoder(),pendingLine=''
+  for(;;){
+    var read=await reader.read()
+    pendingLine+=decoder.decode(read.value,{stream:!read.done})
+    var newline
+    while((newline=pendingLine.indexOf('\\n'))!==-1){
+      var line=pendingLine.slice(0,newline);pendingLine=pendingLine.slice(newline+1)
+      if(line!=='')yield JSON.parse(line)
+    }
+    if(read.done)break
+  }
+  if(pendingLine!=='')yield JSON.parse(pendingLine)
+}
+async function* openStream(endpoint,payload,signal){
+  var ws=connect()
+  if(ws!==null&&ws.readyState===0){
+    try{
+      await new Promise(function(resolve,reject){
+        var timer=setTimeout(function(){reject(new Error('stream mux open timeout'))},1500)
+        ws.addEventListener('open',function(){clearTimeout(timer);resolve()},{once:true})
+        ws.addEventListener('error',function(){clearTimeout(timer);reject(new Error('stream mux error'))},{once:true})
+      })
+    }catch(error){muxBroken=true;ws=null}
+  }
+  if(ws===null||ws.readyState!==1){
+    yield* fallback(endpoint,payload,signal)
+    return
+  }
+  var id=++nextId
+  var entry={queue:[],done:false,error:null,notify:null}
+  pending[id]=entry
+  var send=function(message){if(ws.readyState===1)ws.send(JSON.stringify(message))}
+  var onAbort=function(){send({t:'cancel',id:id})}
+  if(signal)signal.addEventListener('abort',onAbort,{once:true})
+  send({t:'open',id:id,endpoint:endpoint,payload:payload})
+  try{
+    for(;;){
+      if(entry.queue.length>0){yield entry.queue.shift();continue}
+      if(entry.error!==null)throw entry.error
+      if(entry.done)return
+      await new Promise(function(resolve){entry.notify=resolve})
+    }
+  }finally{
+    delete pending[id]
+    if(signal)signal.removeEventListener('abort',onAbort)
+    send({t:'cancel',id:id})
+  }
+}
+return {ownsHost:true,openStream:openStream}
+})()
+;(function(){
+  try{
+    if((location.search||"").indexOf("panel=qq-console")===-1)return;
+    // 这个窗口只承载控制台：隐藏应用本体，让面板铺满整个窗口。
+    var chrome=document.createElement("style");
+    chrome.id="qq-console-chrome";
+    chrome.textContent="body>*:not(#qqs-dock-panel){display:none!important}"
+      +"#qqs-dock-panel{position:fixed!important;inset:0!important;width:auto!important;height:auto!important;max-width:none!important;max-height:none!important;margin:0!important;border-radius:0!important}";
+    document.head.appendChild(chrome);
+    var tries=0;
+    var timer=setInterval(function(){
+      if(typeof window.__qqbotOpenConsole==="function"){clearInterval(timer);window.__qqbotOpenConsole()}
+      else if(++tries>120){clearInterval(timer)}
+    },250);
+  }catch(error){}
+})()`
 
 const MIME: Readonly<Record<string, string>> = {
   '.css': 'text/css; charset=utf-8',
@@ -150,7 +269,16 @@ function isProjectPath(projectDir: string, target: string): boolean {
   return path === root || path.startsWith(root + sep)
 }
 
-function desktopPatches(projectDir: string, allowLinkedPackages: boolean): PatchOptions[] {
+/**
+ * Compose the profile's patches, split into what boots and what mounts after the handshake.
+ * @param projectDir - installed desktop profile.
+ * @param allowLinkedPackages - whether a bundle may resolve outside the profile.
+ * @returns the patches this boot applies, plus one group per deferred bundle.
+ */
+function desktopPatches(projectDir: string, allowLinkedPackages: boolean): {
+  core: PatchOptions[]
+  deferred: DeferredBundle[]
+} {
   const dshRoot = dirname(packageManifestPath(projectDir, '@deepseek-ai/dsh'))
   const profile = loadProfileDirectory('dsh desktop', projectDir, join(dshRoot, 'package.json'))
   for (const layer of profile.layers) {
@@ -158,11 +286,19 @@ function desktopPatches(projectDir: string, allowLinkedPackages: boolean): Patch
       throw new Error(`dsh desktop: profile bundle ${JSON.stringify(layer.packageName)} resolved outside the desktop profile`)
     }
   }
-  const layers = [
-    ...profile.layers.map(layer => layer.patches),
-    profile.patches,
-    loadOverlayPatches('dsh desktop', DESKTOP_PATCH),
-  ]
+  const deferredNames = new Set(DEFERRED_BUNDLES)
+  const deferred: DeferredBundle[] = []
+  const layers: PatchOptions[][] = []
+  for (const layer of profile.layers) {
+    if (!deferredNames.has(layer.packageName)) {
+      layers.push(layer.patches)
+      continue
+    }
+    // The rows are composed here, before the Loader exists, so a bundle whose patch file is
+    // malformed still fails the launch instead of failing after the user is already typing.
+    deferred.push({ packageName: layer.packageName, rows: composeEntries([layer.patches]) })
+  }
+  layers.push(profile.patches, loadOverlayPatches('dsh desktop', DESKTOP_PATCH))
   const rows = new Map(composeEntries(layers).flatMap(row => typeof row.id === 'string' ? [[row.id, row] as const] : []))
   const agentPresets = rows.get('agent-presets')
   if (agentPresets !== undefined) {
@@ -174,7 +310,7 @@ function desktopPatches(projectDir: string, allowLinkedPackages: boolean): Patch
       },
     }])
   }
-  return layers.flat()
+  return { core: layers.flat(), deferred }
 }
 
 function dshVersion(projectDir: string): string {
@@ -287,10 +423,8 @@ export async function runDesktopHost(
   writeFileSync(rootConfig, ROOT_CONFIG)
   const environment = loadLayeredEnv('dsh desktop')
   let current: Context | undefined
-  const ctx = await boot('dsh desktop', rootConfig, structuredClone(desktopPatches(
-    absoluteProject,
-    options.allowLinkedPackages === true,
-  )), (hostCtx) => {
+  const plan = desktopPatches(absoluteProject, options.allowLinkedPackages === true)
+  const ctx = await boot('dsh desktop', rootConfig, structuredClone(plan.core), (hostCtx) => {
     current = hostCtx
     hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment)
     provideCmdline(hostCtx, { args: [], exit: () => {} })
@@ -313,11 +447,16 @@ export async function runDesktopHost(
    * Offer one request to the composed webserver, the only owner of the routes plugin host
    * halves register with `ctx.inject(['webServer'])`.
    *
-   * This carrier claims `/.dsh/remote-stream`, `/api`, and `/plugins` itself and hands
-   * everything else here, body included: a panel's JSON write is a POST to a route the
-   * webserver owns, and dropping it into the asset handler is what turned every such write
-   * into a method error. Assets are read-only, so only a read the webserver did not claim is
-   * offered to them afterwards.
+   * This carrier claims `/.dsh/remote-stream` and `/api` itself and hands everything else here,
+   * body included: a panel's JSON write is a POST to a route the webserver owns, and dropping it
+   * into the asset handler is what turned every such write into a method error. Assets are
+   * read-only, so only a read the webserver did not claim is offered to them afterwards.
+   *
+   * `/plugins` used to be claimed here as well, on the reading that every such path is a client
+   * bundle. That is only true of `…/client.js`: a plugin's Host half registers its own routes
+   * under the same prefix (`/plugins/<package>/status` is one), so claiming the whole prefix
+   * answered those routes with the bundle table's 404 — the account panel that polls its status
+   * showed "请求失败 / HTTP 404" while the plugin itself was running fine.
    * @param request - request no in-process handler claimed.
    * @returns the plugin route's response, or the shell's own asset response.
    */
@@ -365,10 +504,43 @@ export async function runDesktopHost(
     await disposing
   }
 
+  /**
+   * Mount one deferred bundle's rows on the live Loader.
+   *
+   * The rows are the same ones the bundle's own patch file would have inserted at boot, so a
+   * deferred plugin is composed exactly as it would have been — it only arrives later. A bundle
+   * that throws here is reported and skipped: it must not take down a host that is already serving
+   * the conversation.
+   * @param bundle - composed rows and the package name they came from.
+   */
+  const mountBundle = async (bundle: DeferredBundle): Promise<void> => {
+    const started = Date.now()
+    try {
+      for (const row of bundle.rows) await ctx.loader.create(row)
+      console.log(`[dsh desktop] deferred plugin mounted: ${bundle.packageName} in ${String(Date.now() - started)} ms`)
+    } catch (error) {
+      console.error(
+        `[dsh desktop] deferred plugin failed: ${bundle.packageName}: `
+        + `${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  let deferredRun: Promise<void> | undefined
+
   return {
     dshVersion: dshVersion(absoluteProject),
     cancel(streamId) {
       requests.get(streamId)?.abort()
+    },
+    async mountDeferred() {
+      deferredRun ??= (async () => {
+        for (const bundle of plan.deferred) await mountBundle(bundle)
+        // The shell watches its child's stdout for this marker: it is what tells the window its
+        // deferred panels now exist, so the page can reload once and show them.
+        console.log(DEFERRED_READY_MARKER)
+      })()
+      await deferredRun
     },
     async fetch(command, body) {
       if (disposing !== undefined) throw new Error('dsh desktop: host is disposing')
@@ -387,9 +559,7 @@ export async function runDesktopHost(
           ? await streams.fetch(request)
           : url.pathname.startsWith('/api/')
             ? await api.fetch(request)
-            : url.pathname.startsWith('/plugins/')
-              ? await assets.fetch(request)
-              : await pluginRoutes(request)
+            : await pluginRoutes(request)
         await writeResponse(encodeDesktopResponseStart(command.streamId, {
           status: response.status,
           headers: [...response.headers.entries()],
@@ -458,6 +628,9 @@ async function main(): Promise<void> {
     protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
     dshVersion: controller.dshVersion,
   })
+  // Behind the handshake on purpose: the shell paints the conversation as soon as it hears `ready`,
+  // and these bundles are the ones that made it wait.
+  void controller.mountDeferred()
   const decoder = new DesktopHostRequestDecoder()
   const requestBodies = new Map<number, ReadableStreamDefaultController<Uint8Array>>()
   const blockedRequests = new Set<number>()

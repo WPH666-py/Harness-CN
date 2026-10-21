@@ -1,0 +1,167 @@
+/*
+ * The phone menu, injected into any page the shell forwards to a paired phone.
+ *
+ * Every rule is scoped under `hcn-mm-` because the page underneath belongs to the Host: a bare
+ * `button` or `nav` selector would restyle the GUI the menu floats over.
+ *
+ * The ball is positioned in JS (`left`/`top`) so it can be dragged; the sizes here only have to
+ * make it comfortable on a phone, a tablet and a landscape phone alike.
+ */
+
+.hcn-mm-button {
+  position: fixed;
+  top: 62%;
+  right: 14px;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 1px solid rgba(127, 127, 127, .26);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .82);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .16);
+  color: #1f2328;
+  font-size: 20px;
+  line-height: 1;
+  touch-action: none;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  cursor: grab;
+  transition: box-shadow .16s ease, transform .16s ease;
+}
+
+.hcn-mm-button:active,
+.hcn-mm-button.hcn-mm-dragging {
+  transform: scale(.96);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .22);
+  cursor: grabbing;
+}
+
+.hcn-mm-button[hidden] { display: none }
+
+.hcn-mm-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483001;
+  background: rgba(15, 18, 22, .38);
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+
+.hcn-mm-scrim[hidden] { display: none }
+.hcn-mm-scrim.hcn-mm-open { opacity: 1 }
+
+.hcn-mm-sheet {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 2147483002;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-sizing: border-box;
+  width: min(84vw, 320px);
+  height: 100%;
+  padding: calc(18px + env(safe-area-inset-top)) 12px calc(18px + env(safe-area-inset-bottom));
+  border-left: 1px solid rgba(127, 127, 127, .2);
+  background: #fbfbfc;
+  color: #1f2328;
+  font: 15px/1.5 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  transform: translateX(102%);
+  transition: transform .2s ease;
+  overflow-y: auto;
+}
+
+.hcn-mm-sheet.hcn-mm-open { transform: translateX(0) }
+
+.hcn-mm-title {
+  margin: 4px 10px 10px;
+  color: #6b7280;
+  font-size: 13px;
+  letter-spacing: .04em;
+}
+
+.hcn-mm-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hcn-mm-item:active { background: rgba(127, 127, 127, .14) }
+
+.hcn-mm-icon {
+  width: 22px;
+  font-size: 17px;
+  text-align: center;
+}
+
+.hcn-mm-note {
+  margin: 10px 12px 0;
+  color: #6b7280;
+  font-size: 12.5px;
+  min-height: 18px;
+}
+
+.hcn-mm-close {
+  margin: 14px 10px 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(127, 127, 127, .3);
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* The way out of the Host's full-screen settings dialog on a phone. */
+.hcn-mm-escape {
+  position: fixed;
+  left: 50%;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  z-index: 2147483003;
+  transform: translateX(-50%);
+  padding: 11px 26px;
+  border: 1px solid rgba(127, 127, 127, .3);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .94);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .18);
+  color: #1f2328;
+  font: 15px/1.2 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+}
+
+.hcn-mm-escape[hidden] { display: none }
+.hcn-mm-escape:active { transform: translateX(-50%) scale(.97) }
+
+/* Tablets get a slightly larger ball and a wider sheet; landscape phones keep the ball clear of the edge. */
+@media (min-width: 600px) {
+  .hcn-mm-button { width: 54px; height: 54px; font-size: 22px }
+  .hcn-mm-sheet { width: min(52vw, 380px) }
+}
+
+@media (max-height: 480px) {
+  .hcn-mm-sheet { padding-top: calc(10px + env(safe-area-inset-top)) }
+  .hcn-mm-item { padding: 9px 12px }
+}
+
+@media (prefers-color-scheme: dark) {
+  .hcn-mm-button { background: rgba(28, 30, 34, .82); color: #f2f3f5 }
+  .hcn-mm-sheet { background: #17181b; color: #f2f3f5; border-left-color: rgba(255, 255, 255, .12) }
+  .hcn-mm-title, .hcn-mm-note { color: #9aa0a6 }
+  .hcn-mm-item:active { background: rgba(255, 255, 255, .1) }
+  .hcn-mm-close { border-color: rgba(255, 255, 255, .18) }
+  .hcn-mm-escape { background: rgba(28, 30, 34, .94); color: #f2f3f5; border-color: rgba(255, 255, 255, .18) }
+}

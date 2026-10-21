@@ -144,15 +144,15 @@ describe('plugin install registry', () => {
     withNoEnvironment(() => {
       expect(statedRegistry()).toBeUndefined()
       expect(resolveRegistrySettings(FALLBACK_CONFIG)).toEqual({
-        registry: 'https://registry.npmjs.org/',
+        registry: 'https://registry.npmmirror.com/',
         userConfig: FALLBACK_CONFIG,
       })
     })
   })
 
   it('uses the registry the machine names, in either spelling and any writing of one origin', () => {
-    withSingleEnvironment('NPM_CONFIG_REGISTRY', 'https://registry.npmmirror.com', () => {
-      expect(statedRegistry()).toBe('https://registry.npmmirror.com/')
+    withSingleEnvironment('NPM_CONFIG_REGISTRY', 'https://registry.npmjs.org', () => {
+      expect(statedRegistry()).toBe('https://registry.npmjs.org/')
     })
     withSingleEnvironment('npm_config_registry', 'http://mirror.internal:8081/', () => {
       expect(statedRegistry()).toBe('http://mirror.internal:8081/')
@@ -172,7 +172,7 @@ describe('plugin install registry', () => {
     ]) {
       withSingleEnvironment('NPM_CONFIG_REGISTRY', value, () => {
         expect(statedRegistry()).toBeUndefined()
-        expect(resolveRegistrySettings(FALLBACK_CONFIG).registry).toBe('https://registry.npmjs.org/')
+        expect(resolveRegistrySettings(FALLBACK_CONFIG).registry).toBe('https://registry.npmmirror.com/')
       })
     }
   })

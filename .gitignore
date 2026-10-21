@@ -63,3 +63,7 @@ apps/desktop-shell/dist-artifacts/
 # Transient build logs and scratch trees (release hygiene).
 build-tauri.log
 .tmp/
+
+# Local session logs and per-machine state that must never be published.
+data/sessions/
+data/*.json

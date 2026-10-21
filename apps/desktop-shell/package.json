@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-desktop-shell",
-  "version": "0.1.5-rc.33",
+  "version": "0.1.5-rc.34",
   "private": true,
   "license": "MIT",
   "author": "Harness-CN",
@@ -15,7 +15,11 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.5",
+    "@types/qrcode": "^1.5.6",
     "esbuild": "^0.25.12",
     "tar": "^7.5.0"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
   }
 }

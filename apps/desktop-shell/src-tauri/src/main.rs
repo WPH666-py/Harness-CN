@@ -50,6 +50,12 @@ const MAIN: &str = "main";
 const API_KEY: &str = "api-key";
 /// Window label of the installed-plugin manager.
 const PLUGINS: &str = "plugins";
+/// Menu id and window label of the QQ group console, which lives in the workspace page.
+const QQ_CONSOLE: &str = "qq-console";
+/// Menu id of the server manager window.
+const SERVERS: &str = "servers";
+/// Window label of the mobile-access window.
+const LAN: &str = "lan";
 /// Window label of the run-log viewer.
 const LOGS: &str = "logs";
 /// Window label of the release prompt.
@@ -66,6 +72,9 @@ const TRAY_ID: &str = "harness-cn-tray";
 /// Tray menu entry that brings the hidden workspace window back.
 const TRAY_SHOW_ID: &str = "tray-show";
 /// Tray menu entry that ends the product for real.
+/// Set once the process is on its way out, so the window-closed rule stops guarding the exit.
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 const TRAY_QUIT_ID: &str = "tray-quit";
 /// Caption the tray tooltip and the fallback window lookup share.
 const APP_NAME: &str = "Harness-CN";
@@ -75,6 +84,8 @@ const APP_NAME: &str = "Harness-CN";
 struct Shell {
     child: Mutex<Option<Child>>,
     port: Mutex<Option<u16>>,
+    /// Port the shell's own windows answer on, separate from the workspace origin.
+    shell_port: Mutex<Option<u16>>,
     /// Whether the sidecar ever reported a usable workspace.
     ready: std::sync::atomic::AtomicBool,
     /// Tail of the sidecar's own diagnostics, shown when it dies before that.
@@ -103,7 +114,12 @@ const UPDATE_MENU_LABEL_FAILED: &str = "检查更新 [!]";
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Handshake {
     /// The control surface is listening, so the progress window can be shown.
-    Listen { port: u16 },
+    Listen {
+        port: u16,
+        /// The shell origin's port; absent from a sidecar older than this field.
+        #[serde(rename = "shellPort", default)]
+        shell_port: Option<u16>,
+    },
     /// The launch advanced; the progress window reads the same value from the control surface.
     Status {
         #[allow(dead_code)]
@@ -112,6 +128,9 @@ enum Handshake {
     /// The workspace is ready to be shown.
     Ready {
         port: u16,
+        /// The shell origin's port; see `Listen`.
+        #[serde(rename = "shellPort", default)]
+        shell_port: Option<u16>,
         #[serde(rename = "needsApiKey")]
         needs_api_key: bool,
     },
@@ -132,6 +151,11 @@ enum Handshake {
     Message { title: String, body: String },
     /// The launch failed and there is no window that could report it.
     Fatal { message: String },
+    /// A page the shell serves asked for a restart — the same action the window menu offers.
+    ///
+    /// The request has to come back here: the single-instance claim and the process being replaced
+    /// both belong to this process, which the sidecar cannot reach.
+    Restart,
 }
 
 /// The subset of the release-channel state the shell acts on.
@@ -147,6 +171,32 @@ struct UpdateState {
 
 fn origin(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
+}
+
+/// Port the shell's own windows answer on, falling back to the workspace port.
+///
+/// A sidecar older than this field publishes only one port; the shell windows then share the
+/// workspace origin as they always did.
+fn shell_port_of(app: &AppHandle) -> Option<u16> {
+    app.state::<Shell>()
+        .shell_port
+        .lock()
+        .ok()
+        .and_then(|value| *value)
+        .or_else(|| app.state::<Shell>().port.lock().ok().and_then(|value| *value))
+}
+
+/// Origin the shell's own windows load from.
+///
+/// The workspace origin is shared with the app page, which holds five event streams plus a plugin
+/// long-poll — six, which is a browser's whole budget per origin. A shell page opened there waits
+/// forever for a connection and renders as a blank window, so the sidecar publishes a second
+/// loopback port for `/shell/*` and this is the origin that uses it.
+fn shell_origin(app: &AppHandle, published: Option<u16>) -> String {
+    match published.or_else(|| shell_port_of(app)) {
+        Some(port) => origin(port),
+        None => origin(0),
+    }
 }
 
 /// Convert a Windows verbatim path back to the ordinary form.
@@ -236,17 +286,32 @@ fn open_in_browser(target: &tauri::Url) {
     }
 }
 
+/// Replace this process with a fresh copy of itself.
+///
+/// The single-instance claim belongs to this process, so it has to be given up before the
+/// replacement starts; otherwise the new process sees a running shell and leaves.
+fn restart_shell(app: &AppHandle) {
+    platform::release_single_instance();
+    match std::env::current_exe().map(|exe| Command::new(exe).spawn()) {
+        Ok(Ok(_)) => app.exit(0),
+        _ => platform::show_error("Harness-CN", "无法重新启动应用，请手动退出后重新打开。"),
+    }
+}
+
 /// Apply one fact the sidecar reported.
 fn apply_handshake(app: &AppHandle, message: Handshake) {
     match message {
-        Handshake::Listen { port } => {
+        Handshake::Listen { port, shell_port } => {
             if let Ok(mut current) = app.state::<Shell>().port.lock() {
                 *current = Some(port);
+            }
+            if let (Some(shell), Ok(mut current)) = (shell_port, app.state::<Shell>().shell_port.lock()) {
+                *current = Some(shell);
             }
             open_window(
                 app,
                 SPLASH,
-                format!("{}/shell/startup.html", origin(port)),
+                format!("{}/shell/startup.html", shell_origin(app, shell_port)),
                 "Harness-CN 正在启动",
                 520.0,
                 560.0,
@@ -254,9 +319,13 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
             );
         }
         Handshake::Status { .. } => {}
-        Handshake::Ready { port, needs_api_key } => {
+        Handshake::Restart => restart_shell(app),
+        Handshake::Ready { port, shell_port, needs_api_key } => {
             if let Ok(mut current) = app.state::<Shell>().port.lock() {
                 *current = Some(port);
+            }
+            if let (Some(shell), Ok(mut current)) = (shell_port, app.state::<Shell>().shell_port.lock()) {
+                *current = Some(shell);
             }
             app.state::<Shell>().ready.store(true, std::sync::atomic::Ordering::SeqCst);
             if let Some(splash) = app.get_webview_window(SPLASH) {
@@ -268,7 +337,7 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
                 open_window(
                     app,
                     API_KEY,
-                    format!("{}/shell/api-key.html", origin(port)),
+                    format!("{}/shell/api-key.html", shell_origin(app, shell_port)),
                     "绑定 DeepSeek 密钥",
                     560.0,
                     520.0,
@@ -302,13 +371,14 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
             if app.get_webview_window(UPDATE).is_some() {
                 return;
             }
-            let port = app.state::<Shell>().port.lock().ok().and_then(|value| *value);
-            let Some(port) = port else { return };
+            if shell_port_of(app).is_none() {
+                return;
+            }
             let version = state.version.unwrap_or_default();
             open_window(
                 app,
                 UPDATE,
-                format!("{}/shell/update.html?v={version}", origin(port)),
+                format!("{}/shell/update.html?v={version}", shell_origin(app, None)),
                 "发现新版本",
                 620.0,
                 620.0,
@@ -358,15 +428,17 @@ fn install_menu(app: &AppHandle) {
     let build = || -> tauri::Result<()> {
         let menu = MenuBuilder::new(app)
             .item(&MenuItemBuilder::with_id("restart", "重启").build(app)?)
-            .item(&MenuItemBuilder::with_id("logs", "运行日志").build(app)?)
+            .item(&MenuItemBuilder::with_id("lan", "移动访问").build(app)?)
+        .item(&MenuItemBuilder::with_id("logs", "运行日志").build(app)?)
             .item(&MenuItemBuilder::with_id("plugins", "插件管理").build(app)?)
+            .item(&MenuItemBuilder::with_id("qq-console", "QQ 群管理").build(app)?)
             .item(&MenuItemBuilder::with_id("updates", "检查更新").build(app)?)
             .item(&MenuItemBuilder::with_id("api-key", "API 密钥").build(app)?)
             .item(&MenuItemBuilder::with_id("author", "作者信息").build(app)?)
             .item(&MenuItemBuilder::with_id("shop", "休闲食品商城").build(app)?)
             .item(&MenuItemBuilder::with_id("feedback", "评价与反馈").build(app)?)
             .item(&MenuItemBuilder::with_id("devtools", "开发者工具").build(app)?)
-            .item(&MenuItemBuilder::with_id("quit", "退出").build(app)?)
+            .item(&MenuItemBuilder::with_id("servers", "服务器管理").build(app)?)
             .build()?;
         app.set_menu(menu)?;
         Ok(())
@@ -406,10 +478,15 @@ fn send_command(app: &AppHandle, command: &str) {
 
 /// Run one menu action.
 fn handle_menu(app: &AppHandle, id: &str) {
-    let port = app.state::<Shell>().port.lock().ok().and_then(|value| *value);
-    let window = |label: &str, path: &str, title: &str, width: f64, height: f64| {
-        if let Some(port) = port {
+    // The QQ console is part of the workspace page, not a shell page: it needs the workspace origin.
+    let workspace_port = app.state::<Shell>().port.lock().ok().and_then(|value| *value);
+    let app_window = |label: &str, path: &str, title: &str, width: f64, height: f64| {
+        if let Some(port) = workspace_port {
             open_window(app, label, format!("{}{path}", origin(port)), title, width, height, false);
+        }
+    };    let window = |label: &str, path: &str, title: &str, width: f64, height: f64| {
+        if shell_port_of(app).is_some() {
+            open_window(app, label, format!("{}{path}", shell_origin(app, None)), title, width, height, false);
         }
     };
     match id {
@@ -422,7 +499,10 @@ fn handle_menu(app: &AppHandle, id: &str) {
                 _ => platform::show_error("Harness-CN", "无法重新启动应用，请手动退出后重新打开。"),
             }
         }
+        "servers" => app_window(SERVERS, "/shell/servers.html", "服务器管理", 820.0, 760.0),
+        "qq-console" => app_window(QQ_CONSOLE, "/?panel=qq-console", "QQ 群管理", 1024.0, 720.0),
         "logs" => window(LOGS, "/shell/log-viewer.html", "运行日志", 1000.0, 700.0),
+        "lan" => window(LAN, "/shell/lan.html", "移动访问", 760.0, 620.0),
         "plugins" => window(PLUGINS, "/shell/plugin-manager.html", "内置插件", 900.0, 620.0),
         "api-key" => window(API_KEY, "/shell/api-key.html", "绑定 DeepSeek 密钥", 560.0, 520.0),
         "author" => window(AUTHOR, "/shell/author.html", "作者信息", 640.0, 660.0),
@@ -442,7 +522,10 @@ fn handle_menu(app: &AppHandle, id: &str) {
                 main.open_devtools();
             }
         }
-        "quit" => app.exit(0),
+        "quit" => {
+            QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+            app.exit(0);
+        }
         _ => {}
     }
 }
@@ -481,7 +564,10 @@ fn install_tray(app: &AppHandle) {
                 let id: &str = event.id().as_ref();
                 match id {
                     TRAY_SHOW_ID => show_main_window(app),
-                    TRAY_QUIT_ID => app.exit(0),
+                    TRAY_QUIT_ID => {
+                QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+                app.exit(0);
+            }
                     _ => {}
                 }
             })
@@ -550,6 +636,10 @@ fn start_sidecar(app: AppHandle) {
         .arg(&log_dir)
         .arg("--install-dir")
         .arg(&install_dir)
+        // An installed launch says so, because the sidecar has to tell an inherited `DSH_HOME`
+        // (the other desktop product's, often exported machine-wide) from a home this product was
+        // pointed at on purpose. Without the mark both products resolve one shared home.
+        .env("HARNESS_CN_PACKAGED", "1")
         // `CREATE_NO_WINDOW` because `node.exe` would otherwise allocate the console this shell
         // has no use for. The sidecar is contained in a job immediately after it is spawned —
         // before it can load its own entry point, let alone start the Host — so no separate
@@ -723,28 +813,33 @@ fn main() {
             // workspace opens, and a launch that is still installing has no window at all; ending
             // the process there would kill the very transaction that was making progress. The
             // launch ends when its own window is closed, or when the sidecar that owns the
-            // workspace is gone. Closing the workspace window is not one of those: it hides the
-            // window and leaves the product running in the notification area.
+            // workspace is gone.
+            //
+            // Closing the workspace window is a quit now, so that path sets `QUITTING` first: the
+            // window is already gone by the time this runs, and without the flag the rule below
+            // would read the close as an accident and keep the process alive.
             let sidecar_alive = handle
                 .state::<Shell>()
                 .child
                 .lock()
                 .map(|child| child.is_some())
                 .unwrap_or(false);
-            if sidecar_alive && handle.get_webview_window(MAIN).is_none() {
+            if !QUITTING.load(std::sync::atomic::Ordering::SeqCst)
+                && sidecar_alive
+                && handle.get_webview_window(MAIN).is_none()
+            {
                 eprintln!("Harness-CN: a window closed while the launch is still running; staying up");
                 api.prevent_exit();
             }
         }
         RunEvent::Exit => stop_sidecar(handle),
-        RunEvent::WindowEvent { ref label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } if label == MAIN => {
-            // Closing the workspace window keeps the product running: opening it again is the
-            // expensive part, so the window is hidden rather than closed and the tray's own quit
-            // entry is what ends the process for good.
-            api.prevent_close();
-            if let Some(window) = handle.get_webview_window(MAIN) {
-                let _ = window.hide();
-            }
+        RunEvent::WindowEvent { ref label, event: tauri::WindowEvent::CloseRequested { .. }, .. } if label == MAIN => {
+            // Closing the workspace window ends the product: the Host, the plugin bridges it
+            // started, and this shell all stop. The tray keeps the same exit one click away, and a
+            // launch that is only hiding in the notification area is what made the window look
+            // impossible to close.
+            QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+            handle.exit(0);
         }
         _ => {}
     });

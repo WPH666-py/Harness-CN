@@ -54,27 +54,16 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     // request (`PLATFORM_MODULES` in `packages/client/web/src/platform.ts`), so it needs no
     // package beside it in the profile; the request is written to fall back to a null icon when a
     // host release does not export the name it asks for.
+    //
+    // Phone access itself is not a plugin on this line: the shell serves the GUI to the LAN at its
+    // own origin (apps/desktop-shell/src/lan-access.ts). `@linxin666/dsh-web-all@0.4.7` is what
+    // this product previously carried for that job and it cannot do it here — its remote plugin
+    // injects the 0.1.7-line `configForms` service inside `apply`, so on this line the row stays
+    // pending, the boot audit refuses, and the whole Web GUI stops painting; the aggregate hides
+    // that by mounting its rows as subpath specifiers, which this line's client scan never turns
+    // into browser rows at all. Neither failure is acceptable in a shipped installer.
     name: 'dsh-web-mobile',
     version: '3.0.6',
-    active: true,
-  },
-  {
-    // Phone access: the LAN/remote gateway that serves the Web GUI over HTTPS with a QR pairing
-    // page, plus its own in-page pickers for the two cases this profile gets wrong on a phone.
-    // `dsh-web-mobile` above is only the mobile *layout*; this is the piece that makes the GUI
-    // reachable from the phone at all, which is why it is the one that was missing.
-    //
-    // It declares no `engines.dsh` at all — all six of its peers (react, cordis, dsh-llm,
-    // dsh-commands, dsh-host-webserver, dsh-client-connection) are optional, so there is no second
-    // copy of the cordis/session chain for pnpm to install beside the Host's own, and it mounts on
-    // this baseline — observed running here, serving with managed TLS and a signed CA.
-    //
-    // Order matters. Its bundle patch disables the stock `directory-picker` row and inserts a
-    // mobile host/Client browse pair guarded by a platform check, so the patch has to be applied
-    // in a layer that can still see the row it disables; `dsh-web-mobile` above stays first so
-    // the mobile surface is mounted before this one starts rearranging rows.
-    name: 'dsh-mobile',
-    version: '0.6.4',
     active: true,
   },
   {
@@ -299,6 +288,66 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
   // so it mounts without ever rendering an entry. The browser half is instead this repository's
   // own `@deepseek-ai/dsh-client-ui-settings-account-harness`, packed with the desktop package
   // set and mounted from the same Host patch layer as the two rows above.
+  // The ten community plugins the 0.1.5-rc.33 distribution ships. Every one of them declares
+  // `dsh.bundle.patch` plus a `dsh.client` half, so each is listed and mounted on a fresh profile.
+  //
+  // `dsh-remote-ssh-ops` is the exception to the pinned-tarball rule: it is published nowhere, so
+  // its spec is the GitHub repository itself. pnpm resolves a `github:` spec to a commit, which is
+  // as exact as a version, and the installed version still comes from the repository's manifest.
+  {
+    name: 'dsh-mermaid-smooth',
+    version: '0.2.1',
+    active: true,
+  },
+  {
+    name: 'dsh-connect-trae',
+    version: '4.0.1',
+    active: true,
+  },
+  {
+    name: 'dsh-remote-ssh-ops',
+    version: 'github:weisiren000/dsh-remote-ssh-ops#main',
+    active: true,
+  },
+  {
+    name: '@dmh2002/dsh-connect-qoder',
+    version: '1.5.2',
+    active: true,
+  },
+  {
+    // Its `engines.dsh` names `>=0.1.6-0 <0.2.0`, and this line is 0.1.5-rc.33 — the range was
+    // written for a host that did not exist when the plugin was released. Installed either way, but
+    // not listed: an engine the Host refuses would fail the whole Web boot, and a plugin one
+    // toggle away is recoverable where a boot that never finishes is not.
+    name: 'dsh-claude-move',
+    version: '0.4.18',
+    active: false,
+  },
+  {
+    name: '@copylee/dsh-office',
+    version: '1.1.3',
+    active: true,
+  },
+  {
+    name: '@zaofan/dsh-qqbot',
+    version: '1.10.10',
+    active: true,
+  },
+  {
+    name: '@yunmiao/studymate',
+    version: '2.0.2',
+    active: true,
+  },
+  {
+    name: '@xmanrui/dsh-im',
+    version: '5.1.0',
+    active: true,
+  },
+  {
+    name: 'dsh-email',
+    version: '0.17.2',
+    active: true,
+  },
 ]
 
 /**

@@ -164,6 +164,24 @@ export function removePnpmProjectRegistrations(storeRoot: string): void {
   }
 }
 
+/**
+ * Remove pnpm's transient staging directories from the store that ships in the seed.
+ *
+ * pnpm works inside `<store>/v<version>/tmp`: it extracts an archive there before publishing the
+ * content-addressed files, and it keeps the packed form of a git dependency there. A `github:` spec
+ * — which a bundled plugin can be — leaves those trees behind, hard-linked to the store's own
+ * content. tar records a hard link as a `Link` entry, and the first launch refuses any store entry
+ * that is not a file, so a seed carrying them installs nowhere. Nothing links into them: every
+ * profile link names a path under `files/`.
+ * @param storeRoot - pnpm store directory included in the desktop seed.
+ */
+export function removePnpmStagingDirectories(storeRoot: string): void {
+  for (const entry of readdirSync(storeRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^v\d+$/u.test(entry.name)) continue
+    rmSync(join(storeRoot, entry.name, 'tmp'), { recursive: true, force: true })
+  }
+}
+
 function mergeStoreIndex(source: string, destination: string): void {
   if (!existsSync(destination)) {
     copyFileSync(source, destination)

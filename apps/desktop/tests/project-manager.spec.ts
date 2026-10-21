@@ -831,10 +831,10 @@ describe('desktop project transactions', () => {
     const invocation = JSON.parse(readFileSync(log, 'utf8')) as { args: string[]; env: Record<string, string> }
     expect(invocation.args).toContain('add')
     expect(invocation.args).toContain('@scope/plugin@2.0.0')
-    expect(invocation.args).toContain('--config.registry=https://registry.npmjs.org/')
+    expect(invocation.args).toContain('--config.registry=https://registry.npmmirror.com/')
     expect(invocation.args).toContain(`--config.store-dir=${paths.pnpm.store}`)
     expect(invocation.args).toContain('--config.enable-global-virtual-store=false')
-    expect(invocation.env.NPM_CONFIG_REGISTRY).toBe('https://registry.npmjs.org/')
+    expect(invocation.env.NPM_CONFIG_REGISTRY).toBe('https://registry.npmmirror.com/')
     expect(invocation.env.NPM_CONFIG_STORE_DIR).toBe(paths.pnpm.store)
     expect(invocation.env.NPM_CONFIG_USERCONFIG).toBe(join(paths.pnpm.config, 'npmrc'))
     expect(invocation.env.npm_config_registry).toBeUndefined()
@@ -857,7 +857,7 @@ describe('desktop project transactions', () => {
     const registryEnvironment = clearRegistryEnvironment()
     // A mirror is only usable when pnpm is allowed to reach it: naming a registry on the command
     // line would override the file that named it, which is the bug this case exists to prevent.
-    process.env.NPM_CONFIG_REGISTRY = 'https://registry.npmmirror.com'
+    process.env.NPM_CONFIG_REGISTRY = 'https://registry.npmjs.org'
     try {
       await manager.mutate({ type: 'plugin-add', spec: '@scope/plugin@2.0.0' }, hooks())
     } finally {
@@ -868,7 +868,7 @@ describe('desktop project transactions', () => {
 
     const invocation = JSON.parse(readFileSync(log, 'utf8')) as { args: string[]; env: Record<string, string> }
     expect(invocation.args.some(argument => argument.startsWith('--config.registry='))).toBe(false)
-    expect(invocation.env.NPM_CONFIG_REGISTRY).toBe('https://registry.npmmirror.com/')
+    expect(invocation.env.NPM_CONFIG_REGISTRY).toBe('https://registry.npmjs.org/')
   })
 
   it('reconciles dsh to the packaged release without removing desktop plugins', async () => {

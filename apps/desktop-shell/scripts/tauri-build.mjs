@@ -19,7 +19,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const DEFAULT_SUBJECT = 'CN=水哥';
 const DEFAULT_TIMESTAMP_URL = 'http://timestamp.digicert.com';
@@ -118,6 +119,12 @@ function tauriEntry() {
 
 const extra = signingArgs();
 const entry = tauriEntry();
+// `tauri build` refreshes `target/release/resources` from `bundle.resources` but never clears a
+// resource the manifest no longer names. A seed staged by an older release therefore survived here
+// and travelled into every portable copy assembled from this directory, where the launch compared
+// its version against the application's and refused to start. Removing the directory first makes
+// this build's output describe this build only.
+rmSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src-tauri', 'target', 'release', 'resources'), { recursive: true, force: true });
 const command = entry ? process.execPath : 'tauri';
 const args = entry ? [entry, 'build', ...extra] : ['build', ...extra];
 const result = spawnSync(command, args, { stdio: 'inherit', shell: !entry, windowsHide: false });

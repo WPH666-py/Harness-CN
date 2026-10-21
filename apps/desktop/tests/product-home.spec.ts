@@ -83,6 +83,29 @@ describe('adoptHarnessCnHome', () => {
       expect(defaultHarnessCnHome()).toBe(join(root, '.harness-cn'))
     })
   })
+
+  it('ignores an inherited DSH_HOME in a packaged launch', () => {
+    const root = temporaryRoot()
+    withUserHome(root, () => {
+      // The other desktop product exports DSH_HOME machine-wide; a packaged Harness-CN must not
+      // adopt that home and start moving a profile it does not own.
+      const shared: Record<string, string | undefined> = { DSH_HOME: join(root, '.dsh') }
+      expect(adoptHarnessCnHome(shared, { packaged: true })).toBe(resolve(defaultHarnessCnHome()))
+      expect(shared.DSH_HOME).toBe(defaultHarnessCnHome())
+    })
+  })
+
+  it('lets HARNESS_CN_HOME move the packaged home and outranks DSH_HOME', () => {
+    const root = temporaryRoot()
+    withUserHome(root, () => {
+      const chosen = join(root, 'own-home')
+      const env: Record<string, string | undefined> = { DSH_HOME: join(root, '.dsh'), HARNESS_CN_HOME: chosen }
+      expect(adoptHarnessCnHome(env, { packaged: true })).toBe(resolve(chosen))
+      expect(env.DSH_HOME).toBe(chosen)
+      const blank: Record<string, string | undefined> = { HARNESS_CN_HOME: '  ' }
+      expect(adoptHarnessCnHome(blank, { packaged: true })).toBe(resolve(defaultHarnessCnHome()))
+    })
+  })
 })
 
 describe('migrateLegacyHarnessHome', () => {

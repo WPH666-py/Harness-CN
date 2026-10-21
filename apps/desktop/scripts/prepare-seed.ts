@@ -23,6 +23,7 @@ import {
   extractPnpmStoreArchives,
   materializeLinkedProfile,
   removePnpmProjectRegistrations,
+  removePnpmStagingDirectories,
 } from '../src/seed-store.ts'
 import {
   resolveDesktopAppId,
@@ -149,6 +150,21 @@ async function verifyWeChatSessionsPatch(root: string): Promise<void> {
   module.verifyWeChatSessions(root)
 }
 
+function patchInstalledWorkBuddyModelNull(root: string): Promise<void> {
+  // The WorkBuddy control reads the model selection, which is null before one is chosen, and the
+  // shipped bundle tests only for undefined: the conversation input row crashed on first render.
+  // Patching the installed bytes here puts the guard in the archived store, so every profile later
+  // materialized from this seed carries it. See scripts/patch-workbuddy-model-null.mjs.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-workbuddy-model-null.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: workbuddy model-guard patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
 function patchInstalledWeChatIdentity(root: string): Promise<void> {
   // WeChat's contact name for the bot belongs to Tencent's iLink platform, so the only name this
   // product controls is the one the bridge chats under: the built-in surface prompt the plugin
@@ -175,96 +191,17 @@ async function verifyWeChatIdentityPatch(root: string): Promise<void> {
   module.verifyWeChatIdentity(root)
 }
 
-function patchInstalledMobileListen(root: string): Promise<void> {
-  // dsh-mobile binds its LAN port while the plugin tree loads, so a port that another DSH
-  // desktop already holds fails the whole app instead of one feature. The patched bytes walk
-  // forward to a free port, persist it, and keep a bind failure from failing the boot. See
-  // scripts/patch-mobile-listen.mjs for why this cannot be configuration.
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-mobile-listen.mjs'), root], { stdio: 'inherit' })
-    child.once('error', reject)
-    child.once('close', (code, signal) => {
-      if (code === 0) resolvePromise()
-      else reject(new Error(`desktop seed: mobile listen patch exited with ${String(code ?? signal)}`))
-    })
-  })
-}
-
-/** Read the port fallback back out of the installed dsh-mobile in a tree the seed produced. */
-async function verifyMobileListenPatch(root: string): Promise<void> {
-  const script = join(APP_ROOT, 'scripts', 'patch-mobile-listen.mjs')
-  const module = await import(pathToFileURL(script).href) as {
-    verifyMobileListen?: (tree: string) => string
-  }
-  if (typeof module.verifyMobileListen !== 'function') {
-    throw new Error(`desktop seed: ${script} does not export verifyMobileListen`)
-  }
-  // The seed always ships dsh-mobile through the desktop profile bundles, so a tree without
-  // it means the bundle list changed and the patch silently stopped applying.
-  if (module.verifyMobileListen(join(root, 'node_modules')) !== 'patched') {
-    throw new Error('desktop seed: the profile the seed produced has no patched dsh-mobile')
-  }
-}
-
-function patchInstalledMobileSession(root: string): Promise<void> {
-  // dsh-mobile expires a phone's session after 48 minutes and its device after 90 days, so a
-  // phone that was paired once falls back to the login page and, eventually, to pairing again.
-  // The patched bytes keep both for a year and answer an expired pair link with a page instead
-  // of a 404. See scripts/patch-mobile-session.mjs for why this cannot be configuration.
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-mobile-session.mjs'), root], { stdio: 'inherit' })
-    child.once('error', reject)
-    child.once('close', (code, signal) => {
-      if (code === 0) resolvePromise()
-      else reject(new Error(`desktop seed: mobile session patch exited with ${String(code ?? signal)}`))
-    })
-  })
-}
-
-/** Read the long-lived sessions back out of the installed dsh-mobile in a tree the seed produced. */
-async function verifyMobileSessionPatch(root: string): Promise<void> {
-  const script = join(APP_ROOT, 'scripts', 'patch-mobile-session.mjs')
-  const module = await import(pathToFileURL(script).href) as {
-    verifyMobileSession?: (tree: string) => string
-  }
-  if (typeof module.verifyMobileSession !== 'function') {
-    throw new Error(`desktop seed: ${script} does not export verifyMobileSession`)
-  }
-  if (module.verifyMobileSession(join(root, 'node_modules')) !== 'patched') {
-    throw new Error('desktop seed: the profile the seed produced has no long-lived dsh-mobile sessions')
-  }
-}
-
-function patchInstalledMobilePanel(root: string): Promise<void> {
-  // dsh-mobile's panel was built phone-first: the QR code sits behind a "copy key" shortcut and
-  // the rest of the surface is update cards, tabs and diagnostics. The patched bundle shows the
-  // code on its own and keeps three controls. See scripts/patch-mobile-panel.mjs for why this
-  // cannot be configuration.
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-mobile-panel.mjs'), root], { stdio: 'inherit' })
-    child.once('error', reject)
-    child.once('close', (code, signal) => {
-      if (code === 0) resolvePromise()
-      else reject(new Error(`desktop seed: mobile panel patch exited with ${String(code ?? signal)}`))
-    })
-  })
-}
-
-/** Read the simplified panel back out of the installed dsh-mobile in a tree the seed produced. */
-async function verifyMobilePanelPatch(root: string): Promise<void> {
-  const script = join(APP_ROOT, 'scripts', 'patch-mobile-panel.mjs')
-  const module = await import(pathToFileURL(script).href) as {
-    verifyMobilePanel?: (tree: string) => string
-  }
-  if (typeof module.verifyMobilePanel !== 'function') {
-    throw new Error(`desktop seed: ${script} does not export verifyMobilePanel`)
-  }
-  if (module.verifyMobilePanel(join(root, 'node_modules')) !== 'patched') {
-    throw new Error('desktop seed: the profile the seed produced has no simplified dsh-mobile panel')
-  }
-}
-
 /** Read the engine's classification table back out of a tree the seed produced. */
+/** Require the WorkBuddy model-selection guard in a tree the seed produced. */
+async function verifyWorkBuddyModelNull(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-workbuddy-model-null.mjs')
+  const module = await import(pathToFileURL(script).href) as { verifyWorkBuddyModelNull?: (tree: string) => void }
+  if (typeof module.verifyWorkBuddyModelNull !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyWorkBuddyModelNull`)
+  }
+  module.verifyWorkBuddyModelNull(root)
+}
+
 async function verifyRuleEnginePatch(root: string): Promise<void> {
   const catalog = join(root, 'node_modules', 'dsh-rule-engine', 'lib', 'core', 'tool-catalog.js')
   if (!existsSync(catalog)) {
@@ -320,12 +257,8 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     await verifyWeChatSessionsPatch(materialized)
     // And it has to come out of it answering to this product's name.
     await verifyWeChatIdentityPatch(materialized)
-    // And its LAN listener has to survive a port another instance already holds.
-    await verifyMobileListenPatch(materialized)
-    // And a phone paired once has to stay signed in after the session it opened has lapsed.
-    await verifyMobileSessionPatch(materialized)
-    // And the panel has to show the code instead of asking the user to copy a secret.
-    await verifyMobilePanelPatch(materialized)
+    // A store archive that missed the guard would crash the conversation input on first render.
+    await verifyWorkBuddyModelNull(materialized)
   } finally {
     rmSync(materialized, { recursive: true, force: true })
   }
@@ -354,9 +287,7 @@ async function main(): Promise<void> {
     await patchInstalledRuleEngine(join(SEED_ROOT, 'node_modules'))
     await patchInstalledWeChatSessions(join(SEED_ROOT, 'node_modules'))
     await patchInstalledWeChatIdentity(join(SEED_ROOT, 'node_modules'))
-    await patchInstalledMobileListen(join(SEED_ROOT, 'node_modules'))
-    await patchInstalledMobileSession(join(SEED_ROOT, 'node_modules'))
-    await patchInstalledMobilePanel(join(SEED_ROOT, 'node_modules'))
+  await patchInstalledWorkBuddyModelNull(join(SEED_ROOT, 'node_modules'))
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
     let signedMachOFiles: number | undefined
@@ -376,6 +307,9 @@ async function main(): Promise<void> {
     // Signing and registration cleanup both rewrite the store, so the profile is described
     // against the store only once it is final; a link recorded earlier could dangle.
     removePnpmProjectRegistrations(STORE_ROOT)
+    // A git dependency's packed tree stays under the store's `tmp`, hard-linked to store content,
+    // and tar would record it as an entry the first launch refuses; a profile never links to it.
+    removePnpmStagingDirectories(STORE_ROOT)
     const archived = archiveLinkedProfile(SEED_ROOT, STORE_ROOT, SEED_ROOT)
     process.stdout.write(
       `desktop seed: recorded ${archived.linkedFiles} profile files as store links,`

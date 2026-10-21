@@ -23,6 +23,16 @@ import { DSH_HOME_ENV, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 export const HARNESS_CN_HOME_DIR_NAME = '.harness-cn'
 
 /**
+ * Environment variable that names a home for this product alone.
+ *
+ * `DSH_HOME` belongs to the DSH product and is commonly exported machine-wide, so a Harness-CN
+ * launched from such a shell would adopt the shared home and then treat the other product's live
+ * profile as its own. This variable is the one a user sets to move Harness-CN's home, and it
+ * outranks everything else.
+ */
+export const HARNESS_CN_HOME_ENV = 'HARNESS_CN_HOME'
+
+/**
  * Migration marker inside the Harness-CN home.
  *
  * Its presence is the record that the copy from the legacy home completed, so no later launch
@@ -77,11 +87,29 @@ export function defaultHarnessCnHome(): string {
  * Host's sessions, storages, attachments, credentials, and profile under the same home as the
  * shell's runtime rather than under the shared one.
  * @param env - environment mapping to adopt the home into; defaults to `process.env`.
- * @returns the resolved Harness-CN home, with an explicit `DSH_HOME` still winning.
+ * @param options - whether this launch is the packaged product.
+ * @returns the resolved Harness-CN home.
  */
-export function adoptHarnessCnHome(env: Record<string, string | undefined> = process.env): string {
-  const configured = env[DSH_HOME_ENV]
-  if (configured === undefined || configured.trim().length === 0) env[DSH_HOME_ENV] = defaultHarnessCnHome()
+export function adoptHarnessCnHome(
+  env: Record<string, string | undefined> = process.env,
+  options: { readonly packaged?: boolean } = {},
+): string {
+  // A home this product names for itself is the whole answer, packaged or not.
+  const own = env[HARNESS_CN_HOME_ENV]?.trim()
+  if (own !== undefined && own.length > 0) {
+    env[DSH_HOME_ENV] = own
+    return resolveDshHome(undefined, env)
+  }
+  // A packaged launch does not inherit `DSH_HOME`: that variable is the other desktop product's,
+  // machines commonly export it machine-wide, and obeying it made both products install into one
+  // home — where Harness-CN's next launch tried to move a profile the other product was running.
+  // Development and CLI launches keep honouring it, because there the variable is the developer's
+  // own instruction rather than a neighbour's environment.
+  const configured = env[DSH_HOME_ENV]?.trim()
+  if (options.packaged !== true && configured !== undefined && configured.length > 0) {
+    return resolveDshHome(undefined, env)
+  }
+  env[DSH_HOME_ENV] = defaultHarnessCnHome()
   return resolveDshHome(undefined, env)
 }
 

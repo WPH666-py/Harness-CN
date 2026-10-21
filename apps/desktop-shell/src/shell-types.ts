@@ -45,9 +45,28 @@ export interface ShellStatus {
  * line-oriented stream keeps that handshake free of an HTTP client in the shell.
  */
 export type ShellHandshake =
-  | { readonly type: 'listen'; readonly port: number }
+  | {
+      readonly type: 'listen'
+      /** Port the workspace answers on: the app page and every Host request. */
+      readonly port: number
+      /**
+       * Port the shell's own windows answer on.
+       *
+       * A browser allows six concurrent requests per origin and the workspace keeps five event
+       * streams plus a plugin long-poll, so shell pages served from the same origin as the app can
+       * never get a connection. Windows that load /shell/* use this port instead.
+       */
+      readonly shellPort: number
+    }
   | { readonly type: 'status'; readonly status: ShellStatus }
-  | { readonly type: 'ready'; readonly port: number; readonly needsApiKey: boolean }
+  | {
+      readonly type: 'ready'
+      /** Port the workspace answers on. */
+      readonly port: number
+      /** Port the shell's own windows answer on; see {@link ShellHandshake} listen. */
+      readonly shellPort: number
+      readonly needsApiKey: boolean
+    }
   | { readonly type: 'update'; readonly state: DesktopUpdateState }
   /**
    * Ask the shell to start the downloaded installer, which must run outside the shell's
@@ -58,6 +77,14 @@ export type ShellHandshake =
   | { readonly type: 'launchinstaller'; readonly installer: string; readonly silentSwitch: string }
   | { readonly type: 'message'; readonly title: string; readonly body: string }
   | { readonly type: 'fatal'; readonly message: string }
+  /**
+   * Ask the shell to replace this process with a fresh copy of itself.
+   *
+   * A page the shell serves offers the same restart the window menu does, and only the shell can
+   * honour it: the single-instance claim and the executable being replaced both belong to the
+   * shell process, not to this sidecar.
+   */
+  | { readonly type: 'restart' }
 
 /**
  * One command the Rust shell writes to this process's stdin.

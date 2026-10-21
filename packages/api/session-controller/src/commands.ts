@@ -132,40 +132,42 @@ export class SessionCommandController {
    */
   async selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue> {
     const agent = await this.resolveAgent(request.sessionId)
-    return this.agents.serializeImageAdmission(agent, async () => {
+    // A selection applies to the NEXT request, so it must not queue behind the one in flight.
+    // `serializeImageAdmission` is the agent's live-call gate: routing a selection through it made
+    // the model chip do nothing for the length of a turn — and stay that way when a turn ended
+    // without releasing the gate. Swapping a model writes per-agent state; it admits no image.
+    try {
+      const resolved = await this.ctx.llm.resolveCallConfig({
+        provider: request.provider,
+        model: request.model,
+        ...(request.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: ReasoningEffortId(request.reasoningEffort) }),
+      })
+      const selected: AgentModelSelection = {
+        provider: resolved.provider,
+        model: resolved.model,
+        ...(resolved.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: resolved.reasoningEffort }),
+      }
+      this.agents.selectForNextRequest(agent, selected)
       try {
-        const resolved = await this.ctx.llm.resolveCallConfig({
-          provider: request.provider,
-          model: request.model,
-          ...(request.reasoningEffort === undefined
-            ? {}
-            : { reasoningEffort: ReasoningEffortId(request.reasoningEffort) }),
-        })
-        const selected: AgentModelSelection = {
-          provider: resolved.provider,
-          model: resolved.model,
-          ...(resolved.reasoningEffort === undefined
-            ? {}
-            : { reasoningEffort: resolved.reasoningEffort }),
-        }
-        this.agents.selectForNextRequest(agent, selected)
-        try {
-          await this.ctx.agentDefaultModel.saveSelection(selected)
-        } catch (error) {
-          this.ctx.logger.warn(
-            `session-controller: model selection changed for the Session but the default was not saved: ${String(error)}`,
-          )
-        }
-        return { selected: { ...selected } }
+        await this.ctx.agentDefaultModel.saveSelection(selected)
       } catch (error) {
-        if (remoteErrorOf(error) !== undefined) throw error
-        throw new RemoteError(
-          'session/model-unavailable',
-          error instanceof Error ? error.message : String(error),
-          { provider: request.provider, model: request.model },
+        this.ctx.logger.warn(
+          `session-controller: model selection changed for the Session but the default was not saved: ${String(error)}`,
         )
       }
-    })
+      return { selected: { ...selected } }
+    } catch (error) {
+      if (remoteErrorOf(error) !== undefined) throw error
+      throw new RemoteError(
+        'session/model-unavailable',
+        error instanceof Error ? error.message : String(error),
+        { provider: request.provider, model: request.model },
+      )
+    }
   }
 
   /**

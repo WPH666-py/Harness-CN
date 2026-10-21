@@ -61,6 +61,11 @@ execFileSync(esbuild.command, [...esbuild.prefix, ENTRY,
   // The Host is a separate process and the runtime supplies every `node:` builtin, so nothing
   // here may be inlined from the standard library or resolved from the installed profile.
   '--external:node:*',
+  // `qrcode`'s Node entry reaches for `fs` through a dynamic `require`, which esbuild cannot
+  // rewrite into ESM and which throws at load time in the installed sidecar. The browser entry
+  // renders the same SVG from the same core and touches no builtin, so the alias is what makes the
+  // dependency survive bundling.
+  '--alias:qrcode=qrcode/lib/browser.js',
   '--banner:js=#!/usr/bin/env node',
 ], { stdio: 'inherit', cwd: PACKAGE_ROOT })
 

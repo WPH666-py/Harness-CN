@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>移动访问</title>
+  <link rel="stylesheet" href="/shell/lan.css">
+</head>
+<body>
+  <main>
+    <h1>移动访问</h1>
+    <p class="intro">开启后，同一个 Wi-Fi 下的手机打开链接或扫码即可使用。链接只在这台电脑上生成，不需要装证书，也不需要输入配对码。</p>
+
+    <label class="switch">
+      <input id="toggle" type="checkbox">
+      <span>局域网访问</span>
+      <em id="state">已关闭</em>
+    </label>
+
+    <section id="panel" hidden>
+      <div class="qr"><img id="qr" alt="二维码"></div>
+      <p class="hint" id="hint">用手机扫描上面的二维码</p>
+      <div class="row">
+        <input id="link" readonly>
+        <button id="copy" type="button">复制链接</button>
+      </div>
+      <div class="row">
+        <button id="rotate" type="button">重新生成链接</button>
+      </div>
+    </section>
+
+    <p class="foot" id="foot"></p>
+  </main>
+  <script type="module" src="/shell/lan.js"></script>
+</body>
+</html>
