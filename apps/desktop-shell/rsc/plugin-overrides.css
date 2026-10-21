@@ -165,3 +165,12 @@
     max-width: none !important;
   }
 }
+
+/*
+ * The QQ dock belongs to the workspace's own menu entry now. The plugin draws it as a fixed ball on
+ * top of every page, and with the console reachable from the top menu the ball is only an obstruction.
+ */
+#qqs-dock-ball,
+#qqs-dock-wrap {
+  display: none !important;
+}

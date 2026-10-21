@@ -71,9 +71,18 @@ const FEEDBACK: &str = "feedback";
 const TRAY_ID: &str = "harness-cn-tray";
 /// Tray menu entry that brings the hidden workspace window back.
 const TRAY_SHOW_ID: &str = "tray-show";
+/// Tray menu entry that flips what closing the workspace window does.
+const TRAY_KEEP_ID: &str = "tray-keep";
 /// Tray menu entry that ends the product for real.
 /// Set once the process is on its way out, so the window-closed rule stops guarding the exit.
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether closing the workspace window keeps the product running in the notification area.
+///
+/// Opening the workspace costs a full plugin-tree start — tens of seconds cold — so the default is
+/// to keep it: the window hides and the next open is immediate. The tray entry flips this, and the
+/// choice is written to the installation's data directory so it survives a restart.
+static KEEP_IN_TRAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 const TRAY_QUIT_ID: &str = "tray-quit";
 /// Caption the tray tooltip and the fallback window lookup share.
@@ -552,18 +561,55 @@ fn show_main_window(app: &AppHandle) {
     let _ = window.set_focus();
 }
 
+/// Path of the file that remembers what closing the workspace window does.
+///
+/// It lives in the installation's data directory beside the other per-machine choices, so a
+/// reinstall that keeps `data` keeps the preference too.
+fn close_behavior_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join("data").join("desktop").join("close-behavior"))
+}
+
+/// Read the stored close behaviour. A missing file keeps the default: stay running.
+fn load_close_behavior() {
+    let Some(path) = close_behavior_path() else { return };
+    if let Ok(text) = std::fs::read_to_string(path) {
+        KEEP_IN_TRAY.store(text.trim() != "quit", std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Store the close behaviour chosen from the tray.
+fn save_close_behavior(keep: bool) {
+    let Some(path) = close_behavior_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, if keep { "tray" } else { "quit" });
+}
+
+/// Caption for the tray entry that flips the close behaviour.
+fn keep_entry_label() -> String {
+    let keep = KEEP_IN_TRAY.load(std::sync::atomic::Ordering::SeqCst);
+    if keep { "关闭窗口后：保留后台 ✔".to_string() } else { "关闭窗口后：退出程序".to_string() }
+}
+
 /// Put the product in the notification area.
 ///
 /// The icon is what keeps the shell reachable once its window is closed. Opening the workspace is
-/// expensive — the sidecar rebuilds a runtime on the first launch — so a close that ended the
-/// process would pay that cost again the next time the user wanted the product. The close hides the
-/// window instead and the product keeps running, and these two entries are how the user gets back
-/// to it or ends it for good.
+/// expensive — the sidecar rebuilds a runtime on the first launch, and a cold plugin tree costs tens
+/// of seconds — so a close that ended the process would pay that cost again the next time the user
+/// wanted the product. The close hides the window instead and the product keeps running; the middle
+/// entry flips that for users who would rather have the memory back, and the last entry is how
+/// either of them ends it for good.
 fn install_tray(app: &AppHandle) {
+    // Rebuilding is how the toggle's own caption changes: the menu is replaced rather than mutated,
+    // so there is one code path whether this is the first install or a flip.
+    let _ = app.remove_tray_by_id(TRAY_ID);
     let build = || -> tauri::Result<()> {
         let show = MenuItemBuilder::with_id(TRAY_SHOW_ID, "显示主窗口").build(app)?;
+        let keep = MenuItemBuilder::with_id(TRAY_KEEP_ID, keep_entry_label()).build(app)?;
         let quit = MenuItemBuilder::with_id(TRAY_QUIT_ID, "退出 Harness-CN").build(app)?;
-        let menu = MenuBuilder::new(app).item(&show).item(&quit).build()?;
+        let menu = MenuBuilder::new(app).item(&show).item(&keep).item(&quit).build()?;
         let mut builder = TrayIconBuilder::with_id(TRAY_ID)
             .tooltip(APP_NAME)
             .menu(&menu)
@@ -574,6 +620,12 @@ fn install_tray(app: &AppHandle) {
                 let id: &str = event.id().as_ref();
                 match id {
                     TRAY_SHOW_ID => show_main_window(app),
+                    TRAY_KEEP_ID => {
+                        let next = !KEEP_IN_TRAY.load(std::sync::atomic::Ordering::SeqCst);
+                        KEEP_IN_TRAY.store(next, std::sync::atomic::Ordering::SeqCst);
+                        save_close_behavior(next);
+                        install_tray(app);
+                    }
                     TRAY_QUIT_ID => {
                 QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
                 app.exit(0);
@@ -796,7 +848,8 @@ fn main() {
         .manage(Shell::default())
         .setup(|app| {
             start_sidecar(app.handle().clone());
-            install_tray(app.handle());
+            load_close_behavior();
+        install_tray(app.handle());
             Ok(())
         })
         .on_menu_event(|app, event| { handle_menu(app, event.id().as_ref()) })
@@ -843,13 +896,20 @@ fn main() {
             }
         }
         RunEvent::Exit => stop_sidecar(handle),
-        RunEvent::WindowEvent { ref label, event: tauri::WindowEvent::CloseRequested { .. }, .. } if label == MAIN => {
-            // Closing the workspace window ends the product: the Host, the plugin bridges it
-            // started, and this shell all stop. The tray keeps the same exit one click away, and a
-            // launch that is only hiding in the notification area is what made the window look
-            // impossible to close.
-            QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
-            handle.exit(0);
+        RunEvent::WindowEvent { ref label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } if label == MAIN => {
+            // What a close means is the user's choice, remembered in the data directory. Keeping the
+            // product running turns the next open into a window show instead of a full plugin-tree
+            // start, which is worth tens of seconds; quitting gives the memory back. The tray menu
+            // flips it, and the tray keeps either path's exit one click away.
+            if KEEP_IN_TRAY.load(std::sync::atomic::Ordering::SeqCst) {
+                api.prevent_close();
+                if let Some(window) = handle.get_webview_window(MAIN) {
+                    let _ = window.hide();
+                }
+            } else {
+                QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+                handle.exit(0);
+            }
         }
         _ => {}
     });

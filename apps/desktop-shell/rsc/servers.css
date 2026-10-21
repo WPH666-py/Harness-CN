@@ -176,3 +176,26 @@ button:disabled {
     grid-column: auto;
   }
 }
+
+/* The three per-host actions sit on one line at the end of the row. */
+.rowActions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.rowActions button {
+  padding: 6px 12px;
+  min-width: 64px;
+}
+
+.rowActions button.danger {
+  border-color: #f0c2c2;
+  background: #fdf2f2;
+  color: #b91c1c;
+}
+
+.rowActions button.danger:hover {
+  background: #fbe3e3;
+  border-color: #e5a3a3;
+}

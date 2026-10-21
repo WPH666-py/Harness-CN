@@ -14,7 +14,14 @@ const el = (id) => document.getElementById(id)
 /** Read one JSON response, turning a non-2xx answer into the plugin's own error message. */
 async function parse(response) {
   const body = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`)
+  if (!response.ok) {
+    const error = new Error(body.error || `HTTP ${response.status}`)
+    // The SSH endpoint answers the first attempt with the fingerprint it read from the host and
+    // expects the caller to send it back once the user has confirmed it; the fields that carry it
+    // have to survive this wrapper or the confirmation cannot happen.
+    Object.assign(error, body)
+    throw error
+  }
   return body
 }
 
@@ -32,16 +39,17 @@ function say(text, tone) {
   status.dataset.tone = tone ?? ''
 }
 
-/** Render the paired hosts, newest first as the plugin returns them. */
+/** Render the paired hosts, one row each with refresh, use and delete side by side. */
 function renderHosts(hosts) {
   const list = el('hosts')
   list.textContent = ''
   for (const host of hosts) {
+    const label = host.display_name || host.host_id
     const item = document.createElement('li')
 
     const name = document.createElement('span')
     name.className = 'name'
-    name.textContent = host.display_name || host.host_id
+    name.textContent = label
 
     const meta = document.createElement('span')
     meta.className = 'meta'
@@ -50,12 +58,25 @@ function renderHosts(hosts) {
     if (host.latency_ms != null && Number.isFinite(latency)) parts.push(`${Math.round(latency)} ms`)
     meta.textContent = parts.join(' · ')
 
-    const state = document.createElement('span')
-    state.className = host.status === 'online' || host.online === true ? 'online' : 'offline'
-    state.textContent = host.status === 'online' || host.online === true ? '在线' : '离线'
-
     const spacer = document.createElement('span')
     spacer.className = 'spacer'
+
+    const row = document.createElement('div')
+    row.className = 'rowActions'
+
+    const probe = document.createElement('button')
+    probe.type = 'button'
+    probe.textContent = '刷新'
+    probe.addEventListener('click', () => {
+      probe.disabled = true
+      get(`/hosts/${encodeURIComponent(host.host_id)}/health`)
+        .then((health) => {
+          say(`${label}：${health.status ?? '状态未知'}${health.latency_ms != null ? ` · ${Math.round(Number(health.latency_ms))} ms` : ''}`, 'ok')
+          return refresh()
+        })
+        .catch((error) => say(`刷新失败：${error.message}`, 'error'))
+        .finally(() => { probe.disabled = false })
+    })
 
     const use = document.createElement('button')
     use.type = 'button'
@@ -63,12 +84,45 @@ function renderHosts(hosts) {
     use.addEventListener('click', () => {
       use.disabled = true
       post(`/hosts/${encodeURIComponent(host.host_id)}/use`, {})
-        .then(() => say(`已切换到「${host.display_name || host.host_id}」`, 'ok'))
+        .then(() => say(`已切换到「${label}」`, 'ok'))
         .catch((error) => say(`切换失败：${error.message}`, 'error'))
         .finally(() => { use.disabled = false })
     })
 
-    item.append(name, meta, state, spacer, use)
+    // Deleting is two clicks in the same button: a confirmation rendered in the page survives a
+    // WebView that drops script dialogs, and a second click is the same gesture a dialog would ask
+    // for anyway.
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'danger'
+    remove.textContent = '删除'
+    let armed = false
+    let disarm
+    remove.addEventListener('click', () => {
+      if (!armed) {
+        armed = true
+        remove.textContent = '确认删除'
+        disarm = setTimeout(() => { armed = false; remove.textContent = '删除' }, 4000)
+        return
+      }
+      clearTimeout(disarm)
+      remove.disabled = true
+      fetch(`${PREFIX}/hosts/${encodeURIComponent(host.host_id)}`, { method: 'DELETE' })
+        .then((response) => parse(response))
+        .then(() => {
+          say(`已删除「${label}」`, 'ok')
+          return refresh()
+        })
+        .catch((error) => {
+          remove.disabled = false
+          armed = false
+          remove.textContent = '删除'
+          say(`删除失败：${error.message}`, 'error')
+        })
+    })
+
+    row.append(probe, use, remove)
+    item.append(name, meta, spacer, row)
     list.appendChild(item)
   }
   el('hostsNote').textContent = hosts.length === 0
@@ -78,15 +132,11 @@ function renderHosts(hosts) {
 
 /** Load the list and paint it. */
 async function refresh() {
-  const button = el('refresh')
-  button.disabled = true
   try {
     const result = await get('/hosts')
     renderHosts(Array.isArray(result.hosts) ? result.hosts : [])
   } catch (error) {
     el('hostsNote').textContent = `读取服务器列表失败：${error.message}`
-  } finally {
-    button.disabled = false
   }
 }
 
@@ -102,7 +152,39 @@ function selectTab(mode) {
 
 el('tab-pair').addEventListener('click', () => { selectTab('pair') })
 el('tab-ssh').addEventListener('click', () => { selectTab('ssh') })
-el('refresh').addEventListener('click', () => { void refresh() })
+
+
+/**
+ * Render the fingerprint the host presented, with a button that trusts it and connects.
+ *
+ * The confirmation is drawn in the page instead of `window.confirm`: this document runs inside a
+ * WebView, where a script dialog can be suppressed, and a suppressed dialog here would look exactly
+ * like the failure this flow exists to resolve.
+ * @param payload - the SSH fields the user entered, without the fingerprint.
+ * @param fingerprint - the SHA-256 the host presented.
+ */
+function askTrust(payload, fingerprint) {
+  const status = el('status')
+  status.textContent = ''
+  status.dataset.tone = ''
+  const text = document.createElement('div')
+  text.textContent = `首次连接需要确认服务器指纹：${fingerprint}`
+  const trust = document.createElement('button')
+  trust.type = 'button'
+  trust.textContent = '信任该指纹并连接'
+  trust.style.marginLeft = '8px'
+  trust.addEventListener('click', () => {
+    trust.disabled = true
+    say('正在连接…')
+    post('/hosts/ssh', { ...payload, host_fingerprint: fingerprint }).then(() => {
+      say('已添加。', 'ok')
+      el('sshForm').reset()
+      el('sshPort').value = '22'
+      return refresh()
+    }).catch((error) => say(`添加失败：${error.message}`, 'error'))
+  })
+  status.append(text, trust)
+}
 
 el('pairForm').addEventListener('submit', (event) => {
   event.preventDefault()
@@ -134,19 +216,29 @@ el('sshForm').addEventListener('submit', (event) => {
     return
   }
   const port = Number(el('sshPort').value || '22')
-  say('正在连接…')
-  post('/hosts/ssh', {
+  const payload = {
     host,
     port: Number.isFinite(port) && port > 0 ? port : 22,
     username,
     password,
     display_name: el('sshName').value.trim() || undefined,
-  }).then(() => {
+  }
+  say('正在连接…')
+  post('/hosts/ssh', payload).then(() => {
     say('已添加。', 'ok')
     el('sshForm').reset()
     el('sshPort').value = '22'
     return refresh()
-  }).catch((error) => say(`添加失败：${error.message}`, 'error'))
+  }).catch((error) => {
+    // A host whose key is not trusted yet answers with the fingerprint rather than a failure: the
+    // credentials were never tried, so this is the point at which the user decides.
+    const fingerprint = typeof error.fingerprint === 'string' ? error.fingerprint : ''
+    if (fingerprint !== '' && error.code === 'HOST_KEY_UNTRUSTED') {
+      askTrust(payload, fingerprint)
+      return
+    }
+    say(`添加失败：${error.message}`, 'error')
+  })
 })
 
 selectTab('pair')

@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-client-ui-settings-account-harness",
   "description": "Desktop-only Account & balance settings section: DeepSeek sign-in, balance rows, and the granted-bonus notice",
-  "version": "0.1.5-rc.35",
+  "version": "0.1.5-rc.36",
   "publishConfig": {
     "access": "public"
   },

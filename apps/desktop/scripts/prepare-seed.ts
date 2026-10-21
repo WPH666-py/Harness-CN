@@ -165,6 +165,20 @@ function patchInstalledWorkBuddyModelNull(root: string): Promise<void> {
   })
 }
 
+function patchInstalledRemoteSshEmptyState(root: string): Promise<void> {
+  // The remote-SSH picker renders an empty host list with the text `正在加载服务器…`, so a machine with
+  // no server looks like one that is still connecting. Patching the installed bytes here puts the
+  // replacement in the archived store, and every profile materialized from this seed carries it.
+  // See scripts/patch-remote-ssh-empty-state.mjs.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-remote-ssh-empty-state.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: remote-ssh empty-state patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
 function patchInstalledWeChatIdentity(root: string): Promise<void> {
   // WeChat's contact name for the bot belongs to Tencent's iLink platform, so the only name this
   // product controls is the one the bridge chats under: the built-in surface prompt the plugin
@@ -191,6 +205,15 @@ async function verifyWeChatIdentityPatch(root: string): Promise<void> {
   module.verifyWeChatIdentity(root)
 }
 
+/** Require the empty-state replacement in a tree the seed produced. */
+async function verifyRemoteSshEmptyState(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-remote-ssh-empty-state.mjs')
+  const module = await import(pathToFileURL(script).href) as { verifyRemoteSshEmptyState?: (tree: string) => string[] }
+  if (typeof module.verifyRemoteSshEmptyState !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyRemoteSshEmptyState`)
+  }
+  module.verifyRemoteSshEmptyState(root)
+}
 /** Read the engine's classification table back out of a tree the seed produced. */
 /** Require the WorkBuddy model-selection guard in a tree the seed produced. */
 async function verifyWorkBuddyModelNull(root: string): Promise<void> {
@@ -259,6 +282,7 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     await verifyWeChatIdentityPatch(materialized)
     // A store archive that missed the guard would crash the conversation input on first render.
     await verifyWorkBuddyModelNull(materialized)
+await verifyRemoteSshEmptyState(materialized)
   } finally {
     rmSync(materialized, { recursive: true, force: true })
   }
@@ -284,10 +308,28 @@ async function main(): Promise<void> {
     // helper, and an install that skipped them would ship a profile those packages cannot
     // load from.
     await runPnpm(['install', '--prod', '--frozen-lockfile', '--trust-lockfile'])
-    await patchInstalledRuleEngine(join(SEED_ROOT, 'node_modules'))
+    /**
+ * Apply this release's plugin add/remove decisions to the seed before it is archived.
+ *
+ * The profile a user runs is materialized from the seed, so a plugin installed or removed only in a
+ * live profile is undone by the next runtime install. See scripts/patch-seed-plugins.mjs for why the
+ * change is made with the package manager and not by editing manifests.
+ */
+async function applySeedPluginPatches(seedRoot: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-seed-plugins.mjs')
+  const module = await import(pathToFileURL(script).href) as { patchSeedPlugins?: (root: string) => { removed: string[]; added: string[] } }
+  if (typeof module.patchSeedPlugins !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export patchSeedPlugins`)
+  }
+  const result = module.patchSeedPlugins(seedRoot)
+  console.log(`desktop seed: plugins removed [${result.removed.join(', ')}], added [${result.added.join(', ')}]`)
+}
+await patchInstalledRuleEngine(join(SEED_ROOT, 'node_modules'))
     await patchInstalledWeChatSessions(join(SEED_ROOT, 'node_modules'))
     await patchInstalledWeChatIdentity(join(SEED_ROOT, 'node_modules'))
   await patchInstalledWorkBuddyModelNull(join(SEED_ROOT, 'node_modules'))
+await patchInstalledRemoteSshEmptyState(join(SEED_ROOT, 'node_modules'))
+await applySeedPluginPatches(SEED_ROOT)
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
     let signedMachOFiles: number | undefined
