@@ -290,3 +290,27 @@ export async function findPublishedAsset(
   }
   return undefined
 }
+
+/**
+ * Every published file of one release that matches, from the newest release that has any.
+ *
+ * A single archive can exceed one host's attachment limit while still fitting another, and the
+ * publisher's answer is to publish the same archive as numbered parts. Reading all matches from the
+ * same release keeps the parts of one file together: mixing parts from two releases would assemble
+ * bytes that were never published as a unit.
+ * @param fetchImpl - request implementation.
+ * @param matches - predicate over the published file name.
+ * @returns the newest release with any match, and its matching assets in publication order.
+ */
+export async function findPublishedAssets(
+  fetchImpl: typeof globalThis.fetch,
+  matches: (name: string) => boolean,
+): Promise<{ readonly tag: string; readonly assets: readonly ReleaseAsset[] } | undefined> {
+  const answers = await readReleaseAnswers(fetchImpl)
+  const candidates = readableReleases(answers).sort((left, right) => (isNewer(left.facts.tag, right.facts.tag) ? -1 : 1))
+  for (const candidate of candidates) {
+    const assets = candidate.facts.assets.filter(asset => asset.url !== '' && matches(asset.name))
+    if (assets.length > 0) return { tag: candidate.facts.tag, assets }
+  }
+  return undefined
+}

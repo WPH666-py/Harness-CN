@@ -16,7 +16,7 @@
  * (`verifySeedIntegrity`), so "downloaded" is not a weaker claim than "shipped".
  */
 
-import { createReadStream, existsSync, statSync } from 'node:fs'
+import { createReadStream, createWriteStream, existsSync, statSync } from 'node:fs'
 import { mkdir, readdir, rename, rm } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
@@ -24,7 +24,7 @@ import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createGunzip, createZstdDecompress } from 'node:zlib'
 import { extract } from 'tar'
-import { findPublishedAsset } from './release-sources.ts'
+import { findPublishedAsset, findPublishedAssets, type ReleaseAsset } from './release-sources.ts'
 import { downloadVerified } from './release-channel.ts'
 
 /** Prefix every published seed archive carries. */
@@ -58,6 +58,130 @@ const SEED_DOWNLOADS_DIRECTORY = 'downloads'
  */
 export function seedArchiveNames(version: string): readonly string[] {
   return SEED_ARCHIVE_EXTENSIONS.map(extension => `${SEED_ARCHIVE_PREFIX}${version}${extension}`)
+}
+
+/**
+ * File name of one part of a split archive.
+ *
+ * One host caps an attachment at 100 MB, and the seed is past that, so the same archive may be
+ * published cut into numbered parts. This pattern is the contract between the publisher and this
+ * reader: `<archive name>.part<number>`, numbered from one.
+ */
+const SEED_PART_PATTERN = /^Harness-CN-seed-(.+)\.tar\.zst\.part(\d+)$/u
+
+/** One numbered part of a split seed archive, as published. */
+interface SeedPart {
+  readonly index: number
+  readonly asset: ReleaseAsset
+}
+
+/**
+ * Part number in a published file name, when that name is a part of this version's archive.
+ * @param version - release version the part must belong to.
+ * @param name - published file name.
+ * @returns the part number, or undefined when the name is something else.
+ */
+function seedPartIndex(version: string, name: string): number | undefined {
+  const match = SEED_PART_PATTERN.exec(name)
+  if (match === null) return undefined
+  const [, fileVersion, digits] = match
+  if (fileVersion !== version || digits === undefined) return undefined
+  const index = Number(digits)
+  return Number.isSafeInteger(index) && index > 0 ? index : undefined
+}
+
+/**
+ * The parts of one release's seed archive, ordered by number.
+ *
+ * A gap in the numbering is an error rather than something to work around: joining parts 1 and 3
+ * produces a file that fails the archive check much later, and the user would have waited for a
+ * download that could never succeed.
+ * @param request - request implementation.
+ * @param version - release version the parts belong to.
+ * @returns the ordered parts, or undefined when the release publishes none.
+ */
+async function findPublishedSeedParts(
+  request: typeof globalThis.fetch,
+  version: string,
+): Promise<readonly SeedPart[] | undefined> {
+  const published = await findPublishedAssets(request, candidate => seedPartIndex(version, candidate) !== undefined)
+  if (published === undefined) return undefined
+  const parts = published.assets
+    .map((asset): SeedPart => ({ asset, index: seedPartIndex(version, asset.name) ?? 0 }))
+    .sort((left, right) => left.index - right.index)
+  for (const [position, part] of parts.entries()) {
+    if (part.index !== position + 1) {
+      throw new Error(
+        `离线包分卷不连续：${published.tag} 缺少 .part${String(position + 1)}`,
+      )
+    }
+  }
+  return parts
+}
+
+/**
+ * Download every part at once and join them into the single archive the extractor expects.
+ *
+ * The parts are the same bytes the whole-file path would have fetched, so the joined file goes
+ * through the same extraction and the same inventory check; only the transfer differs. Each part is
+ * verified against its own digest where the host publishes one, and the joined size has to equal the
+ * sum of the parts before anything is extracted.
+ * @param options - cache root, request implementation, parts, version, and progress reporter.
+ * @returns absolute path of the joined archive.
+ */
+async function downloadSeedParts(options: {
+  readonly cacheRoot: string
+  readonly fetch: typeof globalThis.fetch
+  readonly parts: readonly SeedPart[]
+  readonly version: string
+  readonly onProgress?: SeedPackageOptions['onProgress']
+}): Promise<string> {
+  const directory = join(options.cacheRoot, SEED_DOWNLOADS_DIRECTORY)
+  await mkdir(directory, { recursive: true })
+  const fractions = options.parts.map(() => 0)
+  const report = (): void => {
+    const average = fractions.reduce((sum, value) => sum + value, 0) / fractions.length
+    options.onProgress?.(
+      `正在并行下载离线包… ${String(Math.round(average * 100))}%（${String(options.parts.length)} 个分卷）`,
+      average,
+      '下载离线包',
+    )
+  }
+  const downloaded = await Promise.all(options.parts.map(async (part, position) => {
+    const result = await downloadVerified({
+      directory,
+      fetch: options.fetch,
+      name: part.asset.name,
+      sha256: part.asset.sha256,
+      size: part.asset.size,
+      url: part.asset.url,
+      progress: (fraction) => {
+        fractions[position] = fraction
+        report()
+      },
+    })
+    fractions[position] = 1
+    report()
+    return result
+  }))
+
+  const merged = join(directory, `${SEED_ARCHIVE_PREFIX}${options.version}${SEED_ARCHIVE_EXTENSIONS[0]}`)
+  await rm(merged, { force: true })
+  const sink = createWriteStream(merged)
+  try {
+    for (const file of downloaded) await pipeline(createReadStream(file.path), sink, { end: false })
+  } finally {
+    sink.end()
+  }
+  const expected = downloaded.reduce((sum, file) => sum + file.bytes, 0)
+  const actual = statSync(merged).size
+  if (actual !== expected) {
+    await rm(merged, { force: true })
+    throw new Error(`离线包分卷合并后大小不符：${String(actual)} != ${String(expected)}`)
+  }
+  // The parts are only useful until the join succeeded; keeping them would double the cache's cost.
+  await Promise.all(downloaded.map(file => rm(file.path, { force: true })))
+  return merged
 }
 
 /** Where a seed came from, for the run log. */
@@ -483,29 +607,43 @@ export async function ensureSeedPackage(options: SeedPackageOptions): Promise<Se
     options.onProgress?.('正在查找离线包…', undefined, '查找离线包')
     const published = await findPublishedAsset(request, candidate => names.includes(candidate))
     if (published === undefined) {
-      throw new Error(
-        `找不到离线包 ${names[0] ?? ''}。\n\n`
-        + '请确认网络可用后重试；也可以手动从发布页下载该文件，'
-        + `放进 ${join(options.cacheRoot, SEED_DOWNLOADS_DIRECTORY)} 后重新启动。`,
-      )
-    }
-
-    const downloaded = await downloadVerified({
-      directory: join(options.cacheRoot, SEED_DOWNLOADS_DIRECTORY),
-      name: published.asset.name,
-      url: published.asset.url,
-      size: published.asset.size,
-      sha256: published.asset.sha256,
-      fetch: request,
-      progress: (fraction) => {
-        options.onProgress?.(
-          `正在下载离线包… ${String(Math.round(fraction * 100))}%（${published.tag}）`,
-          fraction,
-          '下载离线包',
+      // A release may publish the same archive as numbered parts so that each file fits the smaller
+      // attachment limit of the second host. The parts are that archive cut at byte boundaries, so
+      // fetching them together is the same transaction over more connections; nothing about the
+      // result is weaker, because the joined file still has to be a valid archive.
+      const parts = await findPublishedSeedParts(request, options.version)
+      if (parts === undefined) {
+        throw new Error(
+          `找不到离线包 ${names[0] ?? ''}（或其分卷 ${SEED_ARCHIVE_PREFIX}${options.version}${String(SEED_ARCHIVE_EXTENSIONS[0])}.part1…）。\n\n`
+          + '请确认网络可用后重试；也可以手动从发布页下载该文件（分卷需全部下载后按序号拼接），'
+          + `放进 ${join(options.cacheRoot, SEED_DOWNLOADS_DIRECTORY)} 后重新启动。`,
         )
-      },
-    })
-    archive = downloaded.path
+      }
+      archive = await downloadSeedParts({
+        cacheRoot: options.cacheRoot,
+        fetch: request,
+        parts,
+        version: options.version,
+        onProgress: options.onProgress,
+      })
+    } else {
+      const downloaded = await downloadVerified({
+        directory: join(options.cacheRoot, SEED_DOWNLOADS_DIRECTORY),
+        name: published.asset.name,
+        url: published.asset.url,
+        size: published.asset.size,
+        sha256: published.asset.sha256,
+        fetch: request,
+        progress: (fraction) => {
+          options.onProgress?.(
+            `正在下载离线包… ${String(Math.round(fraction * 100))}%（${published.tag}）`,
+            fraction,
+            '下载离线包',
+          )
+        },
+      })
+      archive = downloaded.path
+    }
   }
 
   options.onProgress?.('正在解包离线包… 0%', 0, '解包离线包')

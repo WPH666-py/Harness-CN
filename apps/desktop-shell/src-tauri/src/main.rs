@@ -265,6 +265,16 @@ fn open_window(
         })
         .build()
         .ok()
+        .map(|window| {
+            // The app menu belongs to the main window: this platform installs it once for the whole
+            // application and every window shows it. The auxiliary windows are one page each and have
+            // no command of their own, so the menu there only offers entries that act on a window the
+            // user is not looking at.
+            if window.label() != MAIN {
+                let _ = window.remove_menu();
+            }
+            window
+        })
 }
 
 /// Hand one address a page asked to open to the platform's own browser.
