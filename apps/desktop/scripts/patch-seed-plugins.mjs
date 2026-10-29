@@ -13,6 +13,7 @@
 
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 /** Plugins withdrawn from this release. */
 const REMOVED = ['@furongjun1999/dsh-memory']
@@ -96,11 +97,35 @@ export function patchSeedPlugins(seedRoot) {
   return { removed, added }
 }
 
-if (import.meta.url === `file://${process.argv[1]?.replace(/\\/gu, '/')}`) {
-  const root = process.argv[2]
+/**
+ * Report whether a seed already carries this release's plugin decisions.
+ * @param seedRoot - the seed directory produced by the payload pipeline.
+ * @returns the state and, when it is not `patched`, what is still owed.
+ */
+function inspectOne(seedRoot) {
+  const manifestPath = join(seedRoot, 'package.json')
+  if (!existsSync(manifestPath)) return { status: 'absent' }
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const dependencies = manifest.dependencies ?? {}
+  const bundles = Array.isArray(manifest.dsh?.profile?.bundles) ? manifest.dsh.profile.bundles : []
+  const outstanding = [
+    ...REMOVED.filter((name) => name in dependencies || bundles.includes(name)),
+    ...ADDED.filter((plugin) => !(plugin.name in dependencies) || !bundles.includes(plugin.name)).map((plugin) => plugin.name),
+  ]
+  if (outstanding.length === 0) return { status: 'patched' }
+  return { status: 'pristine', detail: `still owed: ${outstanding.join(', ')}` }
+}
+
+if (process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  const root = process.argv.slice(2).find((argument) => !argument.startsWith('--'))
   if (root === undefined) {
-    console.error('usage: patch-seed-plugins.mjs <seed-root>')
+    console.error('usage: patch-seed-plugins.mjs [--check] <seed-root>')
     process.exit(2)
+  }
+  if (process.argv.includes('--check')) {
+    const result = inspectOne(root)
+    process.stdout.write(`${JSON.stringify({ patch: 'seed-plugins', root, state: result.status, detail: result.detail ?? '' })}\n`)
+    process.exit(result.status === 'drifted' ? 1 : 0)
   }
   const result = patchSeedPlugins(root)
   console.log(`seed plugins: removed [${result.removed.join(', ')}], added [${result.added.join(', ')}]`)

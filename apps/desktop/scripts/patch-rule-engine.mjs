@@ -100,10 +100,50 @@ async function patchOne(root) {
   return { root, status: 'patched', bytes: statSync(file).size, sha256: sha256(after) }
 }
 
-const roots = process.argv.slice(2)
+/**
+ * Report what the patch would do to one tree, without writing.
+ *
+ * The patch's own success criterion is the imported `toolClass('compress')`, so the check asks the
+ * module the same question the patch does: an upgrade that re-classifies `compress` elsewhere, or
+ * drops the anchor line, shows up here instead of as a silently denied tool on a user's machine.
+ * @param root - a node_modules root.
+ * @returns the state and, when it is not ok, what is wrong.
+ */
+async function inspectOne(root) {
+  const file = join(root, CATALOG_PATH)
+  if (!existsSync(file)) return { root, status: 'absent' }
+  const text = readFileSync(file, 'utf8')
+  const module = await import(pathToFileURL(file).href)
+  if (typeof module.toolClass !== 'function') {
+    return { root, status: 'drifted', detail: `${file} does not export toolClass` }
+  }
+  const classified = module.toolClass('compress', {})
+  if (classified === 'artifact') return { root, status: 'patched' }
+  if (classified === 'unknown' && text.split(/\r?\n/u).includes(ANCHOR_LINE)) {
+    return { root, status: 'pristine' }
+  }
+  return {
+    root,
+    status: 'drifted',
+    detail: `compress is ${String(classified)} and the anchor line is ${text.includes(ANCHOR_LINE) ? 'present' : 'missing'} in ${file}`,
+  }
+}
+
+/** Roots to act on, with the check flag removed. */
+const roots = process.argv.slice(2).filter((argument) => argument !== '--check')
+const check = process.argv.includes('--check')
 if (roots.length === 0) {
   process.stderr.write('patch-rule-engine: give at least one node_modules root\n')
   process.exit(2)
+}
+if (check) {
+  let drifted = false
+  for (const root of roots) {
+    const result = await inspectOne(root)
+    process.stdout.write(`${JSON.stringify({ patch: 'rule-engine', root, state: result.status, detail: result.detail ?? '' })}\n`)
+    if (result.status === 'drifted') drifted = true
+  }
+  process.exit(drifted ? 1 : 0)
 }
 for (const root of roots) {
   const result = await patchOne(root)

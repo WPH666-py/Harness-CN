@@ -14,6 +14,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { parseArgs, report } from './lib/patch-check.mjs'
 
 /** Client bundle that owns the dock. */
 const CLIENT = join('@zaofan', 'dsh-qqbot', 'client', 'qqbot-settings.js')
@@ -62,10 +63,20 @@ export function verifyQqbotConsole(tree) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const root = process.argv[2]
+  const { check, root } = parseArgs(process.argv.slice(2))
   if (root === undefined) {
-    console.error('usage: patch-qqbot-console.mjs <node_modules>')
+    console.error('usage: patch-qqbot-console.mjs [--check] <node_modules>')
     process.exit(2)
+  }
+  if (check) {
+    // This patch is the one that must never skip quietly: `patchQqbotConsole` returns 'skipped' for
+    // both "plugin not installed" and "anchor rewritten", and only the second one is a defect.
+    const file = join(root, CLIENT)
+    if (!existsSync(file)) report('qqbot-console', root, 'absent', CLIENT)
+    const text = readFileSync(file, 'utf8')
+    if (text.includes(HOOK)) report('qqbot-console', root, 'patched', file)
+    if (text.includes(ANCHOR)) report('qqbot-console', root, 'pristine', ANCHOR)
+    report('qqbot-console', root, 'drifted', `no anchor ${ANCHOR} in ${file}`)
   }
   console.log(`qqbot console: ${patchQqbotConsole(root)}`)
 }

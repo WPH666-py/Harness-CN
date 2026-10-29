@@ -13,6 +13,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { parseArgs, report } from './lib/patch-check.mjs'
 
 /** Text the shipped bundle renders while it has no host to show. */
 const FROM = '正在加载服务器…'
@@ -72,10 +73,32 @@ export function verifyRemoteSshEmptyState(tree) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const root = process.argv[2]
+  const { check, root } = parseArgs(process.argv.slice(2))
   if (root === undefined) {
-    console.error('usage: patch-remote-ssh-empty-state.mjs <node_modules>')
+    console.error('usage: patch-remote-ssh-empty-state.mjs [--check] <node_modules>')
     process.exit(2)
+  }
+  if (check) {
+    // Both bundles carry the text and `BUNDLES` lists them in loading order, so the state is the
+    // union: any bundle still on the old text means the next seed build would leave the picker
+    // claiming it is still connecting.
+    const states = []
+    for (const relative of BUNDLES) {
+      const file = join(root, relative)
+      if (!existsSync(file)) continue
+      const text = readFileSync(file, 'utf8')
+      if (text.includes(FROM)) states.push({ state: 'pristine', file })
+      else if (text.includes(TO)) states.push({ state: 'patched', file })
+      else states.push({ state: 'drifted', file })
+    }
+    if (states.length === 0) report('remote-ssh-empty-state', root, 'absent', BUNDLES.join(', '))
+    const drifted = states.find((entry) => entry.state === 'drifted')
+    if (drifted !== undefined) {
+      report('remote-ssh-empty-state', root, 'drifted', `${drifted.file} carries neither the loading text nor the replacement`)
+    }
+    const pristine = states.find((entry) => entry.state === 'pristine')
+    if (pristine !== undefined) report('remote-ssh-empty-state', root, 'pristine', pristine.file)
+    report('remote-ssh-empty-state', root, 'patched', states.map((entry) => entry.file).join(', '))
   }
   const changed = patchRemoteSshEmptyState(root)
   console.log(`remote-ssh empty state: ${String(changed.length)} file(s) updated`)

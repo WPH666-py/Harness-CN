@@ -129,8 +129,35 @@ function patchOne(root) {
   return { root, status: 'patched', bytes: statSync(file).size, sha256: sha256(after) }
 }
 
-const roots = process.argv.slice(2)
-if (roots.length > 0) {
+/**
+ * Report what the patch would do to one tree, without writing.
+ *
+ * `patchWeChatSessions` returns undefined for "nothing to do", which covers both "already patched"
+ * and "the module was rewritten upstream". The check separates them: the patched signature is the
+ * positive marker, and a surviving `ctx.agent` read is the negative one.
+ * @param root - a profile directory or a node_modules root.
+ * @returns the state.
+ */
+function inspectOne(root) {
+  const file = join(modulesRoot(root), SESSIONS_PATH)
+  if (!existsSync(file)) return { root, status: 'absent' }
+  const body = readFileSync(file, 'utf8')
+  if (body.includes(SIGNATURE_AFTER)) return { root, status: 'patched' }
+  if (CONTEXT_AGENT_READ.test(body)) return { root, status: 'pristine' }
+  return { root, status: 'drifted', detail: `no ${SIGNATURE_AFTER} and no ctx.agent read in ${file}` }
+}
+
+const roots = process.argv.slice(2).filter((argument) => argument !== '--check')
+const check = process.argv.includes('--check')
+if (roots.length > 0 && check) {
+  let drifted = false
+  for (const root of roots) {
+    const result = inspectOne(root)
+    process.stdout.write(`${JSON.stringify({ patch: 'wechat-sessions', root, state: result.status, detail: result.detail ?? '' })}\n`)
+    if (result.status === 'drifted') drifted = true
+  }
+  process.exit(drifted ? 1 : 0)
+} else if (roots.length > 0) {
   for (const root of roots) {
     const result = patchOne(root)
     if (result.status === 'absent') {

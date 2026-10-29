@@ -22,6 +22,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parseArgs, report } from './lib/patch-check.mjs'
 
 /** Package that owns the crashing slot. */
 const PACKAGE = 'dsh-workbuddy-connect'
@@ -90,7 +91,17 @@ export function verifyWorkBuddyModelNull(root) {
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === join(process.argv[1])) {
-  const root = process.argv[2]
-  if (root === undefined) throw new Error('usage: patch-workbuddy-model-null.mjs <node_modules directory>')
+  const { check, root } = parseArgs(process.argv.slice(2))
+  if (root === undefined) throw new Error('usage: patch-workbuddy-model-null.mjs [--check] <node_modules directory>')
+  if (check) {
+    const target = join(root, PACKAGE, BUNDLE)
+    if (!existsSync(target)) report('workbuddy-model-null', root, 'absent', target)
+    const source = readFileSync(target, 'utf8')
+    if (hasGuard(source)) report('workbuddy-model-null', root, 'patched', target)
+    if (source.includes(BEFORE)) report('workbuddy-model-null', root, 'pristine', target)
+    // Both the guarded and the unguarded text are gone: the plugin rewrote this slot and the guard
+    // below cannot be re-applied until the anchor is re-derived.
+    report('workbuddy-model-null', root, 'drifted', `neither the guarded nor the unguarded reads are in ${target}`)
+  }
   console.log(patchWorkBuddyModelNull(root))
 }

@@ -109,8 +109,31 @@ async function patchOne(root) {
   return { root, status: 'patched', bytes: statSync(file).size, sha256: sha256(after) }
 }
 
-const roots = process.argv.slice(2)
-if (roots.length > 0) {
+/**
+ * Report what the patch would do to one tree, without writing.
+ * @param root - a profile directory or a node_modules root.
+ * @returns the state.
+ */
+function inspectOne(root) {
+  const file = join(modulesRoot(root), CONFIG_PATH)
+  if (!existsSync(file)) return { root, status: 'absent' }
+  const match = DEFAULT_PROMPT.exec(readFileSync(file, 'utf8'))
+  if (match === null) return { root, status: 'drifted', detail: `no DEFAULT_SURFACE_PROMPT anchor in ${file}` }
+  if ((match[1] ?? '').includes(WECHAT_BOT_NAME)) return { root, status: 'patched' }
+  return { root, status: 'pristine' }
+}
+
+const roots = process.argv.slice(2).filter((argument) => argument !== '--check')
+const check = process.argv.includes('--check')
+if (roots.length > 0 && check) {
+  let drifted = false
+  for (const root of roots) {
+    const result = inspectOne(root)
+    process.stdout.write(`${JSON.stringify({ patch: 'wechat-identity', root, state: result.status, detail: result.detail ?? '' })}\n`)
+    if (result.status === 'drifted') drifted = true
+  }
+  process.exit(drifted ? 1 : 0)
+} else if (roots.length > 0) {
   for (const root of roots) {
     const result = await patchOne(root)
     if (result.status === 'absent') {
