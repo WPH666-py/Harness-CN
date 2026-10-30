@@ -21,7 +21,12 @@ import {
 } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { bundledPluginDependencies, bundledPluginNames, bundledPluginPackageNames } from './bundled-plugins.ts'
+import {
+  BUNDLED_PLUGIN_ARCHIVE_DIR,
+  bundledPluginDependencies,
+  bundledPluginNames,
+  bundledPluginPackageNames,
+} from './bundled-plugins.ts'
 import {
   DESKTOP_PACKAGES_DIR,
   DESKTOP_PACKAGE_SET_FILE,
@@ -469,6 +474,17 @@ export function packageNameFromSpec(spec: string): string | undefined {
   return name
 }
 
+/**
+ * Copy the project metadata a dependency transaction carries between profiles.
+ *
+ * The manifest files are what pnpm reads, and the packages directory is what the core set's own
+ * `file:` specs point into. The plugin archives are copied for the same reason: those plugins are
+ * not on a registry, so a `file:` spec resolves against the project tree, and a project that keeps
+ * the spec without the archive cannot run pnpm at all — which is what every toggle and every
+ * restore does.
+ * @param source - project directory to read.
+ * @param target - empty project directory to fill.
+ */
 function copyMetadata(source: string, target: string): void {
   mkdirSync(target, { recursive: true, mode: 0o700 })
   for (const filename of DESKTOP_PROJECT_FILES) {
@@ -480,6 +496,14 @@ function copyMetadata(source: string, target: string): void {
     force: false,
     errorOnExist: true,
   })
+  const plugins = join(source, BUNDLED_PLUGIN_ARCHIVE_DIR)
+  if (existsSync(plugins)) {
+    cpSync(plugins, join(target, BUNDLED_PLUGIN_ARCHIVE_DIR), {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+    })
+  }
 }
 
 /**

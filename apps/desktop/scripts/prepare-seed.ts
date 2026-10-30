@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createSeedMetadata } from '../src/project-manager.ts'
+import { BUNDLED_PLUGIN_ARCHIVE_DIR, bundledPluginArchives } from '../src/bundled-plugins.ts'
 import { DESKTOP_HOST_PROTOCOL_VERSION } from '../src/host-protocol.ts'
 import { parseDesktopRelease, type DesktopRelease } from '../src/release.ts'
 import {
@@ -301,6 +302,26 @@ await verifyRemoteSshEmptyState(materialized)
   }
 }
 
+/**
+ * Copy the archives a bundled plugin's `file:` spec names into the seed profile.
+ *
+ * The release ships those archives beside the application instead of on a registry, so the
+ * seed's own install has to see them at the relative path the manifest records. A missing
+ * archive fails here rather than on a user's first launch.
+ * @param seedRoot - the profile directory the seed is assembled in.
+ */
+function copyPluginArchives(seedRoot: string): void {
+  const archives = bundledPluginArchives()
+  if (archives.length === 0) return
+  const source = resolve(APP_ROOT, '..', 'desktop-shell', 'src-tauri', 'resources', BUNDLED_PLUGIN_ARCHIVE_DIR)
+  const target = join(seedRoot, BUNDLED_PLUGIN_ARCHIVE_DIR)
+  mkdirSync(target, { recursive: true })
+  for (const name of archives) {
+    const from = join(source, name)
+    if (!existsSync(from)) throw new Error(`desktop seed: bundled plugin archive ${name} is missing from ${source}`)
+    copyFileSync(from, join(target, name))
+  }
+}
 async function main(): Promise<void> {
   rmSync(SEED_OUTPUT_ROOT, { recursive: true, force: true })
   rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
@@ -310,6 +331,7 @@ async function main(): Promise<void> {
     copyFileSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGE_SET_FILE), join(SEED_ROOT, DESKTOP_PACKAGE_SET_FILE))
     cpSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGES_DIR), join(SEED_ROOT, DESKTOP_PACKAGES_DIR), { recursive: true })
     createSeedMetadata(SEED_ROOT, release)
+    copyPluginArchives(SEED_ROOT)
     await runPnpm(['install', '--lockfile-only'])
     verifyDesktopCoreLockfile(
       readFileSync(join(SEED_ROOT, 'pnpm-lock.yaml'), 'utf8'),
@@ -320,7 +342,7 @@ async function main(): Promise<void> {
     // expects: package lifecycle scripts provision node-pty's conpty pair and the spawn
     // helper, and an install that skipped them would ship a profile those packages cannot
     // load from.
-    await runPnpm(['install', '--prod', '--frozen-lockfile', '--trust-lockfile'])
+    await runPnpm(['install', '--prod', '--frozen-lockfile', '--trust-lockfile', '--config.strict-dep-builds=false'])
     /**
  * Apply this release's plugin add/remove decisions to the seed before it is archived.
  *

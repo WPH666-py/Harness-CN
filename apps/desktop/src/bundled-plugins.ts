@@ -18,6 +18,17 @@ export interface BundledPlugin {
    * fails the whole Web boot (`packages/client/web/src/boot.ts:138-158`).
    */
   readonly active: boolean
+  /**
+   * Install spec used instead of `name@version`, for a plugin published nowhere.
+   *
+   * A repository-only plugin has no registry entry, and `pnpm` cannot resolve a bare version
+   * for it, so the release ships a packed archive under `resources/plugins/` and names it
+   * here. The install copies those archives to `plugins/` inside the profile, which makes
+   * `file:plugins/<archive>.tgz` resolve the same way on every machine. `version` still
+   * states the version the archive contains, because the seed store and the profile
+   * manifest both key on it.
+   */
+  readonly spec?: string
 }
 
 /**
@@ -348,6 +359,41 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
     version: '0.17.2',
     active: true,
   },
+  // Community plugins bundled since 0.2.1: each declares `dsh.bundle.patch`, so every one is
+  // activated. The five at the end are repository-only, shipped as archives under
+  // `resources/plugins/` and named through `spec`, because pnpm cannot resolve them by version.
+  { name: 'dsh-voice-mode', version: '0.7.34', active: true },
+  { name: '@kenz1117/dsh-ui-usage-billing', version: '1.8.1', active: true },
+  { name: 'dsh-ops', version: '0.4.4', active: true },
+  { name: 'dsh-ultramath', version: '0.6.3', active: true },
+  { name: 'dsh-mech-workbench', version: '0.3.1', active: true },
+  { name: 'dsh-math-olympiad', version: '0.1.0', active: true },
+  { name: 'dsh-rigorquant', version: '0.7.0', active: true },
+  { name: '@copylee/dsh-academic', version: '0.5.1', active: true },
+  { name: 'dsh-freecad', version: '0.4.2', active: true },
+  { name: '@v587d/capital-generation', version: '2.14.1', active: true },
+  { name: 'dsh-term-explainer', version: '1.3.0', active: true },
+  { name: '@ericwang1358/dsh-daily-flashcard', version: '3.6.2', active: true },
+  { name: 'dsh-plugin-rea', version: '2.0.13', active: true },
+  { name: 'dsh-free-vision', version: '1.0.8', active: true },
+  { name: 'dsh-video-to-notes', version: '0.1.0', active: true },
+  { name: 'dsh-scifork', version: '0.0.8', active: true },
+  { name: 'dsh-science', version: '0.2.0', active: true },
+  { name: 'dsh-unlag', version: '1.14.15', active: true },
+  { name: 'dsh-knowledge-canvas', version: '0.4.5', active: true },
+  { name: 'dsh-course-assistant', version: '1.11.1', active: true },
+  { name: 'dsh-web-search-pro', version: '0.2.3', active: true },
+  { name: '@changfenhuang/dsh-genui', version: '0.15.0', active: true },
+  { name: '@liustack/modsearch', version: '5.10.11', active: true },
+  { name: 'dsh-notify-me', version: '1.17.0', active: true },
+  { name: 'dsh-blender', version: '0.2.4', active: true },
+  { name: 'dsh-vscode-mode', version: '0.23.0', active: true },
+  { name: '@linxin666/dsh-pet', version: '0.4.12', active: true },
+  { name: 'dsh-scholar-suite', version: '0.1.0', spec: 'file:plugins/dsh-scholar-suite-0.1.0.tgz', active: true },
+  { name: '@openmaic/dsh-openmaic', version: '0.4.0', spec: 'file:plugins/openmaic-dsh-openmaic-0.4.0.tgz', active: true },
+  { name: '@xiaoyuink/dsh-image-vision', version: '2.9.2', spec: 'file:plugins/xiaoyuink-dsh-image-vision-2.9.2.tgz', active: true },
+  { name: 'dsh-chem-ui', version: '0.0.1', spec: 'file:plugins/dsh-chem-ui-0.0.1.tgz', active: true },
+  { name: 'dsh-ai-courses', version: '0.1.6', spec: 'file:plugins/dsh-ai-courses-0.1.6.tgz', active: true },
 ]
 
 /**
@@ -399,9 +445,30 @@ export const BUNDLED_PLUGIN_DEPENDENCIES: readonly BundledPluginDependency[] = [
  */
 export function bundledPluginDependencies(): Record<string, string> {
   return {
-    ...Object.fromEntries(BUNDLED_PLUGINS.map(plugin => [plugin.name, plugin.version])),
+    ...Object.fromEntries(BUNDLED_PLUGINS.map(plugin => [plugin.name, plugin.spec ?? plugin.version])),
     ...Object.fromEntries(BUNDLED_PLUGIN_DEPENDENCIES.map(dependency => [dependency.name, dependency.version])),
   }
+}
+
+/**
+ * Directory a `file:` spec resolves against, relative to the project that names it.
+ *
+ * The archives ship beside the application and are copied into the seed, so the seed build and the
+ * profile installing from it both read them at this one relative path.
+ */
+export const BUNDLED_PLUGIN_ARCHIVE_DIR = 'plugins'
+
+/**
+ * Archives the release must copy into a profile before installing.
+ * @returns File names under `resources/plugins/` that a spec here refers to.
+ */
+export function bundledPluginArchives(): readonly string[] {
+  const prefix = `file:${BUNDLED_PLUGIN_ARCHIVE_DIR}/`
+  return BUNDLED_PLUGINS.flatMap((plugin) => {
+    const spec = plugin.spec
+    if (spec === undefined || !spec.startsWith(prefix)) return []
+    return [spec.slice(prefix.length)]
+  })
 }
 
 /**

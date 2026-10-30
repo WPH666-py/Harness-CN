@@ -46,11 +46,14 @@ worktrees/
 native/system/test/bin/
 
 # The Tauri shell stages the prepared runtime and seed beside its crate so `tauri build`
-# can read them, and `tauri build` writes its own cargo target tree there. Both are build
-# outputs of the shared payload pipeline: the runtime and seed are staged from
+# can read them, and `tauri build` writes its own cargo target tree there. Most of that is a
+# build output of the shared payload pipeline: the runtime and seed are staged from
 # `apps/desktop/.desktop-build`, the icon is copied from `apps/desktop/build`, and the
-# sidecar bundle is produced by esbuild. None of them is a source file.
-apps/desktop-shell/src-tauri/resources/
+# sidecar bundle is produced by esbuild. `resources/plugins/` is the exception — those
+# archives are what the repository-only plugin specs resolve against and they exist on no
+# registry, so they are checked in and a clone can rebuild the seed without network access.
+apps/desktop-shell/src-tauri/resources/*
+!apps/desktop-shell/src-tauri/resources/plugins/
 apps/desktop-shell/src-tauri/icons/
 apps/desktop-shell/src-tauri/target/
 apps/desktop-shell/src-tauri/gen/
