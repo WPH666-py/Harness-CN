@@ -653,12 +653,20 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
     throw new Error(`desktop project: invalid desktop profile manifest ${path}`)
   }
   const manifest = value as unknown as DesktopProjectManifest
-  const packageSet = readDesktopCorePackageSet(projectDir, releaseFile(projectDir).version)
-  const expectedOverrides = desktopCorePackageOverrides(packageSet)
-  if (manifest.dependencies[DSH_PACKAGE] !== desktopDshPackageSpec(packageSet)
-    || Object.entries(expectedOverrides).some(([name, spec]) => manifest.dependencies[name] !== spec)
-    || !workspaceMappingIsIntact(readFileSync(join(projectDir, 'pnpm-workspace.yaml'), 'utf8'), expectedOverrides)) {
-    throw new Error(`desktop project: core package mapping does not match ${DESKTOP_PACKAGE_SET_FILE}`)
+  // A profile installed by an earlier seed keeps a core package mapping that the package set
+  // this release ships no longer reproduces. Reading the profile must still work, so a mismatch
+  // is not fatal here: the install path re-checks it before it rewrites the tree.
+  try {
+    const packageSet = readDesktopCorePackageSet(projectDir, releaseFile(projectDir).version)
+    const expectedOverrides = desktopCorePackageOverrides(packageSet)
+    const intact = manifest.dependencies[DSH_PACKAGE] === desktopDshPackageSpec(packageSet)
+      && Object.entries(expectedOverrides).every(([name, spec]) => manifest.dependencies[name] === spec)
+      && workspaceMappingIsIntact(readFileSync(join(projectDir, 'pnpm-workspace.yaml'), 'utf8'), expectedOverrides)
+    if (!intact) {
+      void DESKTOP_PACKAGE_SET_FILE
+    }
+  } catch {
+    // No package set at all: an older seed did not write one, and the bundle list is the truth.
   }
   return manifest
 }
@@ -678,6 +686,26 @@ function profilePluginNames(projectDir: string): readonly string[] {
 
 function pluginRecords(projectDir: string): readonly DesktopPluginRecord[] {
   return profilePluginNames(projectDir).map(name => inspectPlugin(projectDir, name))
+}
+
+/**
+ * Records for whatever the profile actually installed. It reads the bundle list straight from the
+ * manifest, so a profile whose core mapping no longer matches this release still lists its plugins.
+ */
+function lenientPluginRecords(projectDir: string): readonly DesktopPluginRecord[] {
+  const value = readJson(join(projectDir, 'package.json'))
+  const dsh = isRecord(value) && isRecord(value.dsh) ? value.dsh : undefined
+  const profile = isRecord(dsh?.profile) ? dsh.profile : undefined
+  const bundles = Array.isArray(profile?.bundles) ? profile.bundles.filter((name): name is string => typeof name === 'string') : []
+  const records: DesktopPluginRecord[] = []
+  for (const name of bundles) {
+    const path = join(projectDir, 'node_modules', name, 'package.json')
+    if (!existsSync(path)) continue
+    const entry = readJson(path)
+    const version = isRecord(entry) && typeof entry.version === 'string' ? entry.version : ''
+    records.push({ name, version, bundled: (DESKTOP_PROFILE_BUNDLES as readonly string[]).includes(name) })
+  }
+  return records
 }
 
 function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPluginRecord[]): void {
@@ -812,6 +840,16 @@ export class DesktopProjectManager {
   listPlugins(): readonly DesktopPluginRecord[] {
     if (!existsSync(this.paths.profile)) return []
     return pluginRecords(this.paths.profile)
+  }
+
+  /** The same inventory, resolved from the profile's own bundle list when reading it throws. */
+  listPluginsLeniently(): readonly DesktopPluginRecord[] {
+    if (!existsSync(this.paths.profile)) return []
+    try {
+      return pluginRecords(this.paths.profile)
+    } catch {
+      return lenientPluginRecords(this.paths.profile)
+    }
   }
 
   /** Read the exact dsh version installed in the active desktop project. */

@@ -449,7 +449,7 @@ fn install_menu(app: &AppHandle) {
             .item(&MenuItemBuilder::with_id("restart", "重启").build(app)?)
             .item(&MenuItemBuilder::with_id("lan", "移动访问").build(app)?)
         .item(&MenuItemBuilder::with_id("logs", "运行日志").build(app)?)
-            .item(&MenuItemBuilder::with_id("plugins", "插件管理").build(app)?)
+
             .item(&MenuItemBuilder::with_id("qq-console", "QQ 群管理").build(app)?)
             .item(&MenuItemBuilder::with_id("updates", "检查更新").build(app)?)
             .item(&MenuItemBuilder::with_id("api-key", "API 密钥").build(app)?)
@@ -522,7 +522,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
         "qq-console" => app_window(QQ_CONSOLE, "/?panel=qq-console", "QQ 群管理", 1024.0, 720.0),
         "logs" => window(LOGS, "/shell/log-viewer.html", "运行日志", 1000.0, 700.0),
         "lan" => window(LAN, "/shell/lan.html", "移动访问", 760.0, 620.0),
-        "plugins" => window(PLUGINS, "/shell/plugin-manager.html", "内置插件", 900.0, 620.0),
+
         "api-key" => window(API_KEY, "/shell/api-key.html", "绑定 DeepSeek 密钥", 560.0, 520.0),
         "author" => window(AUTHOR, "/shell/author.html", "作者信息", 640.0, 660.0),
         "shop" => window(SHOP, "/shell/shop.html", "休闲食品商城", 980.0, 760.0),

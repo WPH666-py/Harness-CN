@@ -237,7 +237,8 @@ return {ownsHost:true,openStream:openStream,streamBaseUrl:location.origin}
 ;(function(){
   try{
     if((location.search||"").indexOf("panel=qq-console")===-1)return;
-    // 杩欎釜绐楀彛鍙壙杞芥帶鍒跺彴锛氶殣钘忓簲鐢ㄦ湰浣擄紝璁╅潰鏉块摵婊℃暣涓獥鍙ｃ€?    var chrome=document.createElement("style");
+    // 这个窗口只承载控制台：隐藏应用本体，让面板铺满整个窗口。
+    var chrome = document.createElement('style');
     chrome.id="qq-console-chrome";
     chrome.textContent="body>*:not(#qqs-dock-panel){display:none!important}"
       +"#qqs-dock-panel{position:fixed!important;inset:0!important;width:auto!important;height:auto!important;max-width:none!important;max-height:none!important;margin:0!important;border-radius:0!important}";

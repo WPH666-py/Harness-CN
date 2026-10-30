@@ -105,12 +105,14 @@ export function SidebarRoot({
   selectPanel,
   trackEntryClick,
   usePanels,
+  useEntryPins,
   useShortcuts,
   usePanelInfo,
   t,
   renderSlot,
 }: SidebarRootComponentProps) {
   const panels = usePanels(snapshot => snapshot)
+  const unpinned = useEntryPins(ids => ids)
   const shortcut = useShortcuts(rows => rows.find(row => row.id === 'sidebar.left.toggle'))
   const newShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.new'))
   const toggleLabel = collapsed ? t('toggle.open') : t('toggle.collapse')
@@ -296,7 +298,7 @@ export function SidebarRoot({
 
       {panels.length > 0 && (
         <nav className={css.panelList} aria-label={t('panels.label')}>
-          {panels.filter(({ id }) => id !== FIXED_PANEL_ID).map(({ id, label }) => (
+          {panels.filter(({ id }) => id !== FIXED_PANEL_ID && !unpinned.includes(id)).map(({ id, label }) => (
             <PanelRow
               key={id}
               id={id}

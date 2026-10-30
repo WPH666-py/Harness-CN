@@ -551,7 +551,16 @@ async function main(): Promise<void> {
       // already does it, and a failure here is cosmetic rather than something to report.
       spawn('explorer.exe', [`/select,${file}`], { detached: true, stdio: 'ignore' }).unref()
     },
-    plugins: () => manager.listPlugins(),
+    plugins: () => {
+      // A profile installed by an earlier seed carries no core package set, and reading one
+      // must not turn the whole plugin page into an error banner.
+      try {
+        return manager.listPlugins()
+      } catch (error) {
+        console.error(`plugin list fell back to the profile bundles: ${error instanceof Error ? error.message : String(error)}`)
+        return manager.listPluginsLeniently()
+      }
+    },
     mutate: async (mutation: DesktopProjectMutation) => { await manager.mutate(mutation, hooks) },
     updateState: () => updateState,
     checkUpdates: async () => await updates.check(true),

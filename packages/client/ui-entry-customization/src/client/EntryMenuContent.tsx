@@ -1,6 +1,6 @@
-/** Folded Conversation Views and plugin discovery and creation actions. */
+/** Folded Conversation Views. */
 import {
-  IconCheckOutlineRegular, IconPluginPinwheelOutlineRegular, IconPlusOutlineRegular, MenuItemButton,
+  IconCheckOutlineRegular, MenuItemButton,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
@@ -29,7 +29,7 @@ type EntryMenuContentProps = PropsRuntime<'sidebar.panellist.actions'>
  * @returns Menu rows for the region's More menu.
  */
 export function EntryMenuContent({
-  entries, onOpen, region, onDismiss, browsePlugins, createPlugin, t,
+  entries, onOpen, region, onDismiss,
 }: EntryMenuContentProps) {
   const moreEntries = region === 'conversation' ? entries : []
   return <>
@@ -40,12 +40,5 @@ export function EntryMenuContent({
         {entry.active === true && <IconCheckOutlineRegular size={16} className={css.activeMark} />}
       </span>
     </MenuItemButton>)}
-    <MenuItemButton separatorBefore={moreEntries.length > 0} icon={<IconPluginPinwheelOutlineRegular size={16} />}
-      onSelect={() => { onDismiss(); browsePlugins() }}>
-      {t('install')}
-    </MenuItemButton>
-    <MenuItemButton icon={<IconPlusOutlineRegular size={16} />} onSelect={() => { onDismiss(); createPlugin() }}>
-      {t('create')}
-    </MenuItemButton>
   </>
 }
