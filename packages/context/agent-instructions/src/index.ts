@@ -9,6 +9,7 @@
  * @module @deepseek-ai/dsh-agent-instructions
  */
 
+import type {} from '@deepseek-ai/dsh-working-directory'
 import type { Context } from '@deepseek-ai/cordis'
 import { isDeepStrictEqual } from 'node:util'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -18,20 +19,21 @@ import type {} from '@deepseek-ai/dsh-session-projection'
 import type { ToolExecution, ToolExecutionResult, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { Config, resolveConfig, workspaceBaselineIdentity, type ResolvedConfig } from './config.ts'
 import { findProjectRoot, loadBaselineInstructionSet } from './files.ts'
+import { trimmedInstructionDigest } from './digest.ts'
 import {
   applyInstructionVersionUpdates,
   baselineInstructionState,
   name,
   reconcileInstructionContext,
-  workspaceContextMessage,
+  agentInstructionsMessage,
   type InstructionVersionCache,
   type AgentInstructionSource,
 } from './state.ts'
-import type { AgentInstructionChange } from './render.ts'
+import { instructionCandidateGroup, instructionScopeKey, scopeForDisplayPath, type AgentInstructionChange } from './render.ts'
 
 export { Config, name }
 /** Services required by workspace instruction projection. */
-export const inject = ['sessionProjections']
+export const inject = ['sessionProjections', 'workingDirectory']
 export {
   discoverBaselineInstructionFiles,
   loadBaselineInstructions,
@@ -40,8 +42,8 @@ export type {
   InstructionFile,
   LoadedInstructionFile,
 } from './files.ts'
-export { renderWorkspaceContext } from './render.ts'
-export type { RenderedWorkspaceContext, TruncatedInstruction } from './render.ts'
+export { renderAgentInstructions } from './render.ts'
+export type { RenderedAgentInstructions, TruncatedInstruction } from './render.ts'
 
 function visibleBaselineSource(
   agent: Agent,
@@ -53,6 +55,7 @@ function visibleBaselineSource(
     }
   }
   for (const seq of agent.session.surface.nodes.toReversed()) {
+    // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
     const event = agent.session.eventAt(seq)
     if (event?.type === 'user/message'
       && event.data.source.kind === 'agent-instructions'
@@ -61,7 +64,7 @@ function visibleBaselineSource(
   return undefined
 }
 
-function isWorkspaceContext(message: UserMessage): boolean {
+function isAgentInstructionsMessage(message: UserMessage): boolean {
   return message.source.kind === 'agent-instructions'
 }
 
@@ -117,15 +120,15 @@ export function apply(ctx: Context, config: Config): void {
     }
     const fileSystem = ctx.get('fs')
     if (fileSystem === undefined) return undefined
-    if (touchedPaths.length === 0 && pending.length > 0) return pending[0]
     const content: UserMessage['content'][number][] = []
     const changes: AgentInstructionChange[] = []
     let desiredBaseline = false
     const authorityMessages = [...claimed]
-    /* v8 ignore next -- normal agents carry an absolute session cwd. */
-    const cwd = agent.session.header.cwd ?? process.cwd()
+    const cwd = await ctx.workingDirectory.ensure(agent, signal)
     const projectRoot = await findProjectRoot(cwd, resolved.projectRootMarkers, fileSystem, signal)
     const identity = workspaceBaselineIdentity(resolved, cwd, projectRoot)
+    if (touchedPaths.length === 0 && pending.length > 0
+      && baselinePreparations.get(agent.session)?.identity === identity) return pending[0]
     const visibleBaseline = visibleBaselineSource(agent, authorityMessages)
     const baselinePresent = visibleBaseline !== undefined
     const keepVisibleBaseline = visibleBaseline?.baselineIdentity === identity
@@ -139,6 +142,7 @@ export function apply(ctx: Context, config: Config): void {
       const instructions = await loadBaselineInstructionSet({
         cwd,
         dshHome: resolved.dshHome,
+        agentsHome: resolved.agentsHome,
         projectRootMarkers: resolved.projectRootMarkers,
         maxBytes: resolved.maxBytes,
         maxSourceBytes: resolved.maxSourceBytes,
@@ -150,8 +154,23 @@ export function apply(ctx: Context, config: Config): void {
       }, fileSystem)
       const baseline = baselineInstructionState(instructions?.included ?? [])
       const observedBaseline = baselineInstructionState(instructions?.observed ?? [])
+      const includedDigestsByGroup = new Map<string, Set<string>>()
+      for (const file of instructions?.included ?? []) {
+        const group = instructionCandidateGroup(scopeForDisplayPath(file.displayPath))
+        const digests = includedDigestsByGroup.get(group) ?? new Set<string>()
+        digests.add(trimmedInstructionDigest(file.content))
+        includedDigestsByGroup.set(group, digests)
+      }
+      // A duplicate inherits its winner's budget omission. Only duplicates of
+      // represented content remain eligible for promotion during reconciliation.
       const excludedScopes = new Set(observedBaseline.changes.keys())
       for (const scope of baseline.changes.keys()) excludedScopes.delete(scope)
+      for (const file of instructions?.deduped ?? []) {
+        const group = instructionCandidateGroup(scopeForDisplayPath(file.displayPath))
+        if (includedDigestsByGroup.get(group)?.has(trimmedInstructionDigest(file.content))) {
+          excludedScopes.delete(instructionScopeKey(file.displayPath))
+        }
+      }
       excludedBaselineScopes = excludedScopes
       nextPreparation = { identity, excludedScopes }
       let versionStates = instructionVersions.get(agent.session)
@@ -161,7 +180,7 @@ export function apply(ctx: Context, config: Config): void {
       }
       for (const [scope, state] of baseline.versions) versionStates?.set(scope, state)
       if (!keepVisibleBaseline && instructions !== undefined && instructions.rendered.text.length > 0) {
-        const baselineContent = workspaceContextMessage(instructions.rendered.text).content
+        const baselineContent = agentInstructionsMessage(instructions.rendered.text).content
         content.push(...baselineContent)
         const replacementScopes = new Set(baseline.changes.keys())
         const replacementRemovals = replacePreviousBaseline
@@ -192,6 +211,7 @@ export function apply(ctx: Context, config: Config): void {
       instructionVersions,
       fileSystem,
       {
+        cwd,
         authorityMessages,
         scopeMessages: pending,
         includeBaselineScopes: keepVisibleBaseline,
@@ -224,10 +244,11 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const syncInbox = (agent: Agent, claimed: readonly UserMessage[], desired: UserMessage | undefined): void => {
-    const pending = agent.inbox.nextStep.filter(isWorkspaceContext)
+    const pending = agent.inbox.nextStep.filter(isAgentInstructionsMessage)
     const alreadySupplied = desired !== undefined && (
       claimed.some(message => sameContextPayload(message, desired))
       || agent.session.surface.nodes.some((seq) => {
+        // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
         const event = agent.session.eventAt(seq)
         return event?.type === 'user/message' && sameContextPayload(event.data, desired)
       })
@@ -255,7 +276,7 @@ export function apply(ctx: Context, config: Config): void {
     claimed: readonly UserMessage[],
     touchedPaths: readonly string[] = [],
   ): Promise<void> => {
-    const pending = agent.inbox.nextStep.filter(isWorkspaceContext)
+    const pending = agent.inbox.nextStep.filter(isAgentInstructionsMessage)
     const desired = await compose(agent, signal, claimed, pending, touchedPaths)
     signal.throwIfAborted()
     syncInbox(agent, claimed, desired)
@@ -316,7 +337,7 @@ export function apply(ctx: Context, config: Config): void {
   ): Promise<PreStepDecision> => {
     const decision = await next()
     await waitForProjections(agent)
-    const pending = agent.inbox.nextStep.filter(isWorkspaceContext)
+    const pending = agent.inbox.nextStep.filter(isAgentInstructionsMessage)
     const desired = await compose(agent, signal, messages, pending)
     signal.throwIfAborted()
     // An empty first entry owns a no-step turn; keep context pending instead

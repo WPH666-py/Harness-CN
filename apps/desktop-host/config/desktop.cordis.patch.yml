@@ -75,12 +75,3 @@
       name: '@deepseek-ai/dsh-deepseek-account-platform'
       config:
         desktopPlatform: !!js "['darwin', 'win32'].includes(process.platform) ? process.platform : null"
-
-    - id: account-controller
-      name: '@deepseek-ai/dsh-api-account-controller'
-
-    # The browser half is this line's own package, not the official one: the official client
-    # registers into `settings.launcher`, `settings.models.sign-in` and `shell.quota-notice`,
-    # none of which exist here, so it would mount without ever rendering an entry.
-    - id: ui-settings-account-harness
-      name: '@deepseek-ai/dsh-client-ui-settings-account-harness'

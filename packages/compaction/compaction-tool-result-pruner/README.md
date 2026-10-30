@@ -41,7 +41,7 @@ With these rows, oversized tool results are trimmed automatically as part of con
 
 ### What gets trimmed
 
-Every tool result whose text exceeds the threshold is replaced by a trimmed version: the configured head, a short "middle pruned" marker, and the configured tail. Rich content such as images and structured blocks keeps its order. The replacement keeps the tool call, step, errors, and metadata — only the text content changes. If a replacement cannot be recorded, the run fails and the trims already applied stay in place.
+Every tool result whose text exceeds the threshold is replaced by a trimmed version: the configured head, a short "middle pruned" marker, and the configured tail. Rich content such as images and structured blocks keeps its order and all logged image-offload selections. The replacement keeps the tool call, step, errors, and metadata — only the text content changes. If a replacement cannot be recorded, the run fails and the trims already applied stay in place.
 
 ### Setting the size limits
 
@@ -88,7 +88,6 @@ Pruning measures `text` blocks by Unicode code point (non-text blocks cost zero)
 | [`src/index.ts`](src/index.ts) | Plugin entry: `ToolResultPruner` service, `pruneSession` / `pruneContent` / `measureContent` |
 | [`src/config.ts`](src/config.ts) | `PRUNE_MARKER`, defaults, code-point counting, budget validation |
 | [`src/types.ts`](src/types.ts) | `ToolResultPruneConfig`, `ResolvedConfig`, `PrunedEntry`, `PruneResult` |
-| — | No runtime invariant companion is published; Session validates each content-only rewrite and its companion owns cross-event enclosure. |
 
 </details>
 

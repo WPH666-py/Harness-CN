@@ -1,10 +1,11 @@
 /**
  * REAL-composition coverage: a test-only cordis.yml booted through the
- * vendored Loader mounts the webserver row plus the adaptive chooser, and the
- * assertions observe the durable outcome — which backend and surface entries
- * the chooser mounted into the Loader store, the capability the seam then
- * serves, and that disposing the chooser removes both mounted entries again
- * (HMR safety), joining the backend's own teardown before the disposer settles.
+ * vendored Loader mounts the webserver row plus the adaptive chooser over a
+ * context providing the Connection trust policy, and the assertions observe
+ * the durable outcome — which backend and surface entries the chooser mounted
+ * into the Loader store, the capability the seam then serves, and that
+ * disposing the chooser removes both mounted entries again (HMR safety),
+ * joining the backend's own teardown before the disposer settles.
  */
 
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
@@ -12,7 +13,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
@@ -23,6 +24,7 @@ import NativeDirectoryPicker from '@deepseek-ai/dsh-host-directory-picker-native
 import {
   createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY, type LaunchEnvironmentSnapshot,
 } from '@deepseek-ai/dsh-launch-environment'
+import { probeNonLoopbackIpv4 } from '../../../../scripts/test-non-loopback-address.ts'
 import * as DirectoryPickerAuto from '../src/index.ts'
 
 const renameControl = vi.hoisted(() => ({
@@ -53,6 +55,15 @@ const NATIVE = '@deepseek-ai/dsh-host-directory-picker-native'
 const BROWSE = '@deepseek-ai/dsh-host-directory-picker-browse'
 const NATIVE_SURFACE = '@deepseek-ai/dsh-client-ui-directory-picker-native'
 const BROWSE_SURFACE = '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+
+/**
+ * This machine's first non-internal IPv4 address that really accepts a listen.
+ * The webserver really listens, so only a non-loopback bind case needs one; a
+ * host with no bindable candidate skips that case, because requesting an
+ * address the host cannot bind fails the bind rather than exercising the
+ * chooser.
+ */
+const NON_LOOPBACK_IPV4 = await probeNonLoopbackIpv4()
 
 /**
  * Loader-visible stand-in for a client surface package: the surfaces belong to
@@ -90,10 +101,13 @@ afterEach(async () => {
   renameControl.remainingFailures = 0
 })
 
-/** Write a two-row cordis.yml (webserver + chooser), then boot it through the real Loader. */
+/**
+ * Write a two-row cordis.yml (webserver + chooser) over a context that
+ * provides the Connection trust policy, then boot it through the real Loader.
+ */
 async function loadComposition(
-  bindHost: '127.0.0.1' | '0.0.0.0',
-  options: { failSurface?: boolean; launchEnvironment?: LaunchEnvironmentSnapshot } = {},
+  bindHost: string,
+  options: { failSurface?: boolean; launchEnvironment?: LaunchEnvironmentSnapshot; remoteAuthorities?: boolean } = {},
 ): Promise<{ ctx: Context; configPath: string }> {
   root = await mkdtemp(join(tmpdir(), 'dsh-directory-picker-auto-'))
   const configPath = join(root, 'cordis.yml')
@@ -107,6 +121,7 @@ async function loadComposition(
   ].join('\n'))
 
   context = new Context()
+  context.provide('connection', { allowsRemoteAuthorities: options.remoteAuthorities === true } as never)
   if (options.launchEnvironment !== undefined) context.provide(DSH_LAUNCH_ENVIRONMENT_KEY, options.launchEnvironment)
   context.baseUrl = pathToFileURL(root).href + '/'
   await context.plugin(Loader)
@@ -205,7 +220,21 @@ describe('real Loader composition', () => {
     // and the disposer joins the backend's teardown — the service is gone the
     // moment dispose() settles, with no further loader await.
     const autoEntry = [...ctx.loader.entries()].find(entry => entry.options.name === AUTO)!
-    await autoEntry.fiber!.dispose()
+    const backendEntry = [...ctx.loader.entries()].find(entry => entry.options.name === NATIVE)!
+    const cleanupStarted = Promise.withResolvers<undefined>()
+    const releaseCleanup = Promise.withResolvers<undefined>()
+    onTestFinished(() => { releaseCleanup.resolve(undefined) })
+    backendEntry.fiber!.ctx.effect(() => async () => {
+      cleanupStarted.resolve(undefined)
+      await releaseCleanup.promise
+    })
+    let disposed = false
+    const disposal = autoEntry.fiber!.dispose().then(() => { disposed = true })
+    await cleanupStarted.promise
+    await Promise.resolve()
+    expect(disposed).toBe(false)
+    releaseCleanup.resolve(undefined)
+    await disposal
     expect(entryNames(ctx)).not.toContain(NATIVE)
     expect(entryNames(ctx)).not.toContain(NATIVE_SURFACE)
     expect(ctx.get('directoryPicker')).toBeUndefined()
@@ -220,10 +249,13 @@ describe('real Loader composition', () => {
     expect(await readFile(configPath, 'utf8')).not.toContain(NATIVE)
   })
 
-  it('mounts the browse backend under an SSH launch', { timeout: 60_000 }, async () => {
+  it.each([
+    { signal: 'a trust policy that admits a remote authority', remoteAuthorities: true },
+    { signal: 'an SSH launch', ssh: '10.0.0.2 55 10.0.0.9 22' },
+  ])('mounts the browse backend under $signal even on an attended loopback host', { timeout: 60_000 }, async ({ remoteAuthorities, ssh }) => {
     stubAttendedHost()
-    vi.stubEnv('SSH_CONNECTION', '10.0.0.2 55 10.0.0.9 22')
-    const { ctx } = await loadComposition('127.0.0.1')
+    if (ssh !== undefined) vi.stubEnv('SSH_CONNECTION', ssh)
+    const { ctx } = await loadComposition('127.0.0.1', { remoteAuthorities: remoteAuthorities ?? false })
 
     expect(entryNames(ctx)).toContain(BROWSE)
     expect(entryNames(ctx)).toContain(BROWSE_SURFACE)
@@ -233,9 +265,9 @@ describe('real Loader composition', () => {
     expect(picker.capability().kind).toBe('browse')
   })
 
-  it('mounts the browse backend for an all-interfaces bind even on an attended host', { timeout: 60_000 }, async () => {
+  it.skipIf(NON_LOOPBACK_IPV4 === undefined)('mounts the browse backend for a non-loopback bind even on an attended host', { timeout: 60_000 }, async () => {
     stubAttendedHost()
-    const { ctx } = await loadComposition('0.0.0.0')
+    const { ctx } = await loadComposition(NON_LOOPBACK_IPV4!)
 
     expect(entryNames(ctx)).toContain(BROWSE)
     expect(entryNames(ctx)).toContain(BROWSE_SURFACE)
@@ -245,7 +277,9 @@ describe('real Loader composition', () => {
 
   it('unmounts the backend when the surface entry fails to load', { timeout: 60_000 }, async () => {
     stubAttendedHost()
-    await expect(loadComposition('127.0.0.1', { failSurface: true })).rejects.toThrow(/surface import failed/)
+    const { ctx } = await loadComposition('127.0.0.1', { failSurface: true })
+    const chooser = [...ctx.loader.entries()].find(entry => entry.options.name === AUTO)!
+    await expect(chooser.fiber!.await()).rejects.toThrow(/directory-picker-auto: failed to load/)
 
     // Setup owns both entries until it returns its disposer, so a failed surface
     // must take the mounted backend with it: otherwise a retry collides with the
@@ -259,7 +293,7 @@ describe('real Loader composition', () => {
     const { ctx, configPath } = await loadComposition('127.0.0.1')
 
     const backendEntry = [...ctx.loader.entries()].find(entry => entry.options.name === NATIVE)!
-    await ctx.loader.remove(backendEntry.id)
+    ctx.loader.remove(backendEntry.id)
     const autoEntry = [...ctx.loader.entries()].find(entry => entry.options.name === AUTO)!
     renameControl.remainingFailures = 1
     await expect(autoEntry.fiber!.dispose()).resolves.not.toThrow()

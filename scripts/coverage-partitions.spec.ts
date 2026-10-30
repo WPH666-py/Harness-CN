@@ -1,6 +1,8 @@
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   COVERAGE_PARTITION_MODE_ENV,
@@ -9,16 +11,21 @@ import {
   CoveragePartitionCoordinator,
   assignWeightedPartitions,
   collectPartitionDurations,
-  coverageTestTimeoutArgs,
+  coverageTestTimeoutOptions,
   forwardedCoverageArgs,
   parseCoveragePartitionCount,
-  parseListOutput,
+  parseCoverageTestTimeout,
+  parseFileInventory,
   readFileDurations,
   writeFileDurations,
   type CoverageCommand,
   type CoverageCommandResult,
   type CoveragePartitionCoordinatorOptions,
 } from './coverage-partitions.ts'
+import {
+  END_OF_LINE_COLUMN,
+  canonicalizeEndOfLineColumns,
+} from './coverage-canonical-locations.ts'
 
 const passed: CoverageCommandResult = { exitCode: 0, signalCode: null }
 
@@ -33,6 +40,11 @@ async function writeBlob(command: CoverageCommand): Promise<void> {
   if (command.blobPath === undefined) return
   await mkdir(dirname(command.blobPath), { recursive: true })
   await writeFile(command.blobPath, '{}')
+  const configArgument = command.args.find(argument => argument.startsWith('--config='))!
+  const source = await readFile(join(command.cwd, configArgument.slice('--config='.length)), 'utf8')
+  const files = [...source.matchAll(/"([^"\n]+\.spec\.tsx?)"/g)].map(match => match[1]!)
+  const reportArgument = command.args.find(argument => argument.startsWith('--outputFile.fileTimes='))!
+  await writeFile(join(command.cwd, reportArgument.slice('--outputFile.fileTimes='.length)), JSON.stringify(files.map(file => ({ file, duration: 0 }))))
 }
 
 async function temporaryRoot(): Promise<string> {
@@ -96,21 +108,24 @@ describe('coverage partition count', () => {
   })
 })
 
-describe('coverage partition timeout', () => {
-  it('applies one configured timeout to tests, polling, and hooks', () => {
-    expect(coverageTestTimeoutArgs('30000')).toEqual([
-      '--testTimeout=30000',
-      '--expect.poll.timeout=30000',
-      '--hookTimeout=30000',
-    ])
+describe('lane test budget', () => {
+  it('applies one configured budget to tests, hooks, and expect.poll', () => {
+    expect(coverageTestTimeoutOptions('30000')).toEqual({
+      testTimeout: 30000,
+      hookTimeout: 30000,
+      expect: { poll: { timeout: 30000 } },
+    })
   })
 
-  it('keeps Vitest defaults when the timeout is absent', () => {
-    expect(coverageTestTimeoutArgs(undefined)).toEqual([])
+  it.each([undefined, ''])('keeps Vitest defaults when the budget is %j', (raw) => {
+    expect(parseCoverageTestTimeout(raw)).toBeUndefined()
+    expect(coverageTestTimeoutOptions(raw)).toEqual({})
   })
 
-  it('rejects invalid timeout input', () => {
-    expect(() => coverageTestTimeoutArgs('0'))
+  it.each(['0', '-1', '2.5', '090', '90000ms', 'many'])('rejects %j', (raw) => {
+    expect(() => parseCoverageTestTimeout(raw))
+      .toThrow(`${COVERAGE_TEST_TIMEOUT_ENV} must be a positive integer, got ${JSON.stringify(raw)}.`)
+    expect(() => coverageTestTimeoutOptions(raw))
       .toThrow(`${COVERAGE_TEST_TIMEOUT_ENV} must be a positive integer`)
   })
 })
@@ -186,24 +201,36 @@ describe('weighted partition assignment', () => {
 })
 
 describe('coverage file inventory', () => {
-  it('parses vitest list --filesOnly output, keeps project ownership, and drops exempt suites', async () => {
+  it('keeps JSON file paths and project ownership while dropping exempt suites', async () => {
     const root = await temporaryRoot()
     const exemptDir = join(root, 'packages/experimental/webworker-runtime/tests')
     await mkdir(exemptDir, { recursive: true })
     await writeFile(join(exemptDir, 'transform-corpus.spec.ts'), '')
-    const output = [
-      '[thread-safe] packages/a/tests/a.spec.ts',
-      '[process-bound] packages/b/tests/b.spec.ts',
-      '[thread-safe] packages/experimental/webworker-runtime/tests/transform-corpus.spec.ts',
-      'not a test line',
-    ].join('\n')
-    const inventory = parseListOutput(output, root)
+    const output = JSON.stringify([
+      { projectName: 'thread-safe', file: join(root, 'packages/a/tests/a.spec.ts') },
+      { projectName: 'process-bound', file: join(root, 'packages/b/tests/with spaces.spec.ts') },
+      { projectName: 'thread-safe', file: join(exemptDir, 'transform-corpus.spec.ts') },
+    ])
+    const inventory = parseFileInventory(output, root)
     expect(inventory.files).toEqual([
       'packages/a/tests/a.spec.ts',
-      'packages/b/tests/b.spec.ts',
+      'packages/b/tests/with spaces.spec.ts',
     ])
     expect(inventory.projectOf.get('packages/a/tests/a.spec.ts')).toBe('thread-safe')
-    expect(inventory.projectOf.get('packages/b/tests/b.spec.ts')).toBe('process-bound')
+    expect(inventory.projectOf.get('packages/b/tests/with spaces.spec.ts')).toBe('process-bound')
+  })
+
+  it.each(['[', '{}', '[null]', '[{}]', '[{"file":42}]', '[{"file":"a.spec.ts","projectName":"unknown"}]'])('rejects malformed inventories instead of dropping entries: %s', async (output) => {
+    const root = await temporaryRoot()
+    expect(() => parseFileInventory(output, root)).toThrow()
+  })
+
+  it('rejects duplicate file ownership', async () => {
+    const root = await temporaryRoot()
+    const file = join(root, 'a.spec.ts')
+    expect(() => parseFileInventory(JSON.stringify([
+      { file, projectName: 'thread-safe' }, { file, projectName: 'process-bound' },
+    ]), root)).toThrow('more than once')
   })
 
   it('removes every Typert package from instrumented files and project assignments', async () => {
@@ -220,8 +247,8 @@ describe('coverage file inventory', () => {
       await writeFile(join(root, file), '')
     }
     const retained = 'packages/api/gateway/tests/rpc.spec.ts'
-    const inventory = parseListOutput(
-      [...typertFiles, retained].map(file => `[thread-safe] ${file}`).join('\n'),
+    const inventory = parseFileInventory(
+      JSON.stringify([...typertFiles, retained].map(file => ({ projectName: 'thread-safe', file: join(root, file) }))),
       root,
     )
     expect(inventory.files).toEqual([retained])
@@ -259,21 +286,206 @@ describe('coverage file inventory', () => {
     expect(durations.get('packages/a/tests/y.spec.ts')).toBe(7)
   })
 
-  it('extracts per-file durations from partition json reports', async () => {
+  it('extracts per-file durations from compact partition timing reports', async () => {
     const root = await temporaryRoot()
-    const report = join(root, 'partition-1.report.json')
-    await writeFile(report, JSON.stringify({
-      testResults: [
-        { name: join(root, 'packages/a/tests/x.spec.ts'), startTime: 1000, endTime: 1500 },
-        { name: 'not-a-spec', startTime: 1, endTime: 2 },
-      ],
-    }))
-    const durations = collectPartitionDurations([report], root)
+    const report = join(root, 'partition-1.times.json')
+    await writeFile(report, JSON.stringify([
+      { file: 'packages/a/tests/x.spec.ts', duration: 500 },
+      { file: 'packages/a/tests/y.spec.ts', duration: 0 },
+      { file: 'packages/a/tests/invalid.spec.ts', duration: -1 },
+      { file: 'packages/a/tests/malformed.spec.ts', duration: 'unknown' },
+      null,
+      { duration: 10 },
+    ]))
+    const durations = collectPartitionDurations([report])
     expect(durations.get('packages/a/tests/x.spec.ts')).toBe(500)
+    expect(durations.get('packages/a/tests/y.spec.ts')).toBe(0)
+    expect(durations.size).toBe(2)
+  })
+
+  it.each(['null', '{}', '42', '"invalid"', '{'])('ignores corrupt timing metadata %s', async (contents) => {
+    const root = await temporaryRoot()
+    const report = join(root, 'partition.times.json')
+    await writeFile(report, contents)
+    expect(collectPartitionDurations([report])).toEqual(new Map())
+  })
+})
+
+/**
+ * One source statement as two Vite environments spell it: the ssr map ends the
+ * declaration at its identifier, the jsdom/client map at the nested call, and
+ * both stop at their own line's end.
+ */
+const CRASH_LOOP = { start: { line: 36, column: 2 }, end: { line: 54, column: Infinity } }
+
+/** File path the canonicalization fixtures share. */
+const CANONICALIZED_FILE = 'packages/util/home-paths/src/index.ts'
+
+/** Istanbul statement location in the fixture's own terms. */
+interface StatementLocation {
+  start: { line: number; column: number }
+  end: { line: number; column: number }
+}
+
+/** Statement hits and locations read back from a merged istanbul map. */
+interface MergedStatements {
+  s: Record<string, number>
+  statementMap: Record<string, StatementLocation>
+}
+
+/** The istanbul entry points the merge assertions use. */
+interface CoverageLibrary {
+  createCoverageMap: (data: unknown) => {
+    merge: (data: unknown) => void
+    fileCoverageFor: (file: string) => MergedStatements
+  }
+}
+
+/**
+ * istanbul-lib-coverage is the merge implementation the partition blobs feed.
+ * It arrives as a dependency of the declared istanbul-lib-report devDependency,
+ * so this spec resolves it through that owner instead of declaring its own copy.
+ */
+const coverageLibrary = createRequire(
+  createRequire(import.meta.url).resolve('istanbul-lib-report'),
+)('istanbul-lib-coverage') as CoverageLibrary
+
+/** One file's statement coverage, shaped as a partition blob carries it. */
+function statementRecord(statements: StatementLocation[], hits: number[]): Record<string, unknown> {
+  return {
+    [CANONICALIZED_FILE]: {
+      path: CANONICALIZED_FILE,
+      statementMap: Object.fromEntries(statements.map((location, index) => [index, location])),
+      s: Object.fromEntries(hits.map((hit, index) => [index, hit])),
+      fnMap: {},
+      f: {},
+      branchMap: {},
+      b: {},
+    },
+  }
+}
+
+/**
+ * Merge partition records the way the coordinator's merge command does. The
+ * blob serializer's JSON hop turns a non-finite end column into `null`, which
+ * is what strips istanbul of the range containment it reconciles records with.
+ * Canonicalization runs on the `CoverageMap` the reporter hook receives, whose
+ * `data` holds the raw per-file records merged here.
+ */
+function mergePartitionRecords(
+  records: Array<Record<string, unknown>>,
+  canonicalize: boolean,
+): MergedStatements {
+  const map = coverageLibrary.createCoverageMap({})
+  for (const record of records) {
+    if (canonicalize) canonicalizeEndOfLineColumns({ data: record })
+    const serializedRecord: unknown = JSON.parse(JSON.stringify(record))
+    map.merge(serializedRecord)
+  }
+  return map.fileCoverageFor(CANONICALIZED_FILE)
+}
+
+/** Start positions of the statements the merged map still reports as unhit. */
+function uncoveredStarts(coverage: MergedStatements): Array<{ line: number; column: number }> {
+  return Object.entries(coverage.s)
+    .filter(([, hits]) => hits === 0)
+    .map(([index]) => coverage.statementMap[index])
+    .filter((location): location is StatementLocation => location !== undefined)
+    .map(location => location.start)
+}
+
+describe('coverage location canonicalization', () => {
+  // index.ts:48 as the ssr environment spells it (at `parent`) and as the
+  // client environment spells it (at `dirname(current)`); the loop holding
+  // both spellings ran in each, and only the client record never took the
+  // catch branch that owns the statement.
+  const ssrRecord = statementRecord(
+    [CRASH_LOOP, { start: { line: 48, column: 12 }, end: { line: 48, column: Infinity } }],
+    [3, 2],
+  )
+  const clientRecord = statementRecord(
+    [CRASH_LOOP, { start: { line: 48, column: 21 }, end: { line: 48, column: Infinity } }],
+    [5, 0],
+  )
+
+  it('drops the phantom statement a client-only spelling leaves after the blob merge', () => {
+    // 33 statements, 32 covered: the ssr spelling is hit while the client
+    // spelling of the same source statement stays unhit, so a file whose every
+    // statement ran fails the per-file 100% gate.
+    expect(uncoveredStarts(mergePartitionRecords([ssrRecord, clientRecord], false)))
+      .toEqual([{ line: 48, column: 21 }])
+
+    expect(uncoveredStarts(mergePartitionRecords([ssrRecord, clientRecord], true))).toEqual([])
+  })
+
+  it('canonicalizes line-end columns in statement, function, and branch locations', () => {
+    const lineEnd = (line: number): StatementLocation => ({
+      start: { line, column: 4 },
+      end: { line, column: Infinity },
+    })
+    const record = {
+      [CANONICALIZED_FILE]: {
+        path: CANONICALIZED_FILE,
+        statementMap: { 0: lineEnd(10), 1: { start: { line: 11, column: 4 }, end: { line: 11, column: 9 } } },
+        s: { 0: 1, 1: 1 },
+        fnMap: { 0: { name: 'probe', decl: lineEnd(10), loc: lineEnd(10) } },
+        f: { 0: 1 },
+        branchMap: { 0: { type: 'if', loc: lineEnd(12), locations: [lineEnd(12), lineEnd(13)] } },
+        b: { 0: [1, 1] },
+      },
+    }
+
+    canonicalizeEndOfLineColumns({ data: record })
+
+    const file = record[CANONICALIZED_FILE]
+    expect(file.statementMap[0]?.end.column).toBe(END_OF_LINE_COLUMN)
+    expect(file.statementMap[1]?.end.column).toBe(9)
+    expect(file.fnMap[0]?.decl.end.column).toBe(END_OF_LINE_COLUMN)
+    expect(file.fnMap[0]?.loc.end.column).toBe(END_OF_LINE_COLUMN)
+    expect(file.branchMap[0]?.loc.end.column).toBe(END_OF_LINE_COLUMN)
+    expect(file.branchMap[0]?.locations[0]?.end.column).toBe(END_OF_LINE_COLUMN)
+    expect(file.branchMap[0]?.locations[1]?.end.column).toBe(END_OF_LINE_COLUMN)
+  })
+
+  it('rejects a payload that carries no istanbul coverage data', () => {
+    // Vitest types the reporter hook as `unknown`, so a payload without the
+    // istanbul `data` record must fail the partition loudly rather than leave
+    // every location uncanonicalized.
+    expect(() => {
+      canonicalizeEndOfLineColumns(undefined)
+    }).toThrow(/not an istanbul CoverageMap/)
+    expect(() => {
+      canonicalizeEndOfLineColumns({})
+    }).toThrow(/not an istanbul CoverageMap/)
   })
 })
 
 describe('coverage partition coordinator', () => {
+  it.each(['omitted', 'unexpected', 'duplicate', 'malformed', 'unnamed', 'missing-report'])('refuses %s test results even when every partition exits successfully', async (failure) => {
+    const root = await temporaryRoot()
+    const runCommand = vi.fn(async (command: CoverageCommand) => {
+      await writeBlob(command)
+      if (command.label === 'partition 1/2') {
+        const reportArgument = command.args.find(argument => argument.startsWith('--outputFile.fileTimes='))!
+        const reportPath = join(root, reportArgument.slice('--outputFile.fileTimes='.length))
+        let report = JSON.parse(await readFile(reportPath, 'utf8')) as Array<{ file: string; duration: number }>
+        if (failure === 'omitted') report = []
+        if (failure === 'unexpected') report.push({ file: 'unassigned.spec.ts', duration: 0 })
+        if (failure === 'duplicate') report.push(report[0]!)
+        await writeFile(reportPath, failure === 'malformed' ? '{}' : JSON.stringify(report))
+        if (failure === 'unnamed') await writeFile(reportPath, '[{}]')
+        if (failure === 'missing-report') await rm(reportPath)
+      }
+      return passed
+    })
+    const coordinator = new CoveragePartitionCoordinator({
+      root, partitions: 2, pnpmEntrypoint: '/pnpm.cjs', files: ['a.spec.ts', 'b.spec.ts'], runCommand,
+    })
+    await expect(coordinator.run()).rejects.toThrow()
+    expect(runCommand).toHaveBeenCalledTimes(2)
+    await expect(access(join(root, 'coverage/.partitioned/vitest-partition-1.config.ts'))).resolves.toBeUndefined()
+  })
+
   const weightedFiles = ['a.spec.ts', 'b.spec.ts', 'c.spec.ts']
   const weightedDurations = new Map([
     ['a.spec.ts', 100],
@@ -285,6 +497,35 @@ describe('coverage partition coordinator', () => {
     ['b.spec.ts', 'process-bound'],
     ['c.spec.ts', 'process-bound'],
   ])
+  it('passes the canonicalizing reporter to every partition', async () => {
+    const root = await temporaryRoot()
+    const commands: CoverageCommand[] = []
+    const runCommand = successfulCommandRecorder(commands)
+    const coordinator = new CoveragePartitionCoordinator({
+      root,
+      partitions: 2,
+      pnpmEntrypoint: '/pnpm.cjs',
+      files: ['a.spec.ts', 'b.spec.ts'],
+      runCommand,
+    })
+
+    await expect(coordinator.run()).resolves.toBe(0)
+    await expect(access(join(root, 'coverage/.partitioned'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    // The coordinator passes a root-relative argument and runs every child with
+    // the repository root as its working directory, so the argument must name
+    // the reporter that sits beside this spec. Whether that reporter runs
+    // before the blob write is Vitest's reporter ordering, not a command the
+    // coordinator builds.
+    const specDirectory = dirname(fileURLToPath(import.meta.url))
+    const reporterPath = join(specDirectory, 'coverage-canonical-locations.ts')
+    for (const command of commands.slice(0, 2)) {
+      const argument = command.args.find(candidate => candidate.startsWith('--reporter=') && candidate.endsWith('coverage-canonical-locations.ts'))
+      if (argument === undefined) throw new Error(`${command.label} does not wire the coverage canonicalizer`)
+      expect(resolve(specDirectory, '..', argument.slice('--reporter='.length))).toBe(reporterPath)
+    }
+  })
+
   it('runs every single-worker partition before one merged threshold check', async () => {
     const root = await temporaryRoot()
     const commands: CoverageCommand[] = []
@@ -324,9 +565,10 @@ describe('coverage partition coordinator', () => {
         '--maxWorkers=1',
         '--reporter=default',
         '--reporter=blob',
-        '--reporter=json',
         '--testTimeout=30000',
       ]))
+      expect(command.args).not.toContain('--reporter=json')
+      expect(command.args).toContain('--reporter=./scripts/coverage-file-times.ts')
       expect(command.args).not.toContain('--shard=1/3')
       expect(command.args.some(argument => argument.startsWith('--config='))).toBe(true)
       expect(command.env).toEqual({
@@ -343,6 +585,8 @@ describe('coverage partition coordinator', () => {
     expect(allConfigs).toContain('c.spec.ts')
     for (const source of partitionConfigs) {
       expect(source).toContain("from '../../vitest.config.ts'")
+      expect(source).toContain("from '../../scripts/coverage-fork-diagnostics.ts'")
+      expect(source).toContain('pool: coverageForkPool')
     }
     const mergeCommand = commands[3]
     if (mergeCommand === undefined) throw new Error('coverage merge command was not observed')

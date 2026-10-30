@@ -1,0 +1,16 @@
+{
+  "name": "@fixture/layout-bottom",
+  "version": "0.2.1-rc.4",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  }
+}

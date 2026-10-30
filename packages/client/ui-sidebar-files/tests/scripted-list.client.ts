@@ -104,7 +104,8 @@ export function scriptedFiles(): ScriptedFiles {
     call.resolve(result.ok ? { ok: true, value: { path: '', ...result.value } } : result)
     await settleInto()
   }
-  const remote = { workspaceFiles: { list, createDirectory, createFile, remove, copy, move } }
+  // The wire verb is `removePath`; the tree's own face keeps calling it `remove`.
+  const remote = { workspaceFiles: { list, createDirectory, createFile, removePath: remove, copy, move } }
   return {
     remote,
     bound: createList(remote),

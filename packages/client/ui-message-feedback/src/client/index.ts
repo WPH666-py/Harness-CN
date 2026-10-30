@@ -1,9 +1,10 @@
 /**
  * Feedback surface plugin, browser half: the Like/Dislike entry in the
  * conversation.chat.assistant-actions strip, the feedback dialog and its
- * acknowledgement toast in conversation.input.overlay, and the `/feedback`
+ * acknowledgement and failure toasts in conversation.input.overlay, and the `/feedback`
  * decoration that opens the dialog from the composer menu or a bare typed
- * command. One FeedbackSurface per Session backs every entry in that Session.
+ * command. The feedbackUi service opens the same dialog for other plugins.
+ * One FeedbackSurface per Session backs every entry in that Session.
  * @module @deepseek-ai/dsh-client-ui-message-feedback/client
  */
 
@@ -29,13 +30,28 @@ import { en, zh } from './locales.ts'
 
 export type {
   MessageFeedbackActionFailure, MessageFeedbackActionResult, MessageFeedbackStatus,
-  MessageFeedbackToggleResult, MessageFeedbackView,
+  MessageFeedbackView,
 } from './controller.ts'
 export type { FeedbackDialogState, FeedbackDialogTarget, FeedbackSubmit } from './dialog.ts'
 export type {
   FeedbackDialogInjected, FeedbackDialogProps, MessageFeedbackActionProps, MessageFeedbackInjected,
 } from './slots.ts'
 export type { MessageFeedbackKey } from './locales.ts'
+
+/** Opens the existing Session feedback form without submitting feedback. */
+export interface FeedbackUi {
+  /**
+   * Open the Session feedback draft without recording feedback.
+   * @param sessionId - Session whose feedback draft to open.
+   */
+  openSession(sessionId: SessionId): void
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    feedbackUi: FeedbackUi
+  }
+}
 
 /** Dictionary namespace owned by this plugin. */
 const NS = 'feedback'
@@ -45,7 +61,8 @@ export const inject = ['slots', 'remote', 'remote.messageFeedback', 'remote.sess
 
 /**
  * Client plugin body: the per-message feedback entry, the Session's dialog
- * entry, the `/feedback` decoration, and their per-session surfaces.
+ * entry, the `feedbackUi` service, the `/feedback` decoration, and their
+ * per-session surfaces.
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
@@ -64,6 +81,11 @@ export function apply(ctx: ClientContext): void {
     for (const surface of surfaces.values()) surface.dispose()
     surfaces.clear()
   }, 'ui-message-feedback: per-session surfaces')
+
+  const feedbackUi: FeedbackUi = {
+    openSession: (sessionId) => { surfaceFor(sessionId).dialog.open({ kind: 'session' }) },
+  }
+  ctx.provide('feedbackUi', feedbackUi)
 
   // A reconnect can only invalidate what was already read; a cold Session
   // stays cold until something asks for it.
@@ -84,9 +106,8 @@ export function apply(ctx: ClientContext): void {
         hooks: { feedback },
         ensure: () => feedback.ensure(),
         current: messageId => feedback.getSnapshot().items.get(messageId),
-        toggle: (messageId, rating) => feedback.toggle(messageId, rating),
-        openDialog: (messageId) => { dialog.open({ kind: 'message', messageId }) },
-        acknowledge: () => { dialog.acknowledge() },
+        retract: (messageId, rating) => feedback.retract(messageId, rating),
+        openDialog: (messageId, rating) => { dialog.open({ kind: 'message', messageId, rating }) },
       }
     },
   }, MessageFeedbackActions))
@@ -103,6 +124,7 @@ export function apply(ctx: ClientContext): void {
         edit: (draft) => { dialog.edit(draft) },
         submit: () => dialog.submitDraft(),
         dismiss: () => { dialog.dismiss() },
+        dismissFailure: () => { dialog.dismissFailure() },
         dismissToast: (seq) => { dialog.dismissToast(seq) },
       }
     },
@@ -114,7 +136,7 @@ export function apply(ctx: ClientContext): void {
     scope.effect(() => scope.commandUi.decorate({
       name: 'feedback',
       available: () => true,
-      ui: { kind: 'action', run: (session) => { surfaceFor(session.sessionId).dialog.open({ kind: 'session' }) } },
+      ui: { kind: 'action', run: (session) => { feedbackUi.openSession(session.sessionId) } },
     }), 'ui-message-feedback: /feedback decoration')
   })
 }

@@ -33,6 +33,21 @@ const REPOSITORY_ROOT = resolve(APP_ROOT, '..', '..')
 const REQUIRED_DEPENDENCY_SECTIONS = ['dependencies', 'peerDependencies'] as const
 const OPTIONAL_DEPENDENCY_SECTION = 'optionalDependencies'
 
+/**
+ * Scoped packages that live outside this workspace.
+ *
+ * The closure below treats every `@deepseek-ai/*` dependency as first-party and fails when it is not
+ * among the packed inputs — which is the right alarm for a package this tree ships. A few scoped
+ * packages are published from other repositories (`libreoffice-k` is the office toolkit the document
+ * skills call), and demanding a tarball for those would mean vendoring code this tree does not own.
+ */
+const EXTERNAL_SCOPED_PACKAGES = new Set(['@deepseek-ai/libreoffice-k', '@deepseek-ai/libreoffice-kit'])
+
+/** Scoped packages whose absence from the pack set is not an omission by this tree. */
+function externalScopedPackage(name: string): boolean {
+  return EXTERNAL_SCOPED_PACKAGES.has(name) || name.startsWith('@deepseek-ai/libreoffice-')
+}
+
 /** Packed package information needed to form the local Desktop closure. */
 export interface PackedDesktopPackage {
   readonly tarball: string
@@ -65,7 +80,7 @@ export function selectDesktopPackageClosure(
     for (const section of REQUIRED_DEPENDENCY_SECTIONS) {
       for (const dependency of dependencyNames(packed.manifest, section)) {
         if (available.has(dependency)) visit(dependency)
-        else if (dependency.startsWith('@deepseek-ai/')) {
+        else if (dependency.startsWith('@deepseek-ai/') && !externalScopedPackage(dependency)) {
           throw new Error(`desktop package set: ${name} requires unpacked internal package ${dependency}`)
         }
       }

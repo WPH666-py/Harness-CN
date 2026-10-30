@@ -1,6 +1,9 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import WorkingDirectory from '@deepseek-ai/dsh-working-directory'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -24,6 +27,9 @@ async function harness(): Promise<Context> {
   await ctx.plugin(SystemPrompt, { personaPrefix: '' })
   await ctx.plugin(ToolRegistry)
   await ctx.plugin(AgentRegistry)
+  await ctx.plugin(LocalFileSystem)
+  await ctx.plugin(SessionProjectionRegistry)
+  await ctx.plugin(WorkingDirectory)
   return ctx
 }
 
@@ -31,7 +37,7 @@ async function stubAgent(
   ctx: Context,
   id = 'file-reference-agent',
   includeCwd = true,
-): Promise<{ agent: Agent; dispose: () => void }> {
+): Promise<{ agent: Agent; dispose: () => Promise<void> }> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-file-reference-service-'))
   roots.push(root)
   await writeFile(join(root, 'README.md'), 'readme')
@@ -51,10 +57,31 @@ async function stubAgent(
     cancel() {},
     whenIdle: () => Promise.resolve(),
   } as unknown as Agent
-  return { agent, dispose: ctx.agents.register(agent) }
+  return { agent, dispose: await ctx.agents.register(agent) }
 }
 
 describe('LocalFileReferenceService', () => {
+  it('defers guidance until optional prompt and tool services become available', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    ctx.provide('workingDirectory', { ensure: vi.fn<WorkingDirectory['ensure']>() })
+    await ctx.plugin(LocalFileReferenceService)
+    try {
+      expect(ctx.fileReferences).toBeInstanceOf(LocalFileReferenceService)
+      const { agent } = await stubAgent(ctx, 'deferred-prompt')
+      expect(ctx.agents.get(agent.id)).toBe(agent)
+      await ctx.plugin(SystemPrompt, { personaPrefix: '' })
+      await ctx.plugin(ToolRegistry)
+      ctx.tools.register(defineContentToolFixture({
+        name: 'read', description: 'read a file', parameters: {}, execute: () => Promise.resolve([]),
+      }))
+      expect(renderPrompt(await ctx.systemPrompt.assemble())).toContain(FILE_REFERENCE_PROMPT)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('serves the addressed workspace and installs read-tool guidance for existing agents', async () => {
     const ctx = await harness()
     const { agent } = await stubAgent(ctx)
@@ -79,6 +106,25 @@ describe('LocalFileReferenceService', () => {
     expect(renderPrompt(await ctx.systemPrompt.assemble())).not.toContain(FILE_REFERENCE_PROMPT)
   })
 
+  it('rebuilds completion from the current directory after a Session directory change', async () => {
+    const ctx = await harness()
+    try {
+      const { agent } = await stubAgent(ctx)
+      const nextRoot = await mkdtemp(join(tmpdir(), 'dsh-file-reference-next-'))
+      roots.push(nextRoot)
+      await writeFile(join(nextRoot, 'NEXT.md'), 'next')
+      await ctx.plugin(LocalFileReferenceService)
+      const signal = new AbortController().signal
+      expect(await ctx.fileReferences.list(agent, '', signal)).toEqual([{ path: 'README.md', kind: 'file' }])
+      const original = agent.session.header.cwd
+      await ctx.workingDirectory.set(agent, nextRoot, signal)
+      expect(await ctx.fileReferences.list(agent, '', signal)).toEqual([{ path: 'NEXT.md', kind: 'file' }])
+      expect(agent.session.header.cwd).toBe(original)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('invalidates cached searches after tool results and disposes them with the agent', async () => {
     const ctx = await harness()
     const { agent, dispose } = await stubAgent(ctx)
@@ -87,15 +133,15 @@ describe('LocalFileReferenceService', () => {
     await ctx.plugin(LocalFileReferenceService)
     await ctx.fileReferences.list(agent, 'README', new AbortController().signal)
 
-    ctx.emit('session/event', agent.session, { type: 'tool/result' } as never)
+    ctx.emit('session/event', agent.session, { type: 'tool/result', seq: 0, data: {} } as never)
     expect(invalidate).toHaveBeenCalledOnce()
-    ctx.emit('session/event', agent.session, { type: 'assistant/message' } as never)
+    ctx.emit('session/event', agent.session, { type: 'assistant/message', seq: 0, data: {} } as never)
     expect(invalidate).toHaveBeenCalledOnce()
     const orphan = ctx.sessions.create(SessionId('file-reference-orphan'))
-    ctx.emit('session/event', orphan, { type: 'tool/result' } as never)
+    ctx.emit('session/event', orphan, { type: 'tool/result', seq: 0, data: {} } as never)
     expect(invalidate).toHaveBeenCalledOnce()
 
-    dispose()
+    await dispose()
     expect(close).toHaveBeenCalledOnce()
     ctx.emit('agent/disposed', { agent })
   })
@@ -131,7 +177,7 @@ describe('LocalFileReferenceService', () => {
     const fiber = ctx.plugin(LocalFileReferenceService)
     await fiber
     const { agent } = await stubAgent(ctx, 'cwd-fallback', false)
-    ctx.emit('agent/created', { agent })
+    await ctx.serial('agent/created', { agent, source: 'startup' })
     const list = vi.spyOn(WorkspaceFileSearch.prototype, 'list').mockResolvedValue([])
     await expect(ctx.fileReferences.list(agent, '', new AbortController().signal)).resolves.toEqual([])
     await expect(ctx.fileReferences.list(agent, 'src', new AbortController().signal)).resolves.toEqual([])
@@ -151,8 +197,8 @@ describe('LocalFileReferenceService', () => {
     const first = await stubAgent(ctx, 'cleanup-one')
     const second = await stubAgent(ctx, 'cleanup-two')
     expect(inject).toHaveBeenCalledTimes(2)
-    first.dispose()
-    second.dispose()
+    await first.dispose()
+    await second.dispose()
     await vi.waitFor(() => {
       expect(warn).toHaveBeenCalledWith('file-reference-local: prompt cleanup failed: error cleanup')
       expect(warn).toHaveBeenCalledWith('file-reference-local: prompt cleanup failed: string cleanup')

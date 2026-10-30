@@ -11,7 +11,6 @@
 - id: agent-instructions
   config:
     maxBytes: 65536
-    dshHome: !!js process.cwd() + '/.dsh'
 
 - id: session-persistence-jsonl
   config:
@@ -28,3 +27,7 @@
     # Publish the persisted agent before the driver selects the single root.
     - id: resumed-agent
       name: './tests/fixtures/workspace-context-resume-agent.ts'
+
+- id: session-log-deepseek
+  config:
+    enabled: false

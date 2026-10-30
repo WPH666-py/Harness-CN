@@ -1,6 +1,7 @@
-import { readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -41,14 +42,25 @@ const tsconfigPath = fileURLToPath(new URL('../../../../../../tsconfig.json', im
 const reasoningConfigPath = fileURLToPath(new URL('./fixtures/cli.patch.yml', import.meta.url))
 const deepseekDefaultsConfigPath = fileURLToPath(new URL('./fixtures/deepseek-defaults.patch.yml', import.meta.url))
 const piAiDefaultsConfigPath = fileURLToPath(new URL('./fixtures/pi-ai-defaults.patch.yml', import.meta.url))
+const piAiConversationUpdatesConfigPath = fileURLToPath(new URL('./fixtures/pi-ai-conversation-updates.patch.yml', import.meta.url))
 const headlessOverlayPath = fileURLToPath(new URL('./fixtures/headless-profile.patch.yml', import.meta.url))
 const headlessSessionExpected = join(goldensDir, 'headless-profile', 'session.expected.jsonl')
 const headlessReasoningExpected = join(goldensDir, 'headless-profile', 'reasoning.stderr.expected.txt')
 const headlessFailureExpected = join(goldensDir, 'headless-profile', 'stderr.expected.txt')
 const refreshing = process.env.DSH_SNAPSHOT === 'refresh'
+/** The shipped base bundle's title output cap, which marks a title request's `max_tokens`. */
+const TITLE_MAX_TOKENS = 4096
 
 interface JsonObject {
   [key: string]: unknown
+}
+
+/** Framed user text that distinguishes the auxiliary title request from a main request. */
+const TITLE_PROMPT_MARKER = 'Generate the session title from this JSON array of human messages'
+
+/** Whether one recorded request body is the auxiliary title request. */
+function isTitleRequest(request: JsonObject): boolean {
+  return JSON.stringify(request['messages'] ?? null).includes(TITLE_PROMPT_MARKER)
 }
 
 interface PersistedLog {
@@ -59,6 +71,7 @@ interface PersistedLog {
 interface DeepSeekDefaultsServer {
   readonly url: string
   readonly requests: JsonObject[]
+  readonly paths: string[]
   close(): Promise<void>
 }
 
@@ -81,22 +94,37 @@ async function expectHeadlessStream(normalized: string, expectedPath: string): P
 }
 
 /** Serve one deterministic DeepSeek-compatible response while retaining its request body. */
-async function deepseekDefaultsServer(options: { waitForTitleRequest?: boolean } = {}): Promise<DeepSeekDefaultsServer> {
+async function deepseekDefaultsServer(
+  options: { waitForTitleRequest?: boolean; piAiCompatibility?: true } = {},
+): Promise<DeepSeekDefaultsServer> {
   const requests: JsonObject[] = []
+  const paths: string[] = []
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     let body = ''
     request.setEncoding('utf8')
     request.on('data', (chunk: string) => { body += chunk })
     request.on('end', () => {
       requests.push(JSON.parse(body) as JsonObject)
+      paths.push(request.url ?? '')
       response.writeHead(200, { 'content-type': 'text/event-stream' })
       let keepAlives = 3
       const write = (): void => {
         // One-shot teardown may cancel background title work after the main response.
         if (keepAlives-- > 0
-          || (options.waitForTitleRequest === true && !requests.some(request => request.max_tokens === 64))) {
+          || (options.waitForTitleRequest === true && !requests.some(isTitleRequest))) {
           response.write(': keep-alive\n\n')
           timer = setTimeout(write, 60)
+          return
+        }
+        if (options.piAiCompatibility !== true) {
+          response.end([
+            { type: 'message_start', message: { id: 'defaults-response', model: 'deepseek-v4-flash', usage: { input_tokens: 3, output_tokens: 0 } } },
+            { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+            { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'DEFAULTS_OK' } },
+            { type: 'content_block_stop', index: 0 },
+            { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+            { type: 'message_stop' },
+          ].map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''))
           return
         }
         response.end([
@@ -116,7 +144,60 @@ async function deepseekDefaultsServer(options: { waitForTitleRequest?: boolean }
   return {
     url: `http://127.0.0.1:${address.port}`,
     requests,
+    paths,
     close: () => new Promise(resolve => server.close(() => { resolve() })),
+  }
+}
+
+/** Script Chat Completions responses in request order: `read`, then `snapshot_ping`, then text. */
+async function piAiConversationServer(): Promise<DeepSeekDefaultsServer> {
+  const requests: JsonObject[] = []
+  const agentReplies = [
+    { tool_calls: [{ index: 0, id: 'call_read', type: 'function', function: { name: 'read', arguments: '{"file_path":"task.txt"}' } }] },
+    { tool_calls: [{ index: 0, id: 'call_ping', type: 'function', function: { name: 'snapshot_ping', arguments: '{}' } }] },
+    { content: 'DONE' },
+  ]
+  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    let body = ''
+    request.setEncoding('utf8')
+    request.on('data', (chunk: string) => { body += chunk })
+    request.on('end', () => {
+      requests.push(JSON.parse(body) as JsonObject)
+      const delta = agentReplies[requests.length - 1] ?? { content: 'UNEXPECTED' }
+      const finish = 'tool_calls' in delta ? 'tool_calls' : 'stop'
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.end([
+        `data: ${JSON.stringify({ choices: [{ delta }] })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: finish }], usage: { prompt_tokens: 3, completion_tokens: 1 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n'))
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('pi-ai conversation snapshot server has no port')
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    requests,
+    paths: [],
+    close: () => new Promise(resolve => server.close(() => { resolve() })),
+  }
+}
+
+/** Project one Chat Completions request to its fixture-owned declarations and message roles, tools, and prompt markers. */
+function piAiTranscript(request: JsonObject): JsonObject {
+  const names = (tools: unknown): string[] => Array.isArray(tools)
+    ? tools.map(tool => ((tool as { function: { name: string } }).function.name))
+    : []
+  return {
+    // Profile tools change independently of this scenario; only the fixture's tool is recorded.
+    tools: names(request.tools).filter(name => name === 'snapshot_ping'),
+    messages: (request.messages as JsonObject[]).map(message => ({
+      role: message.role,
+      ...message.tools === undefined ? {} : { tools: names(message.tools) },
+      ...typeof message.content === 'string' && message.content.includes('Dynamic tool guidance') ? { guidance: true } : {},
+    })),
   }
 }
 
@@ -218,14 +299,16 @@ async function persistedLogs(cwd: string, root: string = join(cwd, '.sessions'))
 
 describe('headless stream-json snapshots', () => {
 
-  it('runs one task through the product headless profile command', async () => {
+  it.each(['src', 'lib'] as const)('runs one task through the product headless profile command (%s)', async (mode) => {
     const task = 'Prove the product headless profile path with one real tool round trip.'
     const result = await runLoaderSmoke({
       label: 'product headless profile snapshot',
+      mode,
+      sourceImport: 'tsx/esm',
       tempDirPrefix: 'headless-snapshot-profile-',
       binScript: dshBinScript,
       configPath: headlessOverlayPath,
-      binArgs: ['--profile', 'headless', '--patch', headlessOverlayPath, task],
+      binArgs: ['headless', '--patch', headlessOverlayPath, task],
       tsconfigPath,
       env: {
         DSH_PERMISSION_MODE: 'danger-full-access',
@@ -239,6 +322,8 @@ describe('headless stream-json snapshots', () => {
         if (actual === undefined) throw new Error('the headless profile did not persist its session')
         const context = contextFromLogs([actual.content])
         const session = normalizeSessionSnapshot(actual.content, context)
+        const titleRequest = parseJsonl(session).find(event => event.type === 'session/title-llm-request')
+        expect(titleRequest?.data).toMatchObject({ reasoningEffort: 'off', maxTokens: TITLE_MAX_TOKENS })
         if (refreshing) await writeFile(headlessSessionExpected, session)
         await expectSessionSnapshot(session, context, headlessSessionExpected)
         expect(session).toContain(task)
@@ -250,6 +335,117 @@ describe('headless stream-json snapshots', () => {
     if (refreshing) await writeFile(headlessReasoningExpected, result.stderr)
     expect(result.stderr).toBe(await readFile(headlessReasoningExpected, 'utf8'))
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
+
+  it('projects the same run as JSON events under a generated session identity', async () => {
+    const task = 'Prove the machine-readable product headless profile path.'
+    const result = await runLoaderSmoke({
+      label: 'product headless profile json snapshot',
+      tempDirPrefix: 'headless-snapshot-profile-json-',
+      binScript: dshBinScript,
+      configPath: headlessOverlayPath,
+      binArgs: [
+        '--profile', 'headless', '--patch', headlessOverlayPath,
+        '--json', task,
+      ],
+      tsconfigPath,
+      env: {
+        DSH_PERMISSION_MODE: 'danger-full-access',
+        DSH_TELEMETRY_DISABLED: '1',
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, '--disable-warning=ExperimentalWarning'].filter(Boolean).join(' '),
+      },
+    })
+
+    const events = result.stdout.trim().split('\n').map(line => JSON.parse(line) as JsonObject)
+    expect(events[0]).toMatchObject({ type: 'session' })
+    expect(events[0]?.sessionId).toMatch(/^session-/)
+    expect(typeof events[0]?.cwd).toBe('string')
+    expect(events.at(-1)).toMatchObject({ type: 'final', text: 'CLI tool round trip complete: CLI_TOOL_ROUND_TRIP' })
+    expect(events.map(event => event.type)).toContain('thinking')
+    expect(events.map(event => event.type)).toContain('tool_call')
+    expect(events.map(event => event.type)).toContain('tool_result')
+    expect(events.map(event => event.type)).not.toContain('error')
+    expect(result.stderr).toBe('')
+  }, LOADER_SMOKE_TEST_TIMEOUT_MS)
+
+  it('fails the JSON run when --session-id names no stored Session', async () => {
+    const result = await runLoaderSmoke({
+      label: 'product headless profile unknown session',
+      tempDirPrefix: 'headless-snapshot-profile-unknown-session-',
+      binScript: dshBinScript,
+      configPath: headlessOverlayPath,
+      binArgs: [
+        '--profile', 'headless', '--patch', headlessOverlayPath,
+        '--json', '--session-id', 'headless-unknown-session', 'Continue the conversation.',
+      ],
+      tsconfigPath,
+      expectedExitCode: 1,
+      env: {
+        DSH_TELEMETRY_DISABLED: '1',
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, '--disable-warning=ExperimentalWarning'].filter(Boolean).join(' '),
+      },
+    })
+
+    const events = result.stdout.trim().split('\n').map(line => JSON.parse(line) as JsonObject)
+    expect(events).toEqual([{
+      type: 'error',
+      message: 'session "headless-unknown-session" does not exist; omit --session-id to start a new Session',
+    }])
+    expect(result.stderr).toContain('omit --session-id to start a new Session')
+  }, LOADER_SMOKE_TEST_TIMEOUT_MS)
+
+  it('resumes one persisted Session across two real --session-id wakes', async () => {
+    const firstTask = 'Record the first wake of the resume proof.'
+    const secondTask = 'Continue from the first wake of the resume proof.'
+    const env = {
+      DSH_PERMISSION_MODE: 'danger-full-access',
+      DSH_TELEMETRY_DISABLED: '1',
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, '--disable-warning=ExperimentalWarning'].filter(Boolean).join(' '),
+    }
+    const cwd = await mkdtemp(join(tmpdir(), 'headless-session-resume-'))
+    try {
+      const first = await runLoaderSmoke({
+        label: 'product headless profile resume first wake',
+        cwd,
+        binScript: dshBinScript,
+        configPath: headlessOverlayPath,
+        binArgs: ['--profile', 'headless', '--patch', headlessOverlayPath, '--json', firstTask],
+        tsconfigPath,
+        env,
+      })
+      const firstEvents = first.stdout.trim().split('\n').map(line => JSON.parse(line) as JsonObject)
+      expect(firstEvents[0]).toMatchObject({ type: 'session' })
+      const sessionId = firstEvents[0]?.sessionId
+      if (typeof sessionId !== 'string') throw new Error('the first wake reported no Session identity')
+
+      const second = await runLoaderSmoke({
+        label: 'product headless profile resume second wake',
+        cwd,
+        binScript: dshBinScript,
+        configPath: headlessOverlayPath,
+        binArgs: [
+          '--profile', 'headless', '--patch', headlessOverlayPath,
+          '--json', '--session-id', sessionId, secondTask,
+        ],
+        tsconfigPath,
+        env,
+        inspect: async (inspected) => {
+          const logs = await persistedLogs(inspected, join(inspected, '.dsh', 'sessions'))
+          expect(logs).toHaveLength(1)
+          const content = logs[0]?.content ?? ''
+          expect(content).toContain(firstTask)
+          expect(content).toContain(secondTask)
+        },
+      })
+      const secondEvents = second.stdout.trim().split('\n').map(line => JSON.parse(line) as JsonObject)
+      expect(secondEvents[0]).toMatchObject({ type: 'session', sessionId })
+      expect(secondEvents.at(-1)).toMatchObject({
+        type: 'final',
+        text: 'CLI tool round trip complete: CLI_TOOL_ROUND_TRIP',
+      })
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  }, LOADER_SMOKE_TEST_TIMEOUT_MS * 2)
 
   it('prints a terminal model failure through the product headless profile command', async () => {
     const result = await runLoaderSmoke({
@@ -271,19 +467,27 @@ describe('headless stream-json snapshots', () => {
     await expect(result.stderr).toMatchFileSnapshot(headlessFailureExpected)
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 
-  it('prints the original Loader activation error through the assembled one-shot app', async () => {
+  it('warns about an unrelated activation error and completes the headless task', async () => {
     const result = await runLoaderSmoke({
-      label: 'headless startup activation error snapshot',
+      label: 'headless best-effort startup snapshot',
       tempDirPrefix: 'headless-snapshot-startup-error-',
-      binScript,
-      libBinScript: binScript,
+      binScript: dshBinScript,
       configPath: startupFailureConfigPath,
-      binArgs: [startupFailureConfigPath, 'unreachable task'],
+      binArgs: [
+        '--profile', 'headless',
+        '--patch', headlessOverlayPath,
+        '--patch', startupFailureConfigPath,
+        'Complete the task despite the unrelated startup failure.',
+      ],
       tsconfigPath,
-      expectedExitCode: 1,
+      env: {
+        DSH_PERMISSION_MODE: 'danger-full-access',
+        DSH_TELEMETRY_DISABLED: '1',
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, '--disable-warning=ExperimentalWarning'].filter(Boolean).join(' '),
+      },
     })
-    expect(result.stdout).toBe('')
-    await expect(result.stderr.replace(startupFailurePluginUrl, './activation-error.mjs'))
+    expect(result.stdout).toBe('CLI tool round trip complete: CLI_TOOL_ROUND_TRIP\n')
+    await expect(result.stderr.replaceAll(startupFailurePluginUrl, './activation-error.mjs'))
       .toMatchFileSnapshot(startupFailureExpected)
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 
@@ -469,9 +673,11 @@ describe('headless stream-json snapshots', () => {
 
       expect(result.stderr).toBe('')
       expect(server.requests).toHaveLength(2)
+      expect(server.paths).toEqual(['/v1/messages', '/v1/messages'])
       const agentRequest = server.requests.find(request => request.max_tokens === 256_000)
-      const titleRequest = server.requests.find(request => request.max_tokens === 64)
-      expect(agentRequest?.reasoning_effort).toBe('low')
+      const titleRequest = server.requests.find(isTitleRequest)
+      expect(titleRequest?.max_tokens).toBe(TITLE_MAX_TOKENS)
+      expect(agentRequest?.output_config).toEqual({ effort: 'low' })
       expect(titleRequest).toBeDefined()
       const header = (parseJsonl(result.stdout)
         .map(record => record.event)
@@ -500,7 +706,7 @@ describe('headless stream-json snapshots', () => {
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 
   it('keeps the compatibility stream open until the title request arrives', async () => {
-    const server = await deepseekDefaultsServer({ waitForTitleRequest: true })
+    const server = await deepseekDefaultsServer({ waitForTitleRequest: true, piAiCompatibility: true })
     try {
       const response = await fetch(server.url, {
         method: 'POST',
@@ -519,7 +725,10 @@ describe('headless stream-json snapshots', () => {
         }
         const title = await fetch(server.url, {
           method: 'POST',
-          body: JSON.stringify({ max_tokens: 64 }),
+          body: JSON.stringify({
+            max_tokens: TITLE_MAX_TOKENS,
+            messages: [{ role: 'user', content: [{ type: 'text', text: TITLE_PROMPT_MARKER }] }],
+          }),
         })
         for (;;) {
           const chunk = await reader.read()
@@ -537,7 +746,7 @@ describe('headless stream-json snapshots', () => {
   })
 
   it('sends pi-ai DeepSeek compatibility through the one-shot app', async () => {
-    const server = await deepseekDefaultsServer({ waitForTitleRequest: true })
+    const server = await deepseekDefaultsServer({ waitForTitleRequest: true, piAiCompatibility: true })
     try {
       const result = await runLoaderSmoke({
         label: 'pi-ai DeepSeek compatibility headless stream-json snapshot',
@@ -559,10 +768,10 @@ describe('headless stream-json snapshots', () => {
 
       expect(result.stderr).toBe('')
       expect(server.requests).toHaveLength(2)
-      const agentRequest = server.requests.find(request => request.max_tokens === 1024)
-      const titleRequest = server.requests.find(request => request.max_tokens === 64)
+      const agentRequest = server.requests.find(request => !isTitleRequest(request))
+      const titleRequest = server.requests.find(isTitleRequest)
       expect(agentRequest).not.toHaveProperty('max_completion_tokens')
-      expect(titleRequest).toBeDefined()
+      expect(titleRequest?.max_tokens).toBe(TITLE_MAX_TOKENS)
       const header = (parseJsonl(result.stdout)
         .map(record => record.event)
         .find((event): event is JsonObject => (
@@ -575,7 +784,7 @@ describe('headless stream-json snapshots', () => {
       expect(header?.config).toMatchInlineSnapshot(`
         {
           "maxTokens": 1024,
-          "model": "deepseek-v4-flash",
+          "model": "deepseek-flash",
           "provider": "deepseek",
           "reasoningEffort": "low",
         }
@@ -584,6 +793,113 @@ describe('headless stream-json snapshots', () => {
         maxTokens: true,
         reasoningEffort: true,
       })
+    } finally {
+      await server.close()
+    }
+  }, LOADER_SMOKE_TEST_TIMEOUT_MS)
+
+  it('sends pi-ai Kimi prompt and tool updates in conversation history', async () => {
+    const server = await piAiConversationServer()
+    try {
+      const result = await runLoaderSmoke({
+        label: 'pi-ai Kimi conversation updates headless stream-json snapshot',
+        tempDirPrefix: 'headless-snapshot-pi-ai-conversation-updates-',
+        binScript,
+        libBinScript: binScript,
+        configPath: piAiConversationUpdatesConfigPath,
+        binArgs: [
+          piAiConversationUpdatesConfigPath,
+          'read task.txt and follow it',
+        ],
+        tsconfigPath,
+        prepare: cwd => writeFile(join(cwd, 'task.txt'), 'Call snapshot_ping once.\n'),
+        env: {
+          MOONSHOT_API_KEY: 'snapshot-key',
+          DSH_SNAPSHOT_BASE_URL: server.url,
+          NODE_OPTIONS: [process.env.NODE_OPTIONS, '--disable-warning=ExperimentalWarning'].filter(Boolean).join(' '),
+        },
+      })
+
+      expect(result.stderr).toBe('')
+      expect(parseJsonl(result.stdout).at(-1)).toMatchObject({ type: 'result', output: 'DONE' })
+      expect(server.requests.map(piAiTranscript)).toMatchInlineSnapshot(`
+        [
+          {
+            "messages": [
+              {
+                "role": "system",
+              },
+              {
+                "role": "user",
+              },
+              {
+                "role": "user",
+              },
+            ],
+            "tools": [],
+          },
+          {
+            "messages": [
+              {
+                "role": "system",
+              },
+              {
+                "role": "user",
+              },
+              {
+                "role": "user",
+              },
+              {
+                "role": "assistant",
+              },
+              {
+                "role": "tool",
+              },
+              {
+                "guidance": true,
+                "role": "system",
+              },
+              {
+                "role": "system",
+                "tools": [
+                  "snapshot_ping",
+                ],
+              },
+            ],
+            "tools": [],
+          },
+          {
+            "messages": [
+              {
+                "role": "system",
+              },
+              {
+                "role": "user",
+              },
+              {
+                "role": "user",
+              },
+              {
+                "role": "assistant",
+              },
+              {
+                "role": "tool",
+              },
+              {
+                "guidance": true,
+                "role": "system",
+              },
+              {
+                "role": "assistant",
+              },
+              {
+                "role": "tool",
+              },
+            ],
+            "tools": [],
+          },
+        ]
+      `)
     } finally {
       await server.close()
     }
@@ -599,7 +915,7 @@ describe('headless stream-json snapshots', () => {
       configPath: teamConfigPath,
       binArgs: [
         teamConfigPath,
-        '请明确使用 Agent Teams，把调研和实现拆给两个 teammate，等待完成后汇总。',
+        '请先运行 workflow 检查，再使用 Agent Teams 把调研和实现拆给两个 teammate，等待完成后汇总。',
       ],
       tsconfigPath,
       processTimeoutMs: 60_000,
@@ -612,6 +928,15 @@ describe('headless stream-json snapshots', () => {
         const parent = logs.find(log => typeof log.header.parentSession !== 'string')
         if (parent === undefined) throw new Error('Agent Teams snapshot did not persist its Lead')
         const rows = parseJsonl(parent.content)
+        const workflowChild = logs.find(log => parseJsonl(log.content).some(row => row.type === 'user/message'
+          && JSON.stringify((row.data as JsonObject).content) === JSON.stringify([{ type: 'text', text: 'TEAM_WORKFLOW_CHILD' }])))
+        if (workflowChild === undefined) throw new Error('Team profile did not persist its workflow child')
+        const workflowRows = parseJsonl(workflowChild.content)
+        expect(workflowRows.find(row => row.type === 'subagent/descriptor')?.data)
+          .toMatchObject({ mode: 'continuable', provider: 'spawn' })
+        expect(workflowRows.filter(row => row.type === 'user/message'
+          && ((row.data as JsonObject).source as JsonObject).kind === 'user').map(row => row.data))
+          .toEqual([expect.objectContaining({ content: [{ type: 'text', text: 'TEAM_WORKFLOW_CHILD' }] })])
         const members = rows.filter(row => row.type === 'team/member')
           .map(row => ((row.data as JsonObject).member as JsonObject))
         const tasks = rows.filter(row => row.type === 'team/task')
@@ -639,14 +964,14 @@ describe('headless stream-json snapshots', () => {
               if (typeof message !== 'object' || message === null || Array.isArray(message)) return false
               const source = (message as JsonObject).source
               return typeof source === 'object' && source !== null && !Array.isArray(source)
-                && (source as JsonObject).kind === 'team-message'
+                && (source as JsonObject).kind === 'agent-message'
             })
         })
         const steeredMessageIndex = implementerRows.findIndex((row) => {
           if (row.type !== 'user/message') return false
           const source = (row.data as JsonObject).source
           return typeof source === 'object' && source !== null && !Array.isArray(source)
-            && (source as JsonObject).kind === 'team-message'
+            && (source as JsonObject).kind === 'agent-message'
         })
         const openTurnStart = implementerRows.findLastIndex((row, index) => (
           index < steeredMessageIndex && row.type === 'turn/start'
@@ -660,9 +985,26 @@ describe('headless stream-json snapshots', () => {
           if (data.name !== 'team_task_update' || typeof data.arguments !== 'string') return false
           return (JSON.parse(data.arguments) as JsonObject).action === 'complete'
         })
+        const identities = logs.flatMap((log) => {
+          if (log === parent || log === workflowChild) return []
+          const initial = parseJsonl(log.content).find(row => row.type === 'user/message'
+            && ((row.data as JsonObject).source as JsonObject).kind === 'user')
+          if (initial === undefined) throw new Error('Teammate Session has no initial task')
+          const content = (initial.data as JsonObject).content as JsonObject[]
+          expect(content).toHaveLength(1)
+          const context = parseJsonl(log.content).find(row => row.type === 'user/message'
+            && ((row.data as JsonObject).source as JsonObject).kind === 'runtime-context')
+          const source = (context?.data as JsonObject)?.source as JsonObject
+          const sections = source?.sections as JsonObject[] | undefined
+          const identity = sections?.find(section => section.name === 'team:identity')?.text
+          if (typeof identity !== 'string') throw new Error('Teammate runtime context has no identity')
+          return [identity]
+        }).sort()
         projection = {
           sessions: logs.length,
+          workflowStopReason: (rows.find(row => row.type === 'tool-workflow/run-end')?.data as JsonObject)?.stopReason,
           memberEdges: members.length,
+          identities,
           activeMembers: members.filter(member => member.phase === 'active').map(member => member.name).sort(),
           tasks: latestTasks.map(task => ({
             subject: task.subject,
@@ -696,10 +1038,22 @@ describe('headless stream-json snapshots', () => {
           "researcher",
         ],
         "checkedRoster": true,
-        "deliveredMessages": 2,
+        "deliveredMessages": 0,
+        "identities": [
+          "You are teammate "implementer".
+      Your Team Lead is named "lead".
+      To message your Team Lead, use send_message({ target: "lead", message: "..." }).
+      Use list_agents({}) to find your teammates and their names.
+      To message another teammate, use send_message({ target: "<teammate name>", message: "..." }).",
+          "You are teammate "researcher".
+      Your Team Lead is named "lead".
+      To message your Team Lead, use send_message({ target: "lead", message: "..." }).
+      Use list_agents({}) to find your teammates and their names.
+      To message another teammate, use send_message({ target: "<teammate name>", message: "..." }).",
+        ],
         "memberEdges": 4,
-        "queuedMessages": 2,
-        "sessions": 3,
+        "queuedMessages": 0,
+        "sessions": 4,
         "steerEvidence": {
           "completedAfterMessage": true,
           "enteredOpenTurn": true,
@@ -719,6 +1073,7 @@ describe('headless stream-json snapshots', () => {
           },
         ],
         "waited": true,
+        "workflowStopReason": "completed",
       }
     `)
   }, 75_000)
@@ -758,8 +1113,7 @@ describe('headless stream-json snapshots', () => {
         })
         const probeData = probeResult?.data as JsonObject | undefined
         const probeMessage = probeData?.message as JsonObject | undefined
-        const probeContent = probeMessage?.content as JsonObject[] | undefined
-        expect(probeContent?.[0]?.isError).toBe(true)
+        expect(probeMessage?.isError).toBe(true)
         expect((probeData?.error as JsonObject | undefined)?.code).toBe('GOAL_NOT_FOUND')
         const goalChanges = records.filter(record => record.type === 'goal/change')
         expect(goalChanges).toHaveLength(1)
@@ -780,13 +1134,13 @@ describe('headless stream-json snapshots', () => {
     await expectHeadlessStream(normalized, streamExpected)
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 
-  it('delivers a continuable child result without parent polling', async () => {
+  it('notifies the parent when a continuable child settles without polling', async () => {
     const parentReplay = join(settlementScenarioDir, 'parent.replay.jsonl')
     const parentOverride = join(settlementScenarioDir, 'parent.override.json')
     const childReplay = join(settlementScenarioDir, 'child.replay.jsonl')
     const childExpected = join(settlementScenarioDir, 'child.expected.jsonl')
     const streamExpected = join(settlementScenarioDir, 'stream-json.expected.jsonl')
-    const task = 'Start one continuable background subagent and answer from its completion notice. Do not call list_agents, send_message, job_output, or job_list.'
+    const task = 'Start one continuable subagent and acknowledge its completion notice. Do not call list_agents or send_message.'
     let runCwd = ''
     const result = await runLoaderSmoke({
       label: 'continuable settlement headless stream-json snapshot',
@@ -829,6 +1183,10 @@ describe('headless stream-json snapshots', () => {
           })
         })
         expect(notices).toHaveLength(1)
+        expect(notices[0]).toMatchObject({
+          source: { kind: 'subagent-settled', form: 'notice', senderSessionId: child.header.id },
+        })
+        expect(JSON.stringify(notices[0])).toContain('finished and will do no further work unless you send it more.')
         expect(JSON.stringify(notices[0])).toContain('CHILD_RESULT')
 
         const context = contextFromLogs([parent.content, child.content])
@@ -844,7 +1202,7 @@ describe('headless stream-json snapshots', () => {
     const records = parseJsonl(result.stdout)
     expect(records.at(-1)).toMatchObject({
       type: 'result',
-      output: 'PARENT_RECEIVED_CHILD_RESULT',
+      output: 'PARENT_RECEIVED_SETTLEMENT_NOTICE',
     })
     const normalized = normalizeHeadlessStream(result.stdout, runCwd)
     if (refreshing) await writeFile(streamExpected, normalized)

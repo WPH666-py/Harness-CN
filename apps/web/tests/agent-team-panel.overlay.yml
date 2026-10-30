@@ -1,5 +1,4 @@
-# Equivalent to the two explicit Agent Teams profile layers over the scaffold's
-# stable base and Web bundles.
+# Equivalent to the Agent Teams bundle over the stable base and Web bundles.
 - id: tool-subagent-control
   disabled: true
 
@@ -7,16 +6,10 @@
   disabled: true
 
 - id: tool-subagent
-  config:
-    provider: spawn
-    toolName: subagent
-    backgroundMode: one-shot
+  disabled: true
 
 - id: tool-subagent-fork
-  config:
-    provider: fork
-    toolName: subagent_fork
-    backgroundMode: one-shot
+  disabled: true
 
 - insert:
     - id: agent-team
@@ -24,7 +17,6 @@
       config:
         maxMembers: 8
         maxTasks: 256
-        maxPendingMessagesPerMember: 64
         maxMessageBytes: 65536
         disposalTimeoutMs: 5000
 
@@ -34,6 +26,5 @@
         freshProvider: spawn
         forkProvider: fork
 
-- insert:
     - id: ui-agent-team
       name: '@deepseek-ai/dsh-experimental-client-ui-agent-team'

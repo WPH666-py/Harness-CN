@@ -19,21 +19,14 @@ export interface SidebarRightSeed {
 }
 
 /**
- * Resolve the default page from the registered entries.
- *
- * An entry that declares itself the default wins outright: a product whose sidebar has one
- * obvious subject wants that subject open, not a menu of everything that could be. Failing that,
- * a lone entry is unambiguous and opens directly, and anything else leaves the guide — the list
- * of what registered — as the only honest answer.
+ * Resolve the default page from the registered entry count.
  * @param tabs - current tab registry.
- * @returns the declared default, the sole entry, or the guide when there are zero or several.
+ * @returns the sole entry, or the guide when there are zero or multiple entries.
  */
 export function defaultSeed(tabs: SidebarRightTabRegistry): SidebarRightSeed {
-  const entries = tabs.guide()
-  const preferred = entries.find(entry => entry.default === true)
-  const [only, ...others] = entries
+  const [only, ...others] = tabs.guide()
   const single = only !== undefined && others.length === 0
-  const kind = preferred?.kind ?? (single ? only.kind : GUIDE_KIND)
+  const kind = single ? only.kind : GUIDE_KIND
   const definition = tabs.get(kind)
   if (definition === undefined) throw new Error(`sidebarRight: default tab kind "${kind}" is not registered`)
   return { kind, title: definition.title(pageAddress(kind)) }

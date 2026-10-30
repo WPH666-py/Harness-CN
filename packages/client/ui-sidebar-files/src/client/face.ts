@@ -49,21 +49,28 @@ export type WorkspaceFilesListRemote = {
 }
 
 /**
- * The five `workspaceFiles` verbs that change what the tree shows, exactly as
- * the Host's generated client declares them.
+ * The `workspaceFiles` verbs this package calls on the wire, exactly as the
+ * Host's generated client declares them.
+ *
+ * Removal is `removePath` on the wire: the gateway refuses a Remote method whose
+ * name the namespace service already owns, and `remove` is part of that
+ * service's own token bookkeeping.
+ */
+export type WorkspaceFilesMutationRemote = {
+  readonly workspaceFiles: Pick<
+    ClientRemote['workspaceFiles'],
+    'createDirectory' | 'createFile' | 'copy' | 'move'
+  > & { readonly removePath: ClientRemote['workspaceFiles']['removePath'] }
+}
+
+/**
+ * The five `workspaceFiles` verbs that change what the tree shows, named as the
+ * tree calls them.
  */
 export type WorkspaceFilesMutations = Pick<
   ClientRemote['workspaceFiles'],
-  'createDirectory' | 'createFile' | 'remove' | 'copy' | 'move'
->
-
-/**
- * The slice of the Client Remote face this package mutates through: the
- * `workspaceFiles` namespace's five mutating verbs.
- */
-export type WorkspaceFilesMutationRemote = {
-  readonly workspaceFiles: WorkspaceFilesMutations
-}
+  'createDirectory' | 'createFile' | 'copy' | 'move'
+> & { readonly remove: ClientRemote['workspaceFiles']['removePath'] }
 
 /**
  * Every `workspaceFiles` verb this package performs, bound to one Remote face.
@@ -95,7 +102,7 @@ export function createList(remote: WorkspaceFilesListRemote & WorkspaceFilesMuta
     createFile: (sessionId, path, name, signal) =>
       remote.workspaceFiles.createFile(sessionId, path, name, signal),
     remove: (sessionId, path, options, signal) =>
-      remote.workspaceFiles.remove(sessionId, path, options, signal),
+      remote.workspaceFiles.removePath(sessionId, path, options, signal),
     copy: (sessionId, fromPath, toPath, signal) =>
       remote.workspaceFiles.copy(sessionId, fromPath, toPath, signal),
     move: (sessionId, fromPath, toPath, signal) =>

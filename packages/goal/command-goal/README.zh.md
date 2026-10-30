@@ -29,7 +29,7 @@ kind: "package-reference"
 
 ### 命令参考
 
-每个子命令都针对调用 agent 的当前 goal 执行；没有 goal 时，裸 `/goal` 显示用法。
+每个子命令都针对调用 agent（智能体）的当前 goal 执行；没有 goal 时，裸 `/goal` 显示用法。
 
 | 输入 | 结果 |
 |---|---|
@@ -84,7 +84,6 @@ kind: "package-reference"
 | 文件 | 职责 |
 |---|---|
 | [`src/index.ts`](src/index.ts) | 插件入口：命令语法、状态渲染、附件提交 |
-| — | 不发布运行时不变式伴生入口；已接受的变更由 goal 领域负责。 |
 
 </details>
 
@@ -97,7 +96,7 @@ kind: "package-reference"
 
 - [goal 服务](../goal/README.zh.md)——命令变更的状态与生命周期。
 - [命令服务](../../interaction/commands/README.zh.md)——命令注册表约定与分发。
-- [Harness 层目标式执行 Agent Note](../../../.agents/notes/implemented/feature/2026-07-16-harness-level-loop.zh.md)——用户体验与组合决策。
+- [历史Harness 层目标式执行 Agent Note](../../../.agents/notes/archived/feature/2026-07-16-harness-level-loop.md)——用户体验与组合决策。
 
 -----
 

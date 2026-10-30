@@ -20,10 +20,26 @@
 
 import type { IncomingMessage, Server } from 'node:http'
 import { createHash } from 'node:crypto'
+import { appendFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Socket } from 'node:net'
 
 /** Path the page connects to. */
 export const MUX_PATH = '/.dsh/stream-mux'
+
+/** Where the per-stream diagnostics land; inside the installation so they survive a restart. */
+const MUX_LOG = join(process.env.HARNESS_CN_INSTALL ?? 'D:/Harness/Harness-CN', 'data', 'desktop', 'mux.log')
+
+/**
+ * Path upstream 0.2.1's Gateway client connects to.
+ *
+ * 0.2.1 moved the logical-stream multiplexer onto the API origin and gave it its own message shape
+ * (`type`/`streamId` instead of `t`/`id`), so the same session serves both dialects.
+ */
+export const REMOTE_MUX_PATH = '/api/remote.mux'
+
+/** Every path that terminates a logical-stream multiplexer. */
+const MUX_PATHS = new Set([MUX_PATH, REMOTE_MUX_PATH])
 
 /** WebSocket frame opcodes this endpoint understands. */
 const OPCODE_TEXT = 0x1
@@ -148,6 +164,12 @@ function readFrames(socket: Socket, onFrame: (frame: Frame) => void, onClose: ()
  */
 class MuxSession {
   private readonly streams = new Map<number, AbortController>()
+  /** Which wire shape each open stream is reported in: the shell's own, or upstream's Gateway one. */
+  private readonly dialects = new Map<number, 'legacy' | 'gateway'>()
+  /** Upstream's client-chosen stream id, kept so a `cancel`/`end` frame can find its local number. */
+  private readonly gatewayIds = new Map<number, string>()
+  private nextGatewayId = 0
+  private uplinkDropped = 0
   private closed = false
 
   constructor(
@@ -162,15 +184,66 @@ class MuxSession {
     this.socket.write(encodeFrame(OPCODE_TEXT, Buffer.from(JSON.stringify(value), 'utf8')))
   }
 
+  /** Report one stream item in the dialect its opener speaks. */
+  private frame(id: number, value: unknown): void {
+    const streamId = this.gatewayIds.get(id)
+    if (streamId === undefined) {
+      this.send({ t: 'frame', id, value })
+      return
+    }
+    this.send({ type: 'item', streamId, value })
+  }
+
+  /** Complete one stream in the dialect its opener speaks. */
+  private finish(id: number): void {
+    const streamId = this.gatewayIds.get(id)
+    if (streamId === undefined) {
+      this.send({ t: 'end', id })
+      return
+    }
+    this.send({ type: 'end', streamId })
+    this.gatewayIds.delete(id)
+  }
+
+  /** Fail one stream in the dialect its opener speaks. */
+  private fail(id: number, message: string): void {
+    const streamId = this.gatewayIds.get(id)
+    if (streamId === undefined) {
+      this.send({ t: 'error', id, message })
+      return
+    }
+    this.send({ type: 'error', streamId, error: { code: 'stream-failed', message, details: {} } })
+    this.gatewayIds.delete(id)
+  }
+
   /** Start one logical stream and pump its items into the socket. */
   private start(id: number, endpoint: string, payload: unknown): void {
     const controller = new AbortController()
     this.streams.set(id, controller)
+    // One line per stream, in and out: the client's boot only renders once the logical streams it
+    // opened have answered, so "which stream never ends" is the question a hung page asks.
+    const startedAt = Date.now()
+    const dialect = this.dialects.get(id) ?? 'fork'
+    let frames = 0
+    const note = (outcome: string): void => {
+      // The sidecar's stdout is the Rust handshake pipe, so console lines never reach harness.log;
+      // a file is the only channel that survives it, and a hung boot needs reading after the fact.
+      const line = `[mux] ${new Date().toISOString()} ${outcome} #${String(id)} ${dialect} `
+        + `${endpoint === '' ? '(no endpoint)' : endpoint} frames=${String(frames)} `
+        + `${String(Date.now() - startedAt)}ms\n`
+      try {
+        appendFileSync(MUX_LOG, line)
+      } catch {
+        /* diagnostics are best effort */
+      }
+    }
+    note('open')
     void (async () => {
       try {
         const body = await this.openUpstream(endpoint, payload, controller.signal)
         if (body === null) {
-          this.send({ t: 'error', id, message: 'no upstream body' })
+          this.fail(id, 'no upstream body')
+          note('failed: no upstream body')
           return
         }
         const reader = body.getReader()
@@ -185,15 +258,20 @@ class MuxSession {
             const line = pending.slice(0, newline).trim()
             pending = pending.slice(newline + 1)
             newline = pending.indexOf('\n')
-            if (line !== '') this.send({ t: 'frame', id, value: JSON.parse(line) })
+            if (line !== '') { frames += 1; this.frame(id, JSON.parse(line)) }
           }
         }
         const tail = pending.trim()
-        if (tail !== '') this.send({ t: 'frame', id, value: JSON.parse(tail) })
-        this.send({ t: 'end', id })
+        if (tail !== '') { frames += 1; this.frame(id, JSON.parse(tail)) }
+        this.finish(id)
+        note('end')
       } catch (error) {
         if (!controller.signal.aborted) {
-          this.send({ t: 'error', id, message: error instanceof Error ? error.message : String(error) })
+          const message = error instanceof Error ? error.message : String(error)
+          this.fail(id, message)
+          note(`failed: ${message}`)
+        } else {
+          note('cancelled')
         }
       } finally {
         this.streams.delete(id)
@@ -204,6 +282,8 @@ class MuxSession {
   /** Cancel one logical stream. */
   private cancel(id: number): void {
     const controller = this.streams.get(id)
+    this.gatewayIds.delete(id)
+    this.dialects.delete(id)
     if (controller === undefined) return
     this.streams.delete(id)
     controller.abort(new Error('client cancelled the stream'))
@@ -227,11 +307,48 @@ class MuxSession {
       this.send({ t: 'error', id: 0, message: 'malformed frame' })
       return
     }
+    if (typeof message.type === 'string') {
+      this.handleGateway(message)
+      return
+    }
     if (message.t === 'open' && typeof message.id === 'number') {
       this.start(message.id, String(message.endpoint ?? ''), message.payload)
       return
     }
     if (message.t === 'cancel' && typeof message.id === 'number') this.cancel(message.id)
+  }
+
+  /**
+   * Serve one message of upstream Gateway's mux dialect.
+   *
+   * 0.2.1 names streams with client strings and carries an uplink half (`item`) that this shell's
+   * Host lane cannot reach, so uplink items are dropped here rather than silently half-forwarded: a
+   * stream that needs them fails at the endpoint instead of hanging.
+   * @param message - the decoded client message.
+   */
+  private handleGateway(message: Record<string, unknown>): void {
+    if (message.type === 'open') {
+      const streamId = typeof message.streamId === 'string' ? message.streamId : ''
+      if (streamId === '') return
+      this.nextGatewayId += 1
+      const id = this.nextGatewayId
+      this.dialects.set(id, 'gateway')
+      this.gatewayIds.set(id, streamId)
+      this.start(id, String(message.endpoint ?? ''), message.payload)
+      return
+    }
+    if (message.type === 'item') {
+      this.uplinkDropped += 1
+      return
+    }
+    if (message.type === 'end' || message.type === 'cancel') {
+      const streamId = typeof message.streamId === 'string' ? message.streamId : ''
+      for (const [id, open] of this.gatewayIds) {
+        if (open !== streamId) continue
+        this.cancel(id)
+        return
+      }
+    }
   }
 
   /** Close the socket and every stream it opened. */
@@ -240,6 +357,8 @@ class MuxSession {
     this.closed = true
     for (const controller of this.streams.values()) controller.abort(new Error('mux closed'))
     this.streams.clear()
+    this.gatewayIds.clear()
+    this.dialects.clear()
     if (!this.socket.destroyed) this.socket.end(encodeFrame(OPCODE_CLOSE, Buffer.alloc(0)))
     this.onClosed()
   }
@@ -279,8 +398,8 @@ export function attachStreamMux(
   openUpstream: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<ReadableStream<Uint8Array> | null>,
 ): void {
   server.on('upgrade', (request: IncomingMessage, socket: Socket) => {
-    const path = (request.url ?? '').split('?')[0]
-    if (path !== MUX_PATH) {
+    const path = (request.url ?? '').split('?')[0] ?? ''
+    if (!MUX_PATHS.has(path)) {
       socket.destroy()
       return
     }

@@ -34,12 +34,10 @@ export function filesDefinition(t: TranslateNS<'sidebarFiles'>): SidebarRightTab
     title: () => t('type.label'),
     guide: [{
       order: 10,
+      id: 'files',
       title: () => t('guide.title'),
       description: () => t('guide.description'),
       icon: FolderSheetGlyph,
-      // The workspace's files are what this sidebar is for, so a freshly opened one shows the
-      // tree rather than a menu offering it beside everything else that registered an entry.
-      default: true,
     }],
   }
 }

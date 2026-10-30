@@ -18,13 +18,10 @@
       "path": "../../core/session"
     },
     {
-      "path": "../locale"
+      "path": "../locale/tsconfig.client.json"
     },
     {
       "path": "../store"
-    },
-    {
-      "path": "../ui-conversation"
     },
     {
       "path": "../ui-dockkit"
@@ -46,6 +43,9 @@
     },
     {
       "path": "../../api/workspace-files/tsconfig.client.json"
+    },
+    {
+      "path": "../shortcuts/tsconfig.client.json"
     }
   ]
 }

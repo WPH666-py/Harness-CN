@@ -25,6 +25,8 @@ This package gives an agent a `bash` tool whose cwd, exported variables, functio
 <a id="use-this-package"></a>
 ## Use this package
 
+A new shell starts in the Session's current working directory. Once created, its directory and environment remain independent of later Session directory changes.
+
 Load this plugin in any composition where the agent should keep shell state between commands — for example long build sessions, activated environments, or scripts that export variables for later steps. It registers the `bash` tool and requires the `ctx.tools` and `ctx.terminals` services plus an owning agent session at execution time.
 
 ### When to choose it
@@ -56,7 +58,7 @@ Commands share one shell per agent, so state persists until an `exit`, a timeout
 
 ### What can go wrong
 
-A call without an owning agent session fails with `bash requires an owning agent session`, and a composition without a PTY backend activates the tool but fails its first call with `no PTY backend registered for "shell"`. An interactive foreground child (for example a REPL) returns early with partial output only where the backend proves its stdin wait; elsewhere the call runs to `timeoutMs`, which closes the uncertain shell and reports the reset. Cancellation also resets and discards the result, even when a complete status marker is already observable.
+A call without an owning agent session fails with `bash requires an owning agent session`, and a composition without a PTY backend activates the tool but fails its first call with `no PTY backend registered for "shell"`. An interactive foreground child (for example a REPL) returns early with partial output only where the backend proves its stdin wait; elsewhere the call runs to `timeoutMs`, which closes the uncertain shell and reports the reset. Cancellation also resets and discards the result, even when a complete status marker is already observable. After cleanup settles, ToolRuntime publishes `Error: tool call aborted` with code `ABORTED`; cancellation reasons are not rendered as command output. A queued cancelled call sends no command.
 
 -----
 
@@ -80,7 +82,6 @@ This section explains the design decisions behind the tool and points at the cod
 | File | Role |
 |---|---|
 | [`src/index.ts`](src/index.ts) | Plugin entry: shell registry, command wrapping, scrollback polling, extraction and rendering |
-| — | No runtime invariant companion is published; the adapter's private owner-to-shell cache has no observable event or data relation. Lifecycle tests prove its cleanup without adding a public API solely for an invariant. |
 
 ### Command flow
 
@@ -98,7 +99,7 @@ Read these pages when the package-level contract is not enough. They move from t
 - [terminal package map](../../terminal/README.md) — the persistent PTY capability family.
 - [terminal seam](../../terminal/terminal/README.md) — the `ctx.terminals` service behind the tool.
 - [terminal-bash backend](../../terminal/terminal-bash/README.md) — the default `shell` backend.
-- [tool-terminal](../../terminal/tool-terminal/README.md) — six model-facing terminal tools for interactive work.
+- [tool-terminal](../../experimental/tool-terminal/README.md) — six model-facing terminal tools for interactive work.
 - [Persistent PTY sessions Agent Note](../../../.agents/notes/implemented/feature/2026-07-16-persistent-pty-sessions.md) — the owner-scoped session design and its rationale.
 - [Generated tool catalog](../../../docs/tool-catalog.md#deepseek-aidsh-tool-bash-persistent) — the exact `bash` argument schema.
 - [Generated configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-tool-bash-persistent) — every accepted config field and its source declaration.
@@ -126,7 +127,7 @@ Prefix-stable while the configured description and schema remain unchanged.
 
 #### What the model sees
 
-Commands share one shell per Agent, so cwd, exported variables, activated environments, functions, and background jobs persist across calls. Results exclude private completion markers. When the shell reads stdin again without having printed the completion marker — after `exec`, an interrupt, or an interactive foreground child whose stdin wait the provider proves — the call returns the captured partial output, which can end with the backend's own prompt text. Every settled command appends `[Command finished with exit code N]`; a shell that exits before reporting that status instead appends `[shell exited: code N]`, `[shell killed by signal: SIG]`, or `[shell exited]` when the backend supplies neither, then resets and tells the model that the next call starts fresh. Long output keeps the earliest retained prefix plus a clipping notice. If the PTY has already dropped that prefix, the result says so explicitly instead of presenting a tail as complete output. Timeout returns bounded partial output followed by `[Command timed out or OOM]`, closes the uncertain shell, and reports the reset.
+Commands share one shell per agent, so cwd, exported variables, activated environments, functions, and background jobs persist across calls. Results exclude private completion markers. When the shell reads stdin again without having printed the completion marker — after `exec`, an interrupt, or an interactive foreground child whose stdin wait the provider proves — the call returns the captured partial output, which can end with the backend's own prompt text. Every settled command appends `[Command finished with exit code N]`; a shell that exits before reporting that status instead appends `[shell exited: code N]`, `[shell killed by signal: SIG]`, or `[shell exited]` when the backend supplies neither, then resets and tells the model that the next call starts fresh. Long output keeps the earliest retained prefix plus a clipping notice. If the PTY has already dropped that prefix, the result says so explicitly instead of presenting a tail as complete output. Timeout returns bounded partial output followed by `[Command timed out or OOM]`, closes the uncertain shell, and reports the reset.
 
 #### Token effect
 
@@ -143,7 +144,7 @@ Append-only tool results follow the reusable request prefix.
 
 These limits define when the tool is a poor fit or needs special care. They are current package constraints, not a task backlog.
 
-- **The tool requires an owning Agent and a real PTY backend** — agent-less calls and backends that cannot start an interactive shell fail.
+- **The tool requires an owning agent and a real PTY backend** — agent-less calls and backends that cannot start an interactive shell fail.
 - **An interactive foreground child returns early with partial output only where the subprocess provider proves its stdin wait** — elsewhere the call runs to `timeoutMs`.
 - **Explicit `exit` and timeout discard shell state** — cancellation also resets and discards the result, even when a complete status marker is already observable; the next call starts a fresh shell.
 - **Environment facts such as network access and package mirrors belong in the configured `description`** — not this package's default.

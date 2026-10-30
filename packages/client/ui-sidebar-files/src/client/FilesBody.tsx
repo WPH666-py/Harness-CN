@@ -19,8 +19,8 @@ import clsx from 'clsx'
 import type { RemoteFailure } from '@deepseek-ai/dsh-api-remotes/client'
 import type { PropsLocale, PropsRuntime, PropsStore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import {
-  Button, FileTypeIcon, IconFolderClose16, IconFolderOpen16, IconPlusOutline16, IconProjectAddOutline16,
-  IconRefreshOutline16, IconCopyOutline16, Input, Menu, Modal, classifyFileType,
+  Button, FileTypeIcon, IconFolderCloseMedium, IconFolderOpenMedium, IconPlusOutlineMedium, IconProjectAddOutlineMedium,
+  IconRefreshOutlineMedium, IconCopyOutlineMedium, Input, Menu, Modal, classifyFileType,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import { fileAddressFor, pathPartsOf } from '@deepseek-ai/dsh-util-workspace-path'
@@ -183,7 +183,7 @@ function Entry({ parent, entry, tree }: { parent: string; entry: WorkspaceDirect
           onClick={() => { tree.onSelect(path); tree.onToggle(path) }}
           onContextMenu={(event) => { tree.onMenu({ path, kind: 'directory' }, event) }}
         >
-          {expanded ? <IconFolderOpen16 className={css.icon} /> : <IconFolderClose16 className={css.icon} />}
+          {expanded ? <IconFolderOpenMedium className={css.icon} /> : <IconFolderCloseMedium className={css.icon} />}
           <span className={css.name}>{entry.name}</span>
         </button>
         {expanded && <ul className={css.level}><Level path={path} tree={tree} /></ul>}
@@ -223,10 +223,10 @@ function Draft({ draft, tree }: { draft: NewEntryDraft; tree: TreeContext }): Re
     <li className={css.item} data-files-draft={draft.kind}>
       <div className={css.row}>
         {draft.kind === 'directory'
-          ? <IconFolderClose16 className={css.icon} />
+          ? <IconFolderCloseMedium className={css.icon} />
           : <FileTypeIcon kind="other" size={16} className={css.fileIcon} />}
         <Input
-          className={css.draft}
+          className={css.draft ?? ''}
           value={name}
           aria-label={label}
           placeholder={label}
@@ -405,7 +405,7 @@ export function FilesBody({
             data-files-new-file
             onClick={() => { openDraft('file') }}
           >
-            <IconPlusOutline16 />
+            <IconPlusOutlineMedium />
           </button>
           <button
             type="button"
@@ -415,7 +415,7 @@ export function FilesBody({
             data-files-new-folder
             onClick={() => { openDraft('directory') }}
           >
-            <IconProjectAddOutline16 />
+            <IconProjectAddOutlineMedium />
           </button>
           <button
             type="button"
@@ -426,7 +426,7 @@ export function FilesBody({
             disabled={clipboard === null}
             onClick={() => { pasteInto(destination) }}
           >
-            <IconCopyOutline16 />
+            <IconCopyOutlineMedium />
           </button>
         </div>
         <button
@@ -437,7 +437,7 @@ export function FilesBody({
           data-files-reload
           onClick={reload}
         >
-          <IconRefreshOutline16 />
+          <IconRefreshOutlineMedium />
         </button>
       </div>
       {/* jscpd:ignore-end */}

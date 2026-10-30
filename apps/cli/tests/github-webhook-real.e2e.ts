@@ -4,15 +4,16 @@ import type { ChildProcess } from 'node:child_process'
 import { spawn } from 'node:child_process'
 import { createHmac, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
+import { initProfile, PROFILE_TEMPLATES } from '@deepseek-ai/dsh-app-boot'
 
 const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url))
 const BUILT_BIN = join(REPO_ROOT, 'apps/cli/lib/bin.js')
@@ -327,10 +328,10 @@ async function sendGitHubDelivery(origin: string): Promise<Response> {
   const body = JSON.stringify({
     action: 'ready_for_review',
     number: 4242,
-    repository: { full_name: 'deepseek-harness/deepseek-harness' },
+    repository: { full_name: 'deepseek-ai/deepseek-harness' },
     pull_request: {
       title: 'Real CLI webhook e2e',
-      html_url: 'https://github.com/deepseek-harness/deepseek-harness/pull/4242',
+      html_url: 'https://github.com/deepseek-ai/deepseek-harness/pull/4242',
       draft: false,
       user: { login: 'octocat' },
       base: { ref: 'master', sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
@@ -357,6 +358,18 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)('GitHub webhook through the real 
     const workspacePath = join(root, 'workspace')
     await mkdir(workspacePath)
     const canonicalWorkspacePath = await realpath(workspacePath)
+    const profile = join(root, '.dsh/profiles/web')
+    initProfile(profile, PROFILE_TEMPLATES.web!.bundles)
+    const manifestPath = join(profile, 'package.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { dependencies: Record<string, string> }
+    for (const name of ['@deepseek-ai/dsh-webhook', '@deepseek-ai/dsh-webhook-github']) {
+      const directory = dirname(fileURLToPath(import.meta.resolve(`${name}/package.json`)))
+      const link = join(profile, 'node_modules', name)
+      await mkdir(dirname(link), { recursive: true })
+      await symlink(directory, link, 'junction')
+      manifest.dependencies[name] = `file:${directory}`
+    }
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`)
     const webhookPort = await freePort()
     const child = spawn(process.execPath, [
       BUILT_BIN,
@@ -412,7 +425,7 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)('GitHub webhook through the real 
       const admitted = await eventually(
         child,
         observation.text,
-        'webhook provenance, title, and permission events',
+        'webhook source, title, and permission events',
         async () => await history(baseUrl, sessionId),
         (page) => {
           const events = historyEvents(page)

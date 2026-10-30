@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Trajectory image surfaces over the BUILT client graph (the ptc-fixture
-// idiom: real bundles via AppWebEntry, keyless fixture Connection RPC).
+// idiom: real bundles via AppWebEntry, keyless RemoteMock transport).
 // Opens the fixture history session whose turn 73 carries an image in BOTH a
 // user message and an assistant message, and pins the Trajectory surfaces:
 // selecting the ledger record renders the shared ui-attachment gallery from
@@ -77,11 +77,12 @@ it('renders durable record images in the Trajectory details panel from the share
   // The virtual ledger needs a measurable viewport; jsdom reports zero
   // heights, so pin one and neutralize the imperative tail scroll.
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(600)
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1000)
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
     configurable: true,
     value: () => {},
   })
-  mountAssembledApp()
+  mountAssembledApp({ remote: { developerTools: true } })
   await openFixtureSession()
   const chatSrc = document.querySelector('[data-align="end"] img')?.getAttribute('src')
   if (chatSrc === null || chatSrc === undefined) throw new Error('chat gallery image missing')

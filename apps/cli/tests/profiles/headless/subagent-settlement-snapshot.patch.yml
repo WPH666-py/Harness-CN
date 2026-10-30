@@ -24,7 +24,14 @@
 - insert:
     - id: llm-replay
       name: '@deepseek-ai/dsh-llm-replay'
+      config:
+        providers:
+          - id: deepseek-official
 
     # Hold the parent's second step until the manager notice enters its inbox.
     - id: settlement-fence
       name: './tests/fixtures/subagent-settlement-fence.ts'
+
+- id: session-log-deepseek
+  config:
+    enabled: false

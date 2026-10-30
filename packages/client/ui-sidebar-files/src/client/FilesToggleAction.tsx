@@ -13,7 +13,7 @@
  */
 import type { ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { IconFolderOpenOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconFolderOpenOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from './locales.ts'
 import css from './FilesToggleAction.module.css'
@@ -52,7 +52,7 @@ export function FilesToggleAction({ toggleWorkspaceFiles, t }: FilesToggleAction
       data-files-toggle
       onClick={toggleWorkspaceFiles}
     >
-      <IconFolderOpenOutline16 />
+      <IconFolderOpenOutlineMedium />
     </button>
   )
 }

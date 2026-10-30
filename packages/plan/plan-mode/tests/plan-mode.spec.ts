@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { provideWorkingDirectoryFixture } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { RUN_CODE_NAME, defineContentToolFixture } from '@deepseek-ai/dsh-tools'
@@ -10,7 +11,7 @@ import UserQuestionService, {
   UserQuestionError, type AskUserQuestionAnswer, type AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
-import { CodeRuntime, type CodeRunRequest, type CodeRunResult } from '@deepseek-ai/dsh-code-runtime'
+import { PtcRuntime, type PtcRunRequest, type PtcRunResult } from '@deepseek-ai/dsh-ptc-runtime'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { turnBoundaryProjectionDefinition } from '@deepseek-ai/dsh-agent-loop'
 import PlanModeController, { EXIT_PLAN_MODE, planProjectionDefinition, resolveConfig } from '../src/index.ts'
@@ -63,10 +64,10 @@ async function agentWithSession(
   // fold-only benches retain the direct lifecycle event used before it exists.
   const agents = ctx.get('agents')
   if (agents === undefined) {
-    ctx.emit('agent/created', { agent })
+    await ctx.serial('agent/created', { agent, source: 'startup' })
   } else {
     agents.enter(agent, owner)
-    agents.announce(agent)
+    await agents.announce(agent, 'startup')
   }
   return agent
 }
@@ -143,7 +144,7 @@ function header(session: Session): void {
 
 function noticeTexts(session: Session): string[] {
   return session.snapshotEvents()
-    .filter(event => event.type === 'user/message' && event.data.source.kind === 'plugin')
+    .filter(event => event.type === 'user/message' && event.data.source.kind !== 'user')
     .map(event => (event.data as { content: { type: string; text?: string }[] }).content.map(block => block.text ?? '').join(''))
 }
 
@@ -159,12 +160,12 @@ function registerNamedTools(ctx: Context, names: string[]): void {
 }
 
 /** Assert the mapped PTC mode SDK includes the stable plan exit binding and test tools. */
-function expectPlanCodeSdkBindings(sdk: string): void {
+function expectPlanPtcSdkBindings(sdk: string): void {
   expect(sdk).toContain('interface ToolArgsMap {')
   expect(sdk).toContain('read: Record<string, JsonValue>;')
   expect(sdk).toContain('write: Record<string, JsonValue>;')
   expect(sdk).toContain('interface ToolOutputMap {')
-  expect(sdk).toContain('exit_plan_mode: {\n    approved: true;\n  };')
+  expect(sdk).toContain('exit_plan_mode: {\n    approved: boolean;\n  };')
   expect(sdk).toContain('[K in ToolName]: (args: ToolArgsMap[K]) => Promise<ToolOutputMap[K]>;')
 }
 
@@ -506,12 +507,14 @@ describe('the soft layer', () => {
   })
 
   it('keeps run_code the only wire tool in plan mode under the registry PTC mode; the SDK gains the exit binding', async () => {
-    // Minimal scriptable runtime: the SDK section resolves ctx.codeRuntime at
+    // Minimal scriptable runtime: the SDK section resolves ctx.ptcRuntime at
     // assembly time (the ptc.spec fake's shape).
-    class FakeRuntime extends CodeRuntime {
+    class FakeRuntime extends PtcRuntime {
+      resolve(request: import('@deepseek-ai/dsh-ptc-runtime').PtcRunRequest): import('@deepseek-ai/dsh-ptc-runtime').PtcRunSpec { return { ...request, cwd: request.cwd ?? process.cwd(), timeoutMs: request.timeoutMs ?? 120_000 } }
+
       readonly language = 'typescript'
       readonly isolation = 'fake'
-      run(_request: CodeRunRequest): Promise<CodeRunResult> { return Promise.resolve({ logs: [] }) }
+      run(_request: PtcRunRequest): Promise<PtcRunResult> { return Promise.resolve({ logs: [] }) }
     }
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
@@ -526,36 +529,16 @@ describe('the soft layer', () => {
     // The SDK documents the full binding set plus the exit; plan mode never
     // prunes capabilities and restrains through guidance alone.
     const sdk = assembly.sections.find(section => section.name === 'tools:sdk')?.text ?? ''
-    expectPlanCodeSdkBindings(sdk)
-  })
-
-  it('keeps native wire schemas and the SDK in step under mode both', async () => {
-    class FakeRuntime extends CodeRuntime {
-      readonly language = 'typescript'
-      readonly isolation = 'fake'
-      run(_request: CodeRunRequest): Promise<CodeRunResult> { return Promise.resolve({ logs: [] }) }
-    }
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime, { mode: 'both' })
-    await ctx.plugin(FakeRuntime)
-    await mountProjectionSeam(ctx)
-    await ctx.plugin(PlanModeController, PLAN_CONFIG)
-    registerNamedTools(ctx, ['read', 'write'])
-    const agent = await agentWithSession(ctx, 'agent-1', { active: true })
-    const assembly = await assembleFor(ctx, agent)
-    // The stable registry contribution reaches both model interfaces: the exit tool
-    // is present on the wire AND in the SDK alongside the untouched toolset.
-    expect(assembly.tools.map(tool => tool.name).sort()).toEqual(['exit_plan_mode', 'read', 'run_code', 'write'])
-    const sdk = assembly.sections.find(section => section.name === 'tools:sdk')?.text ?? ''
-    expectPlanCodeSdkBindings(sdk)
+    expectPlanPtcSdkBindings(sdk)
   })
 
   it('keeps the PTC mode SDK byte-identical across mode switches', async () => {
-    class FakeRuntime extends CodeRuntime {
+    class FakeRuntime extends PtcRuntime {
+      resolve(request: import('@deepseek-ai/dsh-ptc-runtime').PtcRunRequest): import('@deepseek-ai/dsh-ptc-runtime').PtcRunSpec { return { ...request, cwd: request.cwd ?? process.cwd(), timeoutMs: request.timeoutMs ?? 120_000 } }
+
       readonly language = 'typescript'
       readonly isolation = 'fake'
-      run(_request: CodeRunRequest): Promise<CodeRunResult> { return Promise.resolve({ logs: [] }) }
+      run(_request: PtcRunRequest): Promise<PtcRunResult> { return Promise.resolve({ logs: [] }) }
     }
     const withPlanMode = new Context()
     await withPlanMode.plugin(SystemPrompt)
@@ -566,7 +549,7 @@ describe('the soft layer', () => {
     registerNamedTools(withPlanMode, ['read', 'write'])
     const agent = await agentWithSession(withPlanMode)
     const defaultSdk = (await assembleFor(withPlanMode, agent)).sections.find(section => section.name === 'tools:sdk')?.text ?? ''
-    expectPlanCodeSdkBindings(defaultSdk)
+    expectPlanPtcSdkBindings(defaultSdk)
     agent.session.append('plan/mode', { active: true })
     const planSdk = (await assembleFor(withPlanMode, agent)).sections.find(section => section.name === 'tools:sdk')?.text ?? ''
     expect(planSdk).toBe(defaultSdk)
@@ -620,7 +603,7 @@ describe('/plan', () => {
     const plainSteer = vi.fn()
     ;(plainAgent as unknown as { steer: typeof plainSteer }).steer = plainSteer
     expect(ctx.commands.list(plainAgent)).toEqual([
-      { name: 'plan', description: 'Enter or leave plan mode', input: { hint: '[off|message]', attachments: true } },
+      { definitionId: '@deepseek-ai/dsh-plan-mode', name: 'plan', description: 'Enter or leave plan mode', input: { hint: '[off|message]', attachments: true } },
     ])
 
     const signal = new AbortController().signal
@@ -925,10 +908,12 @@ describe('exit_plan_mode', () => {
 
   it('carries the exact plan through a PTC mode review and logs the nested dispatch', async () => {
     const plan = '# PTC mode plan\n\nUse the existing seam.'
-    class ExitRuntime extends CodeRuntime {
+    class ExitRuntime extends PtcRuntime {
+      resolve(request: import('@deepseek-ai/dsh-ptc-runtime').PtcRunRequest): import('@deepseek-ai/dsh-ptc-runtime').PtcRunSpec { return { ...request, cwd: request.cwd ?? process.cwd(), timeoutMs: request.timeoutMs ?? 120_000 } }
+
       readonly language = 'typescript'
       readonly isolation = 'fake'
-      async run(request: CodeRunRequest): Promise<CodeRunResult> {
+      async run(request: PtcRunRequest): Promise<PtcRunResult> {
         const exit = request.bindings[0]?.functions[EXIT_PLAN_MODE]
         if (exit === undefined) throw new Error('missing exit_plan_mode binding')
         return { logs: [], value: await exit({ plan }) }
@@ -938,6 +923,7 @@ describe('exit_plan_mode', () => {
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime, { mode: 'ptc' })
     await ctx.plugin(ExitRuntime)
+    provideWorkingDirectoryFixture(ctx)
     await mountProjectionSeam(ctx)
     await ctx.plugin(PlanModeController, PLAN_CONFIG)
     await ctx.plugin(AgentRegistry)
@@ -1066,13 +1052,13 @@ describe('exit_plan_mode', () => {
     const { ctx, agent, asked } = await setupWithReview({ selected: ['Approve'] })
     await callExit(ctx, agent)
     const question = asked[0]?.questions[0]
-    expect(question?.intent).toEqual({ kind: 'plan-review', approve: 'Approve' })
+    expect(question?.intent).toEqual({ kind: 'plan-review', approve: 'Approve', callId: `call-exit-${callCounter}` })
     // The named label is one this same question offers, so a UI honouring the
     // intent answers a choice this tool accepts.
     expect(question?.options?.map(option => option.label)).toContain(question?.intent?.approve)
   })
 
-  it('reads a dismissed review as the user taking the turn back, not as a failure', async () => {
+  it('reads a dismissed review as the user taking the turn back: a turn-concluding success, not a failure', async () => {
     const { ctx, agent } = await setupWithReview()
     registerQuestionAnswerer(ctx, {
       ask: () => Promise.reject(Object.assign(
@@ -1081,8 +1067,9 @@ describe('exit_plan_mode', () => {
       )),
     })
     const result = await callExit(ctx, agent)
-    expect(result.isError).toBe(true)
-    expect(result.content).toEqual([{ type: 'text', text: 'Error: The user dismissed the plan review to speak instead; stay in plan mode, stop here, and wait for their message.' }])
+    expect(result.isError).toBe(false)
+    expect(result.concludesTurn).toBe(true)
+    expect(result.content).toEqual([{ type: 'text', text: 'The user dismissed the plan review to reply in their own words; plan mode remains active.' }])
     expect(foldPlanMode(agent.session.snapshotEvents())).toBe(true)
   })
 

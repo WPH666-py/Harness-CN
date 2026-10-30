@@ -32,6 +32,7 @@ import { pathToFileURL } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
+import type {} from '@deepseek-ai/dsh-app-boot'
 import type {} from '@deepseek-ai/dsh-typert-registry'
 import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry/types'
 
@@ -56,6 +57,11 @@ export const Config: z<Config> = z.object({
 
 type ResolvedConfig = Required<Config>
 
+interface TypertArtifact {
+  packageName: string
+  path: string
+}
+
 const MEMBER_KINDS = new Set(['property', 'method', 'getter', 'setter', 'call', 'construct', 'index'])
 
 /** Resolve the `./typert` export to a relative path, accepting the string and one-level conditional forms. */
@@ -74,8 +80,9 @@ function typertExportOf(pkgName: string, exportsField: unknown): string | undefi
 /**
  * Narrow a dynamically imported typert module's `TYPERT` export to a
  * contribution owned by `pkgName`. This is the module/file boundary: the
- * manifest crosses from a build artifact into the typed registry, so every
- * field is checked and every failure names the package and the defect.
+ * manifest crosses from a build artifact into the typed registry. Dispatch
+ * facts and eager projection fields are checked; computed tool projections
+ * remain lazy until a consumer requests them. Failures name the package and defect.
  * @param pkgName - the package whose typert face was imported.
  * @param exported - the module's `TYPERT` export.
  * @returns the validated contribution.
@@ -102,9 +109,8 @@ export function validateTypertManifest(pkgName: string, exported: unknown): Type
     }
     const schema = value as Record<string, unknown>
     requireString(pkgName, schema, 'name', 'schema')
-    const resolved = generatedSchema(schema)
-    if (typeof resolved !== 'object' || resolved === null || !('_zod' in resolved)) {
-      throw new Error(`typert-loader: ${pkgName} TYPERT schema "${schema.name as string}" is not a zod v4 schema instance`)
+    if (typeof schema.create !== 'function') {
+      throw new Error(`typert-loader: ${pkgName} TYPERT schema "${schema.name as string}" has no create() factory`)
     }
   }
   const model = requireObject(pkgName, manifest.model, 'TYPERT.model')
@@ -160,6 +166,12 @@ function requireString(pkgName: string, value: Record<string, unknown>, key: str
   }
 }
 
+function requireOptionalString(pkgName: string, value: Record<string, unknown>, key: string, subject: string): void {
+  if (value[key] !== undefined && typeof value[key] !== 'string') {
+    throw new Error(`typert-loader: ${pkgName} ${subject}.${key} must be a string`)
+  }
+}
+
 function requireDocumentation(pkgName: string, value: Record<string, unknown>, subject: string): void {
   requireArray(pkgName, value.tags, `${subject}.tags`)
   for (const key of ['description', 'summary', 'jsDoc'] as const) {
@@ -194,6 +206,10 @@ function requireInvocation(pkgName: string, value: unknown): void {
     requireString(pkgName, invocation, key, 'invocation')
   }
   const id = invocation.id as string
+  requireOptionalString(pkgName, invocation, 'description', `invocation "${id}"`)
+  if (invocation.mode !== undefined && invocation.mode !== 'stream') {
+    throw new Error(`typert-loader: ${pkgName} invocation "${id}" mode must be "stream" when present`)
+  }
   const receiver = requireObject(pkgName, invocation.invocation, `invocation "${id}" receiver`)
   if (receiver.kind === 'context') {
     requireString(pkgName, receiver, 'context', `invocation "${id}" Context receiver`)
@@ -209,6 +225,7 @@ function requireInvocation(pkgName: string, value: unknown): void {
     const parameter = requireObject(pkgName, valueParameter, `invocation "${id}" parameter`)
     requireString(pkgName, parameter, 'name', `invocation "${id}" parameter`)
     requireString(pkgName, parameter, 'wire', `invocation "${id}" parameter`)
+    requireOptionalString(pkgName, parameter, 'description', `invocation "${id}" parameter`)
     const wire = parameter.wire as string
     if (wires.has(wire)) {
       throw new Error(`typert-loader: ${pkgName} invocation "${id}" repeats wire field "${wire}"`)
@@ -226,6 +243,7 @@ function requireInvocation(pkgName: string, value: unknown): void {
     }
     parameters.set(wire, parameter)
     requireStrictCodec(pkgName, parameter.codec, `invocation "${id}" parameter codec`)
+    if (parameter.strictCodec !== undefined) requireStrictCodec(pkgName, parameter.strictCodec, `invocation "${id}" strict input codec`)
   }
   if (invocation.cancellation !== undefined) {
     const cancellation = requireObject(pkgName, invocation.cancellation, `invocation "${id}" cancellation`)
@@ -251,6 +269,17 @@ function requireInvocation(pkgName: string, value: unknown): void {
     throw new Error(`typert-loader: ${pkgName} invocation "${id}" repeats Context wire field "${receiver.wire as string}"`)
   }
   requireStrictCodec(pkgName, invocation.result, `invocation "${id}" result codec`)
+  if (invocation.input !== undefined || invocation.invoke !== undefined) {
+    if (receiver.kind !== 'direct') {
+      throw new Error(`typert-loader: ${pkgName} invocation "${id}" input/invoke require a direct receiver`)
+    }
+    if (typeof invocation.input !== 'function') {
+      throw new Error(`typert-loader: ${pkgName} invocation "${id}" has no input() selector`)
+    }
+    if (typeof invocation.invoke !== 'function') {
+      throw new Error(`typert-loader: ${pkgName} invocation "${id}" has no invoke() function`)
+    }
+  }
   if (invocation.sourceLocation !== undefined) {
     const location = requireObject(pkgName, invocation.sourceLocation, `invocation "${id}" sourceLocation`)
     requireString(pkgName, location, 'file', `invocation "${id}" sourceLocation`)
@@ -262,31 +291,34 @@ function requireInvocation(pkgName: string, value: unknown): void {
   }
 }
 
+function requireSchemaProjection(pkgName: string, value: Record<string, unknown>, subject: string): void {
+  if (typeof value.create !== 'function') {
+    throw new Error(`typert-loader: ${pkgName} ${subject} has no create() factory`)
+  }
+  // Inspect supplied data without invoking the factory's cached projection getters.
+  const fields = Object.getOwnPropertyDescriptors(value)
+  for (const key of ['description', 'jsonSchemaError']) {
+    const field: unknown = fields[key]?.value
+    if (field !== undefined && typeof field !== 'string') {
+      throw new Error(`typert-loader: ${pkgName} ${subject}.${key} must be a string`)
+    }
+  }
+  const schema: unknown = fields.jsonSchema?.value
+  if (schema !== undefined) requireObject(pkgName, schema, `${subject}.jsonSchema`)
+}
+
 function requireStrictCodec(pkgName: string, value: unknown, subject: string): void {
   const codec = requireObject(pkgName, value, subject)
   if (codec.mode !== 'strict') {
     throw new Error(`typert-loader: ${pkgName} ${subject} must use a strict codec`)
   }
   requireString(pkgName, codec, 'typeSymbol', subject)
-  const schema = generatedSchema(codec)
-  if (typeof schema !== 'object'
-    || schema === null
-    || !('_zod' in schema)
-    || typeof (schema as { parse?: unknown }).parse !== 'function') {
-    throw new Error(`typert-loader: ${pkgName} ${subject} is not backed by a zod v4 schema`)
+  for (const method of ['decode', 'encode']) {
+    if (codec[method] !== undefined && typeof codec[method] !== 'function') {
+      throw new Error(`typert-loader: ${pkgName} ${subject} ${method} must be a function`)
+    }
   }
-}
-
-/**
- * Resolve one generated schema declaration. Both generated forms are accepted:
- * the eager `schema` this line's generator emits, and the lazy `create()`
- * factory newer generators emit for self-referential schemas.
- * @param source - codec or named-schema record carrying the declaration.
- * @returns the runtime schema, or `undefined` when neither form is present.
- */
-function generatedSchema(source: Record<string, unknown>): unknown {
-  if (source.schema !== undefined) return source.schema
-  return typeof source.create === 'function' ? (source.create as () => unknown)() : undefined
+  requireSchemaProjection(pkgName, codec, subject)
 }
 
 /**
@@ -303,7 +335,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   if (ctx.baseUrl === undefined) {
     throw new Error('typert-loader: ctx.baseUrl is unset — the loader needs the config-tree anchor to resolve plugin packages')
   }
-  const require = createRequire(ctx.baseUrl)
+  const baseUrl = ctx.baseUrl
+  const require = createRequire(baseUrl)
   const configured = new Set((config as ResolvedConfig).packages)
 
   // Registered contributions by entry name; the disposer withdraws the entry's registration.
@@ -311,9 +344,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // In-flight import/register tasks by entry name.
   const pending = new Map<string, Promise<void>>()
   // Artifact paths by package name. Negative verdicts (unresolvable specifier —
-  // loader builtins, subpath rows — or no typert export) are cached as null and
-  // never expire: plugin-set changes take effect on restart.
-  const artifactPath = new Map<string, string | null>()
+  // unconfigured loader builtins and subpath rows — or no typert export) are
+  // cached as null and never expire: plugin-set changes take effect on restart.
+  const artifactPath = new Map<string, TypertArtifact | null>()
   // Imported+validated manifests by package name (one import per package per process).
   const manifests = new Map<string, Promise<TypertContribution>>()
   const dirty = new Set<string>()
@@ -326,12 +359,29 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
   }, 'typert loader lifetime')
 
-  const resolveArtifact = (pkgName: string): string | null => {
+  const resolveArtifact = (pkgName: string): TypertArtifact | null => {
     const cached = artifactPath.get(pkgName)
     if (cached !== undefined) return cached
+    const firstSlash = pkgName.indexOf('/')
+    if (firstSlash >= 0 && (pkgName[0] !== '@' || pkgName.indexOf('/', firstSlash + 1) >= 0)) {
+      if (configured.has(pkgName)) {
+        throw new Error(
+          `typert-loader: configured package "${pkgName}" cannot be resolved from the config tree — add it to the composition package dependencies or remove it from packages`,
+        )
+      }
+      artifactPath.set(pkgName, null)
+      return null
+    }
     let pkgPath: string
+    let pkg: Record<string, unknown> | undefined
     try {
-      pkgPath = require.resolve(`${pkgName}/package.json`)
+      const packages = ctx.get('pluginPackages')
+      const resolvedPackage = packages?.packageOf(pkgName, baseUrl)
+      if (packages !== undefined && resolvedPackage === undefined) throw new Error('package is absent from the active resolver')
+      pkgPath = resolvedPackage === undefined
+        ? require.resolve(`${pkgName}/package.json`)
+        : resolvedPackage.manifestPath
+      pkg = resolvedPackage?.manifest
     } catch (cause) {
       if (configured.has(pkgName)) {
         throw new Error(
@@ -344,12 +394,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       artifactPath.set(pkgName, null)
       return null
     }
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as Record<string, unknown>
-    const rel = typertExportOf(pkgName, pkg.exports)
+    pkg ??= JSON.parse(readFileSync(pkgPath, 'utf8')) as Record<string, unknown>
+    const manifestName = typeof pkg.name === 'string' ? pkg.name : pkgName
+    const rel = typertExportOf(manifestName, pkg.exports)
     if (rel === undefined && configured.has(pkgName)) {
       throw new Error(`typert-loader: configured package "${pkgName}" does not export "${TYPERT_HOST_EXPORT}"`)
     }
-    const resolved = rel === undefined ? null : join(dirname(pkgPath), rel)
+    const resolved = rel === undefined ? null : { packageName: manifestName, path: join(dirname(pkgPath), rel) }
     artifactPath.set(pkgName, resolved)
     return resolved
   }
@@ -389,9 +440,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       return undefined
     }
     if (registered.has(entryName) || pending.has(entryName)) return undefined
-    const path = resolveArtifact(entryName)
-    if (path === null) return undefined
-    const task = loadManifest(entryName, path).then((manifest) => {
+    const artifact = resolveArtifact(entryName)
+    if (artifact === null) return undefined
+    const task = loadManifest(artifact.packageName, artifact.path).then((manifest) => {
       // The entry may have unmounted (or already re-registered) while the import was in flight.
       if (!active || !qualifies(entryName) || registered.has(entryName)) return
       registered.set(entryName, ctx.typert.register(manifest))

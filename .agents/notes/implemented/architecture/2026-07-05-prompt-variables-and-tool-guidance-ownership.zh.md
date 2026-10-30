@@ -18,7 +18,7 @@ Status: implemented
 
 ## 决策
 
-**一条原则：提示词中的每个事实恰好有一个归属方。** 模型名称和工作区是配置/会话事实 → harness 将它们暴露为变量，persona 引用它们。每个工具的语义和何时使用 → 工具的 `description`。description 无法承载的跨调用习惯 → 包的提示词 section。产品名称和 SDK 身份说明 → 静态的 `harness:identity` section。部署角色与行为 → 部署的 persona。
+**一条原则：提示词中的每个事实恰好有一个归属方。** 循环将路由事实暴露为 persona 引用的变量。工作目录服务通过用户上下文提供当前目录。每个工具的语义和选择指导属于工具描述；跨调用习惯属于其包的提示词 section。产品名称和 SDK 身份说明属于静态的 `harness:identity` section。部署角色与行为属于部署的 persona。
 
 ### 组装上下文
 
@@ -26,9 +26,9 @@ Status: implemented
 
 ### 提示词变量
 
-插件通过 `ctx.systemPrompt.variable(name, provider)` 注册 `{{name}}` 值。组装过程将它们解析到 waterfall 可见的变量映射中。渲染阶段拒绝以下情况：引用未知的自有属性、已注册的提供方返回 `undefined`、格式错误的完整引用、以及仍包含闭合 `}}` 的不平衡引用；孤立的未匹配 `{{` 保留为行文，替换后的值不会被重新扫描。注册阶段拒绝无效或重复的变量名，section 名称也必须唯一。
+插件通过 `ctx.systemPrompt.variable(name, provider)` 注册 `{{name}}` 值。组装过程将它们解析到 waterfall 可见的变量映射中。渲染阶段拒绝以下情况：引用未知的自有属性、已注册的提供方返回 `undefined`、格式错误的完整引用、以及仍包含闭合 `}}` 的不平衡引用；孤立的未匹配 `{{` 保留为行文，替换后的值不会被重新扫描。注册阶段拒绝无效或重复的变量名，section 名称也必须唯一。段可设置 `interpolate: false` 来原样保留生成的文档；`tools:sdk` 使用此设置，因为工具描述和 schema 可能会介绍自身的 `{{…}}` 语法。
 
-`dsh-agent-loop` 注册两个内置变量，均为上下文 agent 的纯投影：`model`（= `options.model`）和 `cwd`（= `session.header.cwd`）。示例 persona 写 `powered by the {{model}} model`——模型名称只在 `model:` 配置键中声明一次。`{{cwd}}` 仅在 ACP 示例中演示：每个 ACP 会话携带客户端的 cwd，而配置预创建的 stdio agent 没有 cwd（在那里声称 `{{cwd}}` 的 persona 会导致该轮次失败——这是有意为之）。变量留在 loop 插件上（不同于下面的 section）：它们是本循环驱动的 agent 的运行时事实，替换循环自行提供自己的变量。
+`dsh-agent-loop` 注册 `provider`（= `options.provider`）和 `model`（= `options.model`），它们都是上下文 agent 的纯投影。示例 persona 引用 `{{model}}`，由路由拥有模型名称。这些变量保留在 loop 插件上，因为它们描述该循环驱动的 agent；替换循环自行提供自己的变量。[Session 工作目录决策](2026-09-13-session-working-directory.zh.md) 拥有目录状态及其字面用户上下文位置；循环不注册 `cwd`。
 
 ### Persona 作为 order-0 section
 
@@ -47,20 +47,19 @@ Status: implemented
 - **循环自行组合一行 identity 文本**：在必须保持精简的那个包（「用插件，不改循环」）中硬编码面向模型的行文，且在 section 流水线之外构成第二条组合路径。（identity 确实以代码字面量交付——但作为 `dsh-system-prompt` 注册的普通 section，其 `system-prompt/assemble` waterfall 仍是部署需要移除它时的逃生阀。）
 - **通过 `agent/request` waterfall 注入模型名称**：提示词文本会在两处组合，更早渲染的 persona 也可能与最终已路由 header 不一致。拥有延迟路由的请求插件还必须拥有该模型在提示词中更早出现的声明。
 - **在每个 persona 中手写模型名称**：与上方一行的 `model:` 键重复，配置修改后静默失实；正是本决策要治愈的病症。
-- **宽松插值（未知引用保留原样或替换为空）**：一个拼写错误 `{{modle}}`（或一个空洞）会被发送给模型，直到 transcript（文本记录）审查时才会被发现。
+- **宽松插值（未知引用保留原样或替换为空）**：一个拼写错误 `{{modle}}`（或一个空洞）会被发送给模型，直到 transcript（文本记录）审查时才会被发现。仅保留未知名称仍会替换工具文档中的已注册名称。
 - **在配置中为每个 subagent 实例编写措辞**：面向模型的行文回到每个部署 × 实例中，重蹈在 leaf YAML 中手写指导的漂移。**根据提供方名称选择措辞**：`providerName` 本身是配置，重命名提供方后会静默获得错误的措辞。
 - **在 `apply` 时解析提供方（加载顺序要求）**与**仅用 section 承载 subagent 措辞（在 assemble 时惰性解析）**：提供方生命周期事件的替代方案；两者均在[提供方生命周期事件 Agent Note](../../archived/architecture/2026-07-05-subagent-provider-lifecycle-events.md)中被否决。
 
 ## 不在范围内
 
 - 更多变量（`date`、platform、git 状态）：注册表使每个变量成为拥有该事实的插件的一行贡献；本 Agent Note 不认领任何一个。
-- 为预创建的 stdio agent 提供配置 `cwd`（可让 stdio persona 使用 `{{cwd}}` 并按真实路径分区持久化）：推迟到会话 cwd 方案重新讨论时。
 
 ## 交付的不变式
 
 - tui-agent 的提示词通过一条组装路径依次渲染 identity、带插值模型名的 persona，然后是 fs/shell/web 指导。
 - fork 和 fresh subagent 的描述反映提供方是否继承已完成的对话轮次；工具随提供方生命周期变化而出现、消失和重新措辞。
-- 未知、无值、格式错误或不平衡的变量引用会指明 section 名称并抛出异常；重复的 section、变量和工具注册同样抛出异常。
+- 在启用插值的段中，未知、无值、格式错误或不平衡的变量引用会指明 section 名称并抛出异常；重复的 section、变量和工具注册同样抛出异常。
 - 快照回放与提示词无关：它按轮次和步骤索引已记录的分片流，不比较发出的请求。
 
 ## 后果
@@ -68,5 +67,5 @@ Status: implemented
 - 组装后的提示词中每个事实现在恰好有一个归属方，leaf YAML 中手工维护的工具行文已消除：加载或卸载一个工具插件不再需要编辑任何部署的 persona。
 - `{{model}}` 在组装时反映 `AgentOptions.model`。如果一个插件在 `agent/request` waterfall 中切换模型，提示词对该步骤的声明就会过时；如果一个插件在那里提供模型（options.model 未设置——循环文档中记载的回退路径），变量在渲染时无值，包含 `{{model}}` 的 persona 会在 waterfall 运行前失败。两者的补救方式相同，就是归属规则本身：拥有延迟绑定模型事实的插件在 `system-prompt/assemble` waterfall 上提前声明它（`assembly.variables['model'] = …`）——一个归属方，两处声明；一个循环测试端到端固定了 supply 路径。已接受。
 - 当一个已绑定的提供方不存在时（尚未激活、已卸载、HMR（热模块替换）重载中），subagent 工具不存在，该窗口内的模型请求中不会包含它。这是诚实的状态——替代方案是注册一个 description 或执行都不可信的工具。
-- 严格性意味着 persona 可能在渲染时导致轮次失败（例如在无 cwd 的会话上使用 `{{cwd}}`）。失败是受控的——该轮次以 `error` 结束，循环存活——且这是一个我们希望明确暴露的撰写错误。
-- 目前没有在提示词行文中转义字面 `{{name}}` 的语法；如果真实提示词确实需要，再行添加。
+- 严格插值在模型请求之前拒绝缺失或无值的变量。该轮次以 `error` 结束，循环仍可服务后续轮次；引用 `{{model}}` 的 persona 要求组合它的运行时提供该值。
+- 插值文本仍不支持行内转义；字面文本段无需转义。PTC 单元测试覆盖两种模式和运行时语言，录制的 `ptc-turn` 场景在模型可见的提示词中保留工具模板示例。

@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-desktop",
   "description": "Electron desktop shell for an isolated pnpm-installed dsh runtime",
-  "version": "0.1.5-rc.37",
+  "version": "0.2.1-rc.4",
   "private": true,
   "license": "MIT",
   "author": "Harness-CN",
@@ -9,6 +9,7 @@
   "main": "lib/main.js",
   "scripts": {
     "build": "tsc -b && tsdown",
+    "bundle": "tsdown --config-loader native",
     "dev": "tsx scripts/dev.ts",
     "start": "tsx scripts/dev.ts --skip-build",
     "prepare:runtime": "tsx scripts/prepare-runtime.ts",
@@ -34,7 +35,7 @@
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "3.1067.0",
-    "@deepseek-ai/dsh-home-paths": "workspace:^",
+    "@deepseek-ai/dsh-home-paths": "workspace:*",
     "@electron/notarize": "2.5.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.20.0",

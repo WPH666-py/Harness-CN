@@ -262,7 +262,7 @@ export async function writeImageOutput(
   data: Uint8Array,
 ): Promise<WrittenImage> {
   if (outputPath.trim().length === 0) throw new Error('output_path must be a non-empty string')
-  const target = await runtime.ctx.fs.resolve(outputPath, sessionResolveOptions(exec, outputPath))
+  const target = await runtime.ctx.fs.resolve(outputPath, await sessionResolveOptions(runtime.ctx, exec))
   const outcome = await runtime.ctx.fs.writeBytes(target, data, undefined, exec.signal)
   // Publishing the observation is what lets the read-before-write policy see this file at
   // the version the write produced, exactly as the `write` tool does after its own write.

@@ -18,6 +18,7 @@ import {
   loadLayeredEnv,
   loadProfileDirectory,
   loadOverlayPatches,
+  type ProfileContext,
 } from '@deepseek-ai/dsh-app-boot'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
@@ -61,6 +62,14 @@ export type DesktopHostEvent = {
   readonly type: 'ready'
   readonly protocolVersion: typeof DESKTOP_HOST_PROTOCOL_VERSION
   readonly dshVersion: string
+  /**
+   * Absolute URL carrying this process's launch token for the root path.
+   *
+   * A carrier that serves the page itself (the Tauri shell) has to hand the browser one chance to
+   * exchange the token for the signed cookie every later request is authenticated by. Without it the
+   * page renders but every connection stays unauthenticated, which is what "Loading plugins…" means.
+   */
+  readonly launchUrl: string
 } | {
   readonly type: 'fatal'
   readonly message: string
@@ -74,6 +83,8 @@ export interface DesktopHostController {
   fetch(command: DesktopHostFetchCommand, body: ReadableStream<Uint8Array> | null): Promise<void>
   /** Abort one in-flight request. */
   cancel(streamId: number): void
+  /** Absolute URL carrying this launch's token for the root path. */
+  readonly launchUrl: string
   /** Mount the profile bundles this boot deferred, in order, reporting each one. */
   mountDeferred(): Promise<void>
   /** Stop accepting messages and await complete host teardown. */
@@ -156,14 +167,15 @@ function connect(){
     wake(entry)
   }
   ws.onclose=function(){
-    socket=null;muxBroken=true
+    if(socket===ws)socket=null
     for(var key in pending){
       var entry=pending[key]
       if(!entry.done&&entry.error===null)entry.error=new Error('stream mux closed')
       wake(entry)
     }
   }
-  ws.onerror=function(){muxBroken=true}
+  // An error is followed by close; banning the mux here made every later stream fall back.
+  ws.onerror=function(){}
   socket=ws
   return ws
 }
@@ -194,7 +206,7 @@ async function* openStream(endpoint,payload,signal){
         ws.addEventListener('open',function(){clearTimeout(timer);resolve()},{once:true})
         ws.addEventListener('error',function(){clearTimeout(timer);reject(new Error('stream mux error'))},{once:true})
       })
-    }catch(error){muxBroken=true;ws=null}
+    }catch(error){if(socket===ws)socket=null;ws=null}
   }
   if(ws===null||ws.readyState!==1){
     yield* fallback(endpoint,payload,signal)
@@ -220,13 +232,12 @@ async function* openStream(endpoint,payload,signal){
     send({t:'cancel',id:id})
   }
 }
-return {ownsHost:true,openStream:openStream}
+return {ownsHost:true,openStream:openStream,streamBaseUrl:location.origin}
 })()
 ;(function(){
   try{
     if((location.search||"").indexOf("panel=qq-console")===-1)return;
-    // 这个窗口只承载控制台：隐藏应用本体，让面板铺满整个窗口。
-    var chrome=document.createElement("style");
+    // 杩欎釜绐楀彛鍙壙杞芥帶鍒跺彴锛氶殣钘忓簲鐢ㄦ湰浣擄紝璁╅潰鏉块摵婊℃暣涓獥鍙ｃ€?    var chrome=document.createElement("style");
     chrome.id="qq-console-chrome";
     chrome.textContent="body>*:not(#qqs-dock-panel){display:none!important}"
       +"#qqs-dock-panel{position:fixed!important;inset:0!important;width:auto!important;height:auto!important;max-width:none!important;max-height:none!important;margin:0!important;border-radius:0!important}";
@@ -267,6 +278,25 @@ function isProjectPath(projectDir: string, target: string): boolean {
   const root = realpathSync(projectDir)
   const path = realpathSync(target)
   return path === root || path.startsWith(root + sep)
+}
+
+/**
+ * Read the bundle packages the installed profile was composed from.
+ * @param projectDir - installed desktop profile holding `package.json`.
+ * @returns the recorded bundle names, or an empty list when the manifest is unreadable.
+ */
+function profileBundles(projectDir: string): readonly string[] {
+  try {
+    const manifest = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf8')) as {
+      dsh?: { profile?: { bundles?: readonly string[] } }
+    }
+    return manifest.dsh?.profile?.bundles ?? []
+  } catch (error) {
+    // An unreadable manifest cannot describe its bundles; the launcher still boots
+    // because every other input is already resolved from the files it did read.
+    if (error instanceof Error) return []
+    throw error
+  }
 }
 
 /**
@@ -364,6 +394,8 @@ function remoteStreamHandler(ctx: Context): ConnectionFetchHandler {
       if (request.method !== 'POST') return new Response(null, { status: 405 })
       const gateway = ctx.get('typertGateway')
       if (gateway === undefined) return new Response('gateway unavailable', { status: 503 })
+      const connection = ctx.get('connection')
+      if (connection === undefined) return new Response('connection unavailable', { status: 503 })
       let body: unknown
       try {
         body = await request.json()
@@ -373,6 +405,11 @@ function remoteStreamHandler(ctx: Context): ConnectionFetchHandler {
       if (!isRecord(body) || typeof body.endpoint !== 'string') {
         return new Response('invalid stream request', { status: 400 })
       }
+      // The shell already admitted this request: it owns the LAN gate, the loopback listener and the
+      // page's multiplexer, and it reaches this handler in-process. Asking BrowserAuth for a browser
+      // cookie again would demand a launch-token round trip no native shell can complete, so the lane
+      // runs as the owner Peer exactly like the shared `/api` route does.
+      const peer = connection.browserPeer
       const abort = new AbortController()
       const cancel = (): void => { abort.abort(request.signal.reason) }
       request.signal.addEventListener('abort', cancel, { once: true })
@@ -380,7 +417,15 @@ function remoteStreamHandler(ctx: Context): ConnectionFetchHandler {
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
           try {
-            const values = await gateway.wireStream.open(body.endpoint as string, body.payload, abort.signal)
+            // The shell posts one logical stream at a time and never sends uplink items, so an
+            // exhausted iterator is the whole Client-to-Host lane.
+            const values = await gateway.wireStream.open(
+              body.endpoint as string,
+              body.payload,
+              (async function* empty() {})(),
+              peer,
+              abort.signal,
+            )
             for await (const value of values) {
               controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`))
             }
@@ -426,6 +471,20 @@ export async function runDesktopHost(
   const plan = desktopPatches(absoluteProject, options.allowLinkedPackages === true)
   const ctx = await boot('dsh desktop', rootConfig, structuredClone(plan.core), (hostCtx) => {
     current = hostCtx
+    // The profile launcher owns profile identity: settings and config-editor stay
+    // pending until this presence is published, and every plugin that injects
+    // `settings` (mail, QQ, editor connectors) waits on them in turn.
+    hostCtx.provide('profileContext', {
+      name: 'desktop',
+      dir: absoluteProject,
+      patchPath: join(absoluteProject, 'cordis.patch.yml'),
+      installAnchor: absoluteProject,
+      startedBundles: profileBundles(absoluteProject),
+      cwd: process.cwd(),
+      home: process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? absoluteProject, '.dsh'),
+      overlays: [],
+      telemetryDisabledEnv: process.env.DSH_TELEMETRY_DISABLED,
+    } satisfies ProfileContext)
     hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment)
     provideCmdline(hostCtx, { args: [], exit: () => {} })
   })
@@ -453,31 +512,70 @@ export async function runDesktopHost(
    * read-only, so only a read the webserver did not claim is offered to them afterwards.
    *
    * `/plugins` used to be claimed here as well, on the reading that every such path is a client
-   * bundle. That is only true of `…/client.js`: a plugin's Host half registers its own routes
+   * bundle. That is only true of `鈥?client.js`: a plugin's Host half registers its own routes
    * under the same prefix (`/plugins/<package>/status` is one), so claiming the whole prefix
-   * answered those routes with the bundle table's 404 — the account panel that polls its status
-   * showed "请求失败 / HTTP 404" while the plugin itself was running fine.
+   * answered those routes with the bundle table's 404 鈥?the account panel that polls its status
+   * showed "璇锋眰澶辫触 / HTTP 404" while the plugin itself was running fine.
    * @param request - request no in-process handler claimed.
    * @returns the plugin route's response, or the shell's own asset response.
    */
+  // The browser's `/connect` handshake mints an API cookie scoped to this listener's own authority,
+  // and the shell serves the page from a different one, so the cookie cannot travel with the page's
+  // own requests. Mint it once here instead and attach it to the webserver leg, which is the only
+  // leg that checks it: `/api` is answered locally by the shared connection handler.
+  let apiCookie: Promise<string | undefined> | undefined
+  const webserverCookie = (): Promise<string | undefined> => {
+    apiCookie ??= (async (): Promise<string | undefined> => {
+      const port = webServer?.port
+      if (port === undefined) return undefined
+      const token = new URL(connection.authenticatedUrl('http://127.0.0.1/'), 'http://127.0.0.1').searchParams.get('token')
+      if (token === null) return undefined
+      try {
+        const response = await fetch(
+          `http://127.0.0.1:${String(port)}/connect?token=${encodeURIComponent(token)}&interactions=none`,
+          { redirect: 'manual' },
+        )
+        const cookies = response.headers.getSetCookie()
+          .map((one) => one.split(';')[0] ?? '')
+          .filter((one) => one !== '')
+        return cookies.length === 0 ? undefined : cookies.join('; ')
+      } catch {
+        return undefined
+      }
+    })()
+    return apiCookie
+  }
+
   const pluginRoutes = async (request: Request): Promise<Response> => {
     const port = webServer?.port
-    if (unclaimedRequestOwner({ method: request.method, port }) === 'assets') return assets.fetch(request)
+    if (unclaimedRequestOwner({ method: request.method, port }) === 'assets') {
+      return assets.fetch(request, connection.browserPeer)
+    }
     const url = new URL(request.url)
+    const forwarded = headersForAuthority(request.headers, `http://127.0.0.1:${String(port)}`)
+    const cookie = await webserverCookie()
+    if (cookie !== undefined) forwarded.set('cookie', cookie)
     const init: NodeRequestInit = {
       method: request.method,
-      headers: headersForAuthority(request.headers, `http://127.0.0.1:${String(port)}`),
+      headers: forwarded,
       signal: request.signal,
       // A request body is a stream that can be read once, so it is forwarded rather than
       // rebuilt; `duplex: 'half'` is what Node requires to send a streaming body.
       ...(request.body === null ? {} : { body: request.body, duplex: 'half' }),
     }
+    // Redirects belong to the browser, not to this carrier: `/connect` answers 302 with the API
+    // cookie in `Set-Cookie`, and following it here would spend that redirect in a fetch that
+    // keeps no cookies, turning the handshake into a 401 from the `/api` route.
     const routed = await fetch(new Request(
       new URL(`${url.pathname}${url.search}`, `http://127.0.0.1:${String(port)}`),
-      init,
+      { ...init, redirect: 'manual' },
     ))
+    // An API route answers its own 404: falling through to the asset handler would hand a client
+    // fetch (or an SSE stream) the index page, which is how every unclaimed /api call turned into
+    // 'response has a MIME type text/html' instead of the 404 that names the missing route.
+    if (url.pathname.startsWith('/api/')) return routed
     return unclaimedRequestOwner({ method: request.method, port, status: routed.status }) === 'assets'
-      ? assets.fetch(request)
+      ? await assets.fetch(request, connection.browserPeer)
       : routed
   }
 
@@ -486,13 +584,20 @@ export async function runDesktopHost(
    *
    * Exact Fetch routes and the shared RPC interceptor answer first. A request neither
    * owns still belongs to the composed webserver, whose longest-prefix dispatch serves
-   * plugin Host routes registered under `/api` — the Mobile access admin API is one. In
+   * plugin Host routes registered under `/api` 鈥?the Mobile access admin API is one. In
    * the browser the webserver already sits in front of this handler; here the carrier is
    * the front door, so the webserver's dispatch has to be supplied as the fallback.
    * @param request - authenticated `/api` request carried from the WebView.
    * @returns the in-process owner's response, the plugin route's, or the asset answer.
    */
-  const api = connection.createSharedFetchHandler('/api', pluginRoutes)
+  const shared = connection.createSharedFetchHandler('/api')
+  const api: ConnectionFetchHandler = {
+    requestBodyMode: shared.requestBodyMode,
+    fetch: async (request, peer) => {
+      const owned = await shared.fetch(request, peer)
+      return owned.status === 404 ? await pluginRoutes(request) : owned
+    },
+  }
 
   const dispose = async (): Promise<void> => {
     disposing ??= (async () => {
@@ -508,7 +613,7 @@ export async function runDesktopHost(
    * Mount one deferred bundle's rows on the live Loader.
    *
    * The rows are the same ones the bundle's own patch file would have inserted at boot, so a
-   * deferred plugin is composed exactly as it would have been — it only arrives later. A bundle
+   * deferred plugin is composed exactly as it would have been 鈥?it only arrives later. A bundle
    * that throws here is reported and skipped: it must not take down a host that is already serving
    * the conversation.
    * @param bundle - composed rows and the package name they came from.
@@ -530,6 +635,11 @@ export async function runDesktopHost(
 
   return {
     dshVersion: dshVersion(absoluteProject),
+    // The carrier picks the origin: only the token this URL carries is consumed, and the shell that
+    // serves the page rewrites it onto its own listener. `authenticatedUrl` insists on an absolute
+    // URL, so a placeholder loopback origin stands in.
+    launchUrl: connection.authenticatedUrl('http://127.0.0.1/'),
+
     cancel(streamId) {
       requests.get(streamId)?.abort()
     },
@@ -556,9 +666,9 @@ export async function runDesktopHost(
         }
         const request = new Request(url, init)
         const response = url.pathname === DESKTOP_STREAM_PATH
-          ? await streams.fetch(request)
+          ? await streams.fetch(request, connection.browserPeer)
           : url.pathname.startsWith('/api/')
-            ? await api.fetch(request)
+            ? await api.fetch(request, connection.browserPeer)
             : await pluginRoutes(request)
         await writeResponse(encodeDesktopResponseStart(command.streamId, {
           status: response.status,
@@ -627,6 +737,7 @@ async function main(): Promise<void> {
     type: 'ready',
     protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
     dshVersion: controller.dshVersion,
+    launchUrl: controller.launchUrl,
   })
   // Behind the handshake on purpose: the shell paints the conversation as soon as it hears `ready`,
   // and these bundles are the ones that made it wait.

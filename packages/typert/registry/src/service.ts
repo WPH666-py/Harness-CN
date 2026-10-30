@@ -9,6 +9,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import type {
   InvocationDescriptor,
+  RemoteAccessResourceKind,
   TypertClientContextAdapter,
   TypertContextMap,
   TypertContextRegistry,
@@ -16,6 +17,8 @@ import type {
   TypertDisposer,
   TypertHostContextAdapter,
   TypertHostContextResolver,
+  TypertResourceDeclaration,
+  TypertResourceRegistry,
   TypertLocalRegistry,
   TypertLookupHost,
   TypertLookupDefinition,
@@ -35,6 +38,7 @@ import type {
   TypertFace,
   TypertPackageFilter,
   TypertPackageRecord,
+  TypertSchemaFactory,
   TypertSchemaFilter,
   TypertSchemaRecord,
 } from './types.ts'
@@ -254,6 +258,8 @@ class LookupStore {
     return {
       parameter: provider.parameter,
       wire: provider.wire,
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- domain packages merge resource kinds into TypertResourceMap.
+      ...provider.resource === undefined ? {} : { resource: provider.resource },
       hostTypeSymbol: provider.hostTypeSymbol,
       wireTypeSymbol: provider.wireTypeSymbol,
       resolve: id => resolver.resolve(id),
@@ -371,6 +377,8 @@ class ContextStore {
     return {
       wire: adapter.wire,
       wireTypeSymbol: adapter.wireTypeSymbol,
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- domain packages merge resource kinds into TypertResourceMap.
+      ...adapter.resource === undefined ? {} : { resource: adapter.resource },
       resolve: id => resolver.resolve(id),
     }
   }
@@ -438,18 +446,61 @@ interface HostContextResolverEntry {
   resolve(id: unknown): Promise<Context | undefined>
 }
 
+/** The built-in identity-less resource kind; no declared resource kind may take its name. */
+const GLOBAL_RESOURCE_KIND = 'global' satisfies RemoteAccessResourceKind
+
+class ResourceStore {
+  private readonly declarations = new Map<string, ProviderEntry<TypertResourceDeclaration>>()
+  private readonly changes: ChangeSource
+
+  constructor(report: ReportObserverError) {
+    this.changes = new ChangeSource(report)
+  }
+
+  view(ctx: Context): TypertResourceRegistry {
+    return {
+      register: (kind, declaration) => this.register(ctx, kind, declaration),
+      get: kind => this.declarations.get(kind)?.provider,
+      entries: () => [...this.declarations].map(([kind, entry]) => Object.freeze({ kind, field: entry.provider.field })),
+      subscribe: listener => this.changes.subscribe(ctx, listener),
+    }
+  }
+
+  private register(ctx: Context, kind: string, declaration: TypertResourceDeclaration): TypertDisposer {
+    validateSegment('resource kind', kind)
+    if (kind === GLOBAL_RESOURCE_KIND) {
+      throw new Error(`typert: resource kind "${GLOBAL_RESOURCE_KIND}" is reserved for the built-in global resource`)
+    }
+    validateWireName('resource field', declaration.field)
+    if (this.declarations.has(kind)) throw new Error(`typert: resource kind "${kind}" is already registered`)
+    const entry: ProviderEntry<TypertResourceDeclaration> = { provider: { field: declaration.field }, owner: {} }
+    const { declarations, changes } = this
+    return ctx.effect(function* () {
+      declarations.set(kind, entry)
+      changes.emit({ kind: 'resource', key: kind })
+      yield () => {
+        /* v8 ignore next -- duplicate registration is rejected, so this effect remains the kind's unique owner. */
+        if (declarations.get(kind) !== entry) return
+        declarations.delete(kind)
+        changes.emit({ kind: 'resource', key: kind })
+      }
+    }, `typert.resources.register(${JSON.stringify(kind)})`)
+  }
+}
+
 /**
  * Registry of generated schemas, package reflection, invocations, and Remote
  * dependency providers.
  * @typert service typert
  */
 export class TypertRegistry extends Service implements TypertRegistryContract {
-  private readonly schemas = new Map<string, TypertSchemaRecord>()
+  private readonly schemas = new Map<string, TypertSchemaFactoryRecord>()
   private readonly packages = new Map<string, TypertPackageRecord>()
   private readonly localStore: DescriptorStore
   private readonly remoteStore: RemoteStore
   private readonly lookupStore: LookupStore
   private readonly contextStore: ContextStore
+  private readonly resourceStore: ResourceStore
 
   constructor(ctx: Context) {
     super(ctx, 'typert')
@@ -461,6 +512,7 @@ export class TypertRegistry extends Service implements TypertRegistryContract {
     this.remoteStore = new RemoteStore(new DescriptorStore('remote', report))
     this.lookupStore = new LookupStore(report)
     this.contextStore = new ContextStore(report)
+    this.resourceStore = new ResourceStore(report)
   }
 
   /** Current-environment invocation definitions. */
@@ -487,6 +539,11 @@ export class TypertRegistry extends Service implements TypertRegistryContract {
   /** Host and Client Context adapters. */
   get contexts(): TypertContextRegistry {
     return this.contextStore.view(this.ctx)
+  }
+
+  /** Default wire fields of resource kinds. */
+  get resources(): TypertResourceRegistry {
+    return this.resourceStore.view(this.ctx)
   }
 
   /**
@@ -522,21 +579,22 @@ export class TypertRegistry extends Service implements TypertRegistryContract {
   /**
    * Look up one schema by `<package>#<name>`.
    * @param key - global schema key.
-   * @returns the live schema record, or `undefined` when absent.
+   * @returns a record containing the cached schema, or `undefined` when absent.
    */
   get(key: string): TypertSchemaRecord | undefined {
-    return this.schemas.get(key)
+    const record = this.schemas.get(key)
+    return record === undefined ? undefined : materializeSchema(record)
   }
 
   /**
    * Resolve one required schema.
    * @param key - global schema key.
-   * @returns the live schema record.
+   * @returns a record containing the cached schema.
    * @throws when the key is malformed, the package face is absent, or the schema is not contributed.
    */
   resolve(key: string): TypertSchemaRecord {
     const record = this.schemas.get(key)
-    if (record !== undefined) return record
+    if (record !== undefined) return materializeSchema(record)
     const hash = key.indexOf('#')
     if (hash <= 0 || hash === key.length - 1) {
       throw new Error(`typert: invalid schema key "${key}" — expected "<package>#<name>"`)
@@ -553,10 +611,10 @@ export class TypertRegistry extends Service implements TypertRegistryContract {
   /**
    * Enumerate live schemas in registration order.
    * @param filter - optional package and face restriction.
-   * @returns matching schema records.
+   * @returns matching records containing the cached schemas.
    */
   list(filter: TypertSchemaFilter = {}): TypertSchemaRecord[] {
-    return [...this.schemas.values()].filter(record => matches(record, filter))
+    return [...this.schemas.values()].filter(record => matches(record, filter)).map(materializeSchema)
   }
 
   /**
@@ -606,14 +664,13 @@ export class TypertRegistry extends Service implements TypertRegistryContract {
     }
   }
 
-  private validateSchemas(contribution: TypertContribution): TypertSchemaRecord[] {
-    const records: TypertSchemaRecord[] = []
+  private validateSchemas(contribution: TypertContribution): TypertSchemaFactoryRecord[] {
+    const records: TypertSchemaFactoryRecord[] = []
     const batch = new Set<string>()
     for (const schema of contribution.schemas) {
       validateSegment('schema name', schema.name)
-      const materialized = materializedSchema(schema)
-      if (materialized === undefined) {
-        throw new Error(`typert: schema "${schema.name}" declares neither a schema nor a create() factory`)
+      if (typeof schema.create !== 'function') {
+        throw new Error(`typert: schema "${schema.name}" has no create() factory`)
       }
       const key = typertKey(contribution.package, schema.name)
       if (batch.has(key) || this.schemas.has(key)) {
@@ -621,14 +678,31 @@ export class TypertRegistry extends Service implements TypertRegistryContract {
       }
       batch.add(key)
       records.push({
-        name: schema.name,
-        schema: materialized,
+        ...schema,
         package: contribution.package,
         face: contribution.face,
         key,
       })
     }
     return records
+  }
+}
+
+interface TypertSchemaFactoryRecord extends TypertSchemaFactory {
+  readonly package: string
+  readonly face: TypertFace
+  readonly key: string
+  value?: z.ZodType
+}
+
+function materializeSchema(record: TypertSchemaFactoryRecord): TypertSchemaRecord {
+  const schema = record.value ??= record.create()
+  return {
+    name: record.name,
+    schema,
+    package: record.package,
+    face: record.face,
+    key: record.key,
   }
 }
 
@@ -674,6 +748,11 @@ function validateInvocation(descriptor: InvocationDescriptor): void {
   if (cancellation !== undefined && cancellation.parameter !== 'signal') {
     throw new Error(`typert: invocation "${descriptor.id}" cancellation parameter must be "signal"`)
   }
+  const mode = descriptor.mode as string | undefined
+  if (mode !== undefined && mode !== 'stream') {
+    throw new Error(`typert: invocation "${descriptor.id}" mode must be "stream"`)
+  }
+  if (descriptor.uplink !== undefined) validateCodec(descriptor.uplink.codec, `${descriptor.id} uplink`)
   if (descriptor.scope !== undefined) {
     if (descriptor.invocation.kind !== 'direct') {
       throw new Error(`typert: invocation "${descriptor.id}" Context receiver cannot declare a direct scope projection`)
@@ -702,23 +781,9 @@ function validateInvocation(descriptor: InvocationDescriptor): void {
 function validateCodec(codec: InvocationDescriptor['result'], subject: string): void {
   if (codec.mode === 'src-json') return
   validateNonempty(`${subject} type symbol`, codec.typeSymbol)
-  const schema = materializedSchema(codec)
-  if (schema === undefined || typeof schema.parse !== 'function') {
-    throw new Error(`typert: ${subject} strict codec has no parse() method`)
+  if (typeof codec.create !== 'function') {
+    throw new Error(`typert: ${subject} strict codec has no create() factory`)
   }
-}
-
-/**
- * Resolve one generated schema declaration. Both generated forms are accepted:
- * the eager `schema` this line's generator emits, and the lazy `create()`
- * factory newer generators emit for self-referential schemas.
- * @param source - codec or named-schema record carrying the declaration.
- * @returns the runtime schema, or `undefined` when neither form is present.
- */
-function materializedSchema(source: { mode?: unknown; schema?: unknown; create?: unknown }): z.ZodType | undefined {
-  if (source.schema !== undefined) return source.schema as z.ZodType
-  if (typeof source.create !== 'function') return undefined
-  return (source.create as () => z.ZodType)()
 }
 
 function validateWireName(subject: string, value: string): void {

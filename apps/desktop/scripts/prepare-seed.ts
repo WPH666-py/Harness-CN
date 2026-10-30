@@ -78,7 +78,7 @@ function runPnpm(args: readonly string[]): Promise<void> {
     writeFileSync(userConfig, '')
     const child = spawn(NODE, [
       PNPM,
-      '--config.registry=https://registry.npmjs.org/',
+      '--config.registry=https://registry.npmmirror.com/',
       `--config.store-dir=${STORE_ROOT}`,
       '--config.enable-global-virtual-store=false',
       `--config.userconfig=${userConfig}`,
@@ -90,7 +90,7 @@ function runPnpm(args: readonly string[]): Promise<void> {
         ...Object.fromEntries(Object.entries(process.env).filter(([name]) => (
           !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
         ))),
-        NPM_CONFIG_REGISTRY: 'https://registry.npmjs.org/',
+        NPM_CONFIG_REGISTRY: 'https://registry.npmmirror.com/',
         NPM_CONFIG_STORE_DIR: STORE_ROOT,
         NPM_CONFIG_USERCONFIG: userConfig,
         PATH: `${dirname(NODE)}${delimiter}${process.env.PATH ?? ''}`,

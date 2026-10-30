@@ -115,6 +115,15 @@ export interface ShellServerOptions {
    * Optional so tests can start the server without an installation on disk.
    */
   readonly installDir?: string | undefined
+  /**
+   * The Host's launch token, read on demand.
+   *
+   * A browser reaches this origin first, so the Host's own `?token=` exchange never happens unless
+   * this server sends it there once: without the signed cookie every later Host request is
+   * unauthenticated and the page sits on "Loading plugins…" forever. A getter rather than a value
+   * because a restart in place mints a new token for the same listener.
+   */
+  readonly launchToken?: (() => string | undefined) | undefined
   /** Control surface the pages and the Rust shell drive. */
   readonly api: ShellApi
   /**
@@ -338,15 +347,47 @@ function requireString(value: unknown, subject: string): string {
   return value
 }
 
+let apiCookie: string | undefined
+
 /** Build the Fetch request the Host pipe protocol carries for one incoming message. */
+/**
+ * Spend the Host's launch token for the API cookie the browser needs.
+ *
+ * The request goes back through this listener so it takes exactly the path a browser request takes:
+ * `/connect` is not claimed here, so it is forwarded to the Host, whose 302 carries `Set-Cookie`.
+ * One round trip per page load, before the page exists, and the token never reaches the browser.
+ * @param port - this listener's port.
+ * @param token - launch token the Host minted for this run.
+ * @returns the `name=value` cookie pairs, or `undefined` when the Host refused the exchange.
+ */
+async function mintApiCookie(port: number, token: string): Promise<string | undefined> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${String(port)}/connect?token=${encodeURIComponent(token)}&interactions=none`, { redirect: 'manual' })
+    const cookies = response.headers.getSetCookie().map((one) => one.split(';')[0] ?? '').filter((one) => one !== '')
+    if (cookies.length === 0) return undefined
+    // The cookie is scoped to the Host's own authority, which is the authority this proxy dials, so
+    // it is spent here rather than handed to the browser: one jar for every forwarded request.
+    apiCookie = cookies.join('; ')
+    return apiCookie
+  } catch {
+    return undefined
+  }
+}
+
 function toHostRequest(message: IncomingMessage, port: number): Request {
   const method = (message.method ?? 'GET').toUpperCase()
   const headers = new Headers()
   for (const [name, value] of Object.entries(message.headers)) {
-    if (value === undefined || HOP_BY_HOP.has(name) || name === 'host') continue
+    // `host` travels with the request: the Host derives the cookie authority from it, so a request
+    // forwarded without one is unauthenticated even when it carries a valid launch token (`/connect`)
+    // or the API cookie. Nothing downstream trusts it for routing.
+    if (value === undefined || HOP_BY_HOP.has(name)) continue
     if (Array.isArray(value)) for (const one of value) headers.append(name, one)
     else headers.set(name, value)
   }
+  // The page cookie is minted for the Host's authority, which is the authority below, so a request
+  // forwarded without it is anonymous even when the browser holds its own copy.
+  if (apiCookie !== undefined) headers.set('cookie', apiCookie)
   const hasBody = method !== 'GET' && method !== 'HEAD'
   const init = {
     method,
@@ -756,6 +797,32 @@ export async function startShellServer(options: ShellServerOptions): Promise<She
       const lanOpen = options.lan.enabled
       if (!hostAllowed(message, shellOnly ? [shellPort] : [port, shellPort])) {
         sendJson(response, 403, { error: 'dsh shell: unexpected Host header' })
+        return
+      }
+      // The page this origin serves is the Host's own page, but the browser's first request lands
+      // here, before any token exchange has happened. One redirect through the Host's token URL mints
+      // the page cookie; the Host answers the token URL with the page itself, so the browser stays.
+      // A phone is excluded: its authority is the pairing cookie, and this token must never leave the
+      // machine.
+      if (
+        !remote && !shellOnly
+        && (url.pathname === '/' || url.pathname === '/index.html')
+        && url.searchParams.get('token') === null
+        && message.headers.cookie === undefined
+        && options.launchToken?.() !== undefined
+      ) {
+        // The handshake is spent here rather than in the browser: the Host's `/connect` answers 302
+        // with the API cookie in `Set-Cookie`, and the page never calls it on its own, so every
+        // `/api` request the client made arrived without one and answered 401. Mint it once through
+        // this same origin (one internal round trip), relay the cookie, then redirect to a clean `/`
+        // so the token does not sit in the address bar.
+        const minted = await mintApiCookie(port, String(options.launchToken()))
+        response.writeHead(303, {
+          location: '/',
+          ...(minted === undefined ? {} : { 'set-cookie': minted }),
+          'cache-control': 'no-store',
+        })
+        response.end()
         return
       }
       if (remote) {

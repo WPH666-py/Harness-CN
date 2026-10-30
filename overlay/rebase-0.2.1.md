@@ -63,25 +63,7 @@ Two more stay manual because they depend on the target tag:
   `code-runtime` exports, `sessionCwd`, `createPluginProfile`, the old byte-range
   shape. They are coverage debt, tracked here on purpose.
 
-## 4. Packaging prerequisites
-
-`release:pack` compares the packed manifests, so the tree has to speak one language
-before it will produce installers. Two scripts under `apps/desktop/scripts/` do that
-(idempotent, `--check` reports would-be changes):
-
-- `local-uniform-version.mjs <version> --root <tree>` — the family refuses to build
-  when manifests disagree (`dsh release members must share one version`). After a
-  rebase upstream packages still say `0.2.1-rc.4` while `apps/*` say the product
-  version; this aligned 32 manifests.
-- `local-workspace-protocol.mjs --root <tree>` — packed dependencies of shipped
-  members must equal the family version, so every internal `@deepseek-ai/dsh-*`
-  range becomes `workspace:*` (`must equal 0.2.1-rc.4, got ^0.2` otherwise). 5
-  manifests carried ranges; 260 ranges were already `workspace:*` or `workspace:^`.
-
-Then `pnpm --filter @deepseek-ai/dsh-desktop run prepare:package` packs 345 workspace
-packages into `apps/desktop/.desktop-build/targets/win-x64/packed/dsh/`.
-
-## 5. Gates
+## 4. Gates
 
 ```powershell
 $env:DSH_CLIENT_COMMIT_HASH='0000000000000000000000000000000000000000'

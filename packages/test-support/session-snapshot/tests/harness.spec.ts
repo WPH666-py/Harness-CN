@@ -92,8 +92,6 @@ function isolateDiagnosticTimeout(onTestFinished: TestContext['onTestFinished'])
 }
 
 const boot: InputStep[] = [{ op: 'initialize' }, { op: 'newSession' }]
-// A Windows coverage shard can spend more than 20ms harvesting logs before vi.waitFor records the diagnostic error.
-const titleDiagnosticTimeoutMs = process.platform === 'win32' ? 5_000 : 20
 
 it('keeps scenario-owned snapshot spill root length stable across platforms', () => {
   const fixtureFile = '/fixtures/scenario/session.jsonl'
@@ -233,9 +231,9 @@ describe('runScenario', () => {
     expect(materialized).toContain(pathToFileURL(join(patchDir, 'plugin.mjs')).href)
     expect(materialized).toContain(pathToFileURL(join(dir, 'nested.mjs')).href)
     expect(materialized).toContain('example-package')
-    expect(await realpath(join(dir, '.dsh', 'profiles', 'node_modules', 'example-package')))
+    expect(await realpath(join(dir, '.dsh', 'profiles', 'acp', 'node_modules', 'example-package')))
       .toBe(await realpath(packageDir))
-    expect(await realpath(join(dir, '.dsh', 'profiles', 'node_modules', '@fixture', 'example-package')))
+    expect(await realpath(join(dir, '.dsh', 'profiles', 'acp', 'node_modules', '@fixture', 'example-package')))
       .toBe(await realpath(scopedPackageDir))
     expect(await readFile(await materializedPatch(materializedRoot, '1-selected.cordis.yml'), 'utf8')).toContain('[]')
 
@@ -255,7 +253,7 @@ describe('runScenario', () => {
     const conflictPatch = join(dir, 'conflict.cordis.yml')
     const conflictPackage = join(dir, 'node_modules', 'conflict-package')
     const otherPackage = join(dir, 'other-conflict-package')
-    const conflictLink = join(dir, '.dsh', 'profiles', 'node_modules', 'conflict-package')
+    const conflictLink = join(dir, '.dsh', 'profiles', 'acp', 'node_modules', 'conflict-package')
     await Promise.all([
       mkdir(conflictPackage, { recursive: true }),
       mkdir(otherPackage, { recursive: true }),
@@ -1000,7 +998,21 @@ describe('runScenario', () => {
     )).rejects.toThrow(/did not persist goal phase "blocked" within 20ms/)
   })
 
-  it('identifies the child wait when its first log harvest outlasts the deadline', async () => {
+  it.each([
+    { label: 'turn-start', step: { op: 'waitForTurnStart', timeoutMs: 20 }, expected: 'did not persist turn/start within 20ms' },
+    { label: 'goal', step: { op: 'waitForGoalPhase', phase: 'blocked', timeoutMs: 20 },
+      expected: 'did not persist goal phase "blocked" within 20ms' },
+    { label: 'session', step: { op: 'waitForTurnEnd', timeoutMs: 20 }, expected: 'did not persist turn/end within 20ms' },
+    { label: 'inbox', step: { op: 'waitForInboxMessage', text: 'missing', timeoutMs: 20 },
+      expected: 'did not persist expected inbox message within 20ms' },
+    { label: 'child', step: { op: 'waitForSubagentTurnEnd', child: 2, timeoutMs: 20 },
+      expected: 'subagent child #2 did not persist closed turn 1 within 20ms' },
+    { label: 'title', step: { op: 'waitForTitleAfterTurnEnd', timeoutMs: 20 },
+      expected: 'did not persist session/title after turn/end within 20ms' },
+    { label: 'event', step: { op: 'waitForEventAfterTurnEnd', type: 'user/message', timeoutMs: 20 },
+      expected: 'did not persist user/message after turn/end within 20ms' },
+  ] satisfies { label: string; step: InputStep; expected: string }[])
+  ('identifies the $label wait when its first log harvest outlasts the deadline', async ({ step, expected }) => {
     const { fixtureFile } = await scenario({})
     const reading = Promise.withResolvers<undefined>()
     const release = Promise.withResolvers<undefined>()
@@ -1016,14 +1028,15 @@ describe('runScenario', () => {
       return await originalReaddir(...args)
     })
     const run = runScenario(
-      { steps: [...boot, { op: 'waitForSubagentTurnEnd', child: 2, timeoutMs: 20 }] },
+      { steps: [...boot, step] },
       { agent: AGENT, mode: 'replay', fixtureFile },
     )
-    const rejected = expect(run).rejects.toThrow(/subagent child #2 did not persist closed turn 1 within 20ms/)
+    const rejected = expect(run).rejects.toThrow(expected)
     try {
       await Promise.race([reading.promise, rejected])
       expect(pendingRead).toBeDefined()
       await rejected
+      await expect(run).rejects.toHaveProperty('cause', expect.any(Error))
     } finally {
       release.resolve(undefined)
       await Promise.allSettled([pendingRead, run, rejected])
@@ -1119,7 +1132,8 @@ describe('runScenario', () => {
     )).rejects.toThrow(/subagent child #2 did not persist closed turn 1 within 20ms/)
   })
 
-  it('waitForTitleAfterTurnEnd times out when the title precedes the boundary', { timeout: 20_000 }, async () => {
+  it('waitForTitleAfterTurnEnd times out when the title precedes the boundary', { timeout: 20_000 }, async ({ onTestFinished }) => {
+    isolateDiagnosticTimeout(onTestFinished)
     const { fixtureFile } = await scenario({
       prompt: 'hang-until-cancel',
       persistLogsOnCancel: true,
@@ -1137,11 +1151,11 @@ describe('runScenario', () => {
         steps: [
           ...boot,
           { op: 'promptAndCancel', text: 'hang' },
-          { op: 'waitForTitleAfterTurnEnd', timeoutMs: titleDiagnosticTimeoutMs },
+          { op: 'waitForTitleAfterTurnEnd', timeoutMs: 20 },
         ],
       },
       { agent: AGENT, mode: 'replay', fixtureFile },
-    )).rejects.toThrow(new RegExp(`did not persist session/title after turn/end within ${titleDiagnosticTimeoutMs}ms`))
+    )).rejects.toThrow(/did not persist session\/title after turn\/end within 20ms/)
   })
 
   it('waitForEventAfterTurnEnd holds the app for a typed post-boundary record and times out otherwise', { timeout: 20_000 }, async ({ onTestFinished }) => {

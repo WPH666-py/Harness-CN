@@ -11,11 +11,7 @@
  * file. Paths whose content is a build product of another path (`rsc/` → `resources/shell/`) are
  * excluded: they are not decisions, they are copies.
  *
- *   node overlay/scan.mjs --base <upstream source dir> [--root <our tree>] [--out <file>] [--write]
- *
- * `--root` scans a tree other than this checkout. That is how a rebased staging tree gets its own
- * manifest: the product line moves to the rebase tree, and the overlay of record must describe that
- * tree, not the old one.
+ *   node overlay/scan.mjs --base <upstream source dir> [--write]
  *
  * Both trees are hashed from disk, so the scan needs no git and works on an unpacked release
  * archive — which is exactly what a base is here.
@@ -30,10 +26,6 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const REPOSITORY = resolve(HERE, '..')
 
 const argv = process.argv.slice(2)
-const rootIndex = argv.indexOf('--root')
-const oursRoot = rootIndex === -1 ? REPOSITORY : resolve(argv[rootIndex + 1])
-const outIndex = argv.indexOf('--out')
-const outPath = outIndex === -1 ? join(HERE, 'manifest.json') : resolve(argv[outIndex + 1])
 const baseIndex = argv.indexOf('--base')
 if (baseIndex === -1 || argv[baseIndex + 1] === undefined) {
   process.stderr.write('usage: overlay/scan.mjs --base <upstream source dir> [--write]\n')
@@ -45,7 +37,7 @@ if (!existsSync(baseRoot)) {
   process.exit(2)
 }
 
-const ours = digest(oursRoot)
+const ours = digest(REPOSITORY)
 const theirs = digest(baseRoot)
 
 /**
@@ -60,7 +52,7 @@ const theirs = digest(baseRoot)
 function bumpOnly(path) {
   if (!path.endsWith('package.json')) return false
   try {
-    const mine = JSON.parse(readFileSync(join(oursRoot, path), 'utf8'))
+    const mine = JSON.parse(readFileSync(join(REPOSITORY, path), 'utf8'))
     const original = JSON.parse(readFileSync(join(baseRoot, path), 'utf8'))
     delete mine.version
     delete original.version
@@ -105,12 +97,12 @@ if (argv.includes('--write')) {
   const manifest = {
     // The base is identified by directory name: the scan runs on an unpacked release archive, and
     // the tag is part of the archive's folder name.
-    base: { directory: relative(oursRoot, baseRoot).split(sep).join('/') },
+    base: { directory: relative(REPOSITORY, baseRoot).split(sep).join('/') },
     added,
     modified,
     removed,
   }
-  const target = outPath
+  const target = join(HERE, 'manifest.json')
   writeFileSync(target, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
   process.stdout.write(`  wrote ${relative(REPOSITORY, target).split(sep).join('/')}\n`)
 }

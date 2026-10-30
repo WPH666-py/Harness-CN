@@ -65,6 +65,8 @@ async function exitsWithin(exit: Promise<void>, milliseconds: number): Promise<b
 export interface DesktopHostReady {
   readonly protocolVersion: typeof DESKTOP_HOST_PROTOCOL_VERSION
   readonly dshVersion: string
+  /** Absolute URL carrying this launch's token for the root path, when the Host reports one. */
+  readonly launchUrl?: string
 }
 
 /**

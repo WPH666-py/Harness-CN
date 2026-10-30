@@ -128,6 +128,22 @@ function errorOf(reason: unknown, fallback: string): Error {
   return reason instanceof Error ? reason : new Error(fallback)
 }
 
+/**
+ * Pull the launch token out of the Host's authenticated root URL.
+ *
+ * The Host builds that URL for a carrier that opens a browser itself; this shell serves the page, so
+ * it reads the token out and hands the browser one redirect to exchange it for the signed cookie.
+ */
+function tokenOf(url: string | undefined): string | undefined {
+  if (url === undefined) return undefined
+  try {
+    const token = new URL(url).searchParams.get('token')
+    return token === null || token === '' ? undefined : token
+  } catch {
+    return undefined
+  }
+}
+
 /** Read one `--name value` pair out of the sidecar's own command line. */
 function readArgument(argv: readonly string[], name: string, required: boolean): string | undefined {
   const index = argv.indexOf(`--${name}`)
@@ -366,6 +382,8 @@ async function main(): Promise<void> {
   let status: ShellStatus = { phase: 'starting', progress: 0.05, version: options.version }
   let updateState: DesktopUpdateState = { phase: 'idle' }
   let host: DesktopHostProcess | undefined
+  /** The Host's launch token, refreshed on every (re)start so the browser can mint its cookie. */
+  let launchToken: string | undefined
   /** Monolith bridge, present only when this launch runs in mono mode. */
   let mono: MonoHostProcess | undefined
   let stopping = false
@@ -397,6 +415,9 @@ async function main(): Promise<void> {
     }
     const ready = await next.start()
     logShell(`backend ready: dsh ${ready.dshVersion} from ${projectDir}`)
+    // The browser has to exchange this token once for the signed cookie every Host request is
+    // authenticated by; a restart in place mints a fresh one, hence the getter on the server side.
+    launchToken = tokenOf(ready.launchUrl)
     return next
   }
 
@@ -592,6 +613,7 @@ async function main(): Promise<void> {
     note: (text) => { logShell(text) },
     lan: new LanAccess(join(paths.root, 'lan-access.json')),
     deferredReady: () => deferredPluginsReady,
+    launchToken: () => launchToken,
   })
   logShell(`Harness-CN ${options.version} starting; workspace on ${running.origin}, shell windows on ${running.shellOrigin}`)
   handshake({ type: 'listen', port: running.port, shellPort: running.shellPort })

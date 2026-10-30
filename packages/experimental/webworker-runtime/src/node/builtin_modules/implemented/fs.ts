@@ -226,6 +226,25 @@ export function realpathSync(path: PathArg): string {
 }
 
 /**
+ * Resolve a UTF-8 path through Node's callback form and its native alias.
+ * @param path - Path in the symlink-free VFS.
+ * @param callback - Asynchronous completion with the canonical path or filesystem error.
+ */
+export function realpath(path: PathArg, callback: (error: NodeJS.ErrnoException | null, path?: string) => void): void {
+  queueMicrotask(() => {
+    let result: string
+    try {
+      result = realpathSync(path)
+    } catch (error) {
+      callback(error as NodeJS.ErrnoException)
+      return
+    }
+    callback(null, result)
+  })
+}
+realpath.native = realpath
+
+/**
  * List a directory.
  * @param path - directory path.
  * @param options - `withFileTypes` selects Dirent objects.
@@ -529,6 +548,31 @@ function closeFileStream(
   stream.destroy()
 }
 
+/** The read-stream fields `_construct` completes. */
+interface ReadDescriptorTarget {
+  fd: number | null
+  pending: boolean
+  emit(event: string, ...args: unknown[]): boolean
+}
+
+/** Open a read stream's descriptor and announce it, completing `_construct`. */
+function openReadDescriptor(
+  stream: ReadDescriptorTarget, path: string, flags: string, callback: (error?: Error | null) => void,
+): void {
+  let fd: number
+  try {
+    fd = openSync(path, flags)
+  } catch (error) {
+    callback(error as Error)
+    return
+  }
+  stream.fd = fd
+  stream.pending = false
+  callback()
+  stream.emit('open', fd)
+  stream.emit('ready')
+}
+
 /** Read stream over one VFS file. */
 export class ReadStream extends Readable {
   /** Resolved path opened by this stream. */
@@ -572,18 +616,16 @@ export class ReadStream extends Readable {
       callback(abortError(this.signal.reason))
       return
     }
-    let fd: number
-    try {
-      fd = openSync(this.path, this.flags)
-    } catch (error) {
-      callback(error as Error)
+    // A file a lazy archive supplies opens once its archive arrived.
+    const arrival = vfs().whenReadable(this.path)
+    if (arrival === undefined) {
+      openReadDescriptor(this, this.path, this.flags, callback)
       return
     }
-    this.fd = fd
-    this.pending = false
-    callback()
-    this.emit('open', fd)
-    this.emit('ready')
+    arrival.then(
+      () => { openReadDescriptor(this, this.path, this.flags, callback) },
+      (error: unknown) => { callback(error as Error) },
+    )
   }
 
   override _read(size: number): void {
@@ -767,7 +809,10 @@ export function opendirSync(path: PathArg): Dir {
  * check here is that every name is a real `node:fs/promises` export.
  */
 export const promises = {
-  readFile: async (path: PathArg, options?: EncodingOption): Promise<Buffer | string> => readFileSync(path, options),
+  readFile: async (path: PathArg, options?: EncodingOption): Promise<Buffer | string> => {
+    await vfs().whenReadable(asPath(path))
+    return readFileSync(path, options)
+  },
   writeFile: async (
     path: PathArg,
     data: string | Uint8Array,
@@ -807,11 +852,15 @@ export const promises = {
       return
     }
     mkdirSync(dirname(target), { recursive: true })
+    await vfs().whenReadable(source)
     writeFileSync(target, bytesOf(source))
   },
   // The VFS keeps both names attached to one file identity until either name is removed.
   link: async (from: PathArg, to: PathArg): Promise<void> => { linkSync(from, to) },
-  open: async (path: PathArg, flags?: string, mode?: number): Promise<FileHandle> => openHandleSync(path, flags, mode),
+  open: async (path: PathArg, flags?: string, mode?: number): Promise<FileHandle> => {
+    await vfs().whenReadable(asPath(path))
+    return openHandleSync(path, flags, mode)
+  },
   opendir: async (path: PathArg): Promise<Dir> => opendirSync(path),
   truncate: async (path: PathArg, length = 0): Promise<void> => {
     vfs().truncateSync(asPath(path), length)
@@ -828,13 +877,13 @@ export const __esModule = true
  * (`readFileSync` answering `Buffer` XOR `string`, `statSync` answering `Stats`
  * XOR `BigIntStats`, `mkdirSync` answering `string` XOR `void`). This module
  * answers the union its VFS actually produces from one signature, which no single
- * signature can present as all of Node's overloads; `realpathSync` additionally
+ * signature can present as all of Node's overloads; `realpath` additionally
  * carries Node's `.native` member, and `constants`, `promises`, and `Dirent` hold
  * the subsets the host tree reads.
  */
 type OwnSignature =
   | 'constants' | 'promises' | 'Dirent' | 'FSWatcher' | 'StatWatcher' | 'ReadStream' | 'WriteStream'
-  | 'readFileSync' | 'writeFileSync' | 'appendFileSync' | 'statSync' | 'lstatSync' | 'realpathSync'
+  | 'readFileSync' | 'writeFileSync' | 'appendFileSync' | 'statSync' | 'lstatSync' | 'realpathSync' | 'realpath'
   | 'readdirSync' | 'mkdirSync' | 'mkdtempSync' | 'rmSync' | 'opendirSync'
   | 'openSync' | 'readSync' | 'writeSync' | 'stat' | 'lstat' | 'watch' | 'watchFile' | 'unwatchFile'
   | 'createReadStream' | 'createWriteStream'
@@ -850,7 +899,7 @@ type NodeFace = Partial<Omit<typeof import('node:fs'), OwnSignature>>
 /** CommonJS default export: the members `require()` hands a caller of this module. */
 export default {
   constants, promises, Dirent, FSWatcher, StatWatcher, ReadStream, WriteStream,
-  readFileSync, writeFileSync, appendFileSync, existsSync, statSync, stat, lstatSync, lstat, realpathSync, chmodSync,
+  readFileSync, writeFileSync, appendFileSync, existsSync, statSync, stat, lstatSync, lstat, realpathSync, realpath, chmodSync,
   readdirSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, renameSync, accessSync, opendirSync,
   openHandleSync, linkSync,
   openSync, readSync, writeSync, closeSync, watch, watchFile, unwatchFile,
