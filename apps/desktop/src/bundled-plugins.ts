@@ -302,9 +302,10 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
   // The ten community plugins the 0.1.5-rc.33 distribution ships. Every one of them declares
   // `dsh.bundle.patch` plus a `dsh.client` half, so each is listed and mounted on a fresh profile.
   //
-  // `dsh-remote-ssh-ops` is the exception to the pinned-tarball rule: it is published nowhere, so
-  // its spec is the GitHub repository itself. pnpm resolves a `github:` spec to a commit, which is
-  // as exact as a version, and the installed version still comes from the repository's manifest.
+  // `dsh-remote-ssh-ops` used to be the one exception to the pinned-tarball rule: it is published
+  // on no registry, so its spec was the GitHub repository itself. That repository now answers 404,
+  // which made every seed build fail in `pnpm install`, so the last installable revision is shipped
+  // as a local archive beside the five repository plugins and pinned by version like them.
   {
     name: 'dsh-mermaid-smooth',
     version: '0.2.1',
@@ -317,7 +318,8 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
   },
   {
     name: 'dsh-remote-ssh-ops',
-    version: 'github:weisiren000/dsh-remote-ssh-ops#main',
+    version: '0.1.0',
+    spec: 'file:plugins/dsh-remote-ssh-ops-0.1.0.tgz',
     active: true,
   },
   {
