@@ -1,16 +1,17 @@
 /**
- * The workstation's path arithmetic: joining a parent onto one entry, naming the
- * last segment, splitting a page into lines, and ordering a level the way the
- * tree draws it.
+ * The workstation's pure helpers: joining a parent onto one entry, naming the
+ * last segment, deciding whether a path previews as an image, spelling a byte
+ * count for the viewer header, and ordering a level the way the tree draws it.
  *
  * These are the only functions in the package that are pure enough to pin
- * without a renderer, so they carry the edge cases the tree relies on: the root
- * joins without a separator, a trailing newline opens one last empty line, and
- * directories always precede files whatever their names sort to.
+ * without a renderer, so they carry the edge cases the tree and the tabs rely
+ * on: the root joins without a separator, an image extension decides the media
+ * type whatever its case, and directories always precede files whatever their
+ * names sort to.
  */
 import { describe, expect, it } from 'vitest'
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
-import { baseName, childPath, linesOf, orderEntries } from '../src/client/paths.ts'
+import { baseName, childPath, formatBytes, imageMediaType, orderEntries } from '../src/client/paths.ts'
 
 describe('childPath', () => {
   it('joins a root entry without a leading separator', () => {
@@ -36,17 +37,45 @@ describe('baseName', () => {
   })
 })
 
-describe('linesOf', () => {
-  it('splits one page into its lines', () => {
-    expect(linesOf('alpha\nbeta')).toEqual(['alpha', 'beta'])
+describe('imageMediaType', () => {
+  it('recognises each extension the viewer previews', () => {
+    expect(imageMediaType('pictures/shot.png')).toBe('image/png')
+    expect(imageMediaType('avatar.jpeg')).toBe('image/jpeg')
+    expect(imageMediaType('avatar.jpg')).toBe('image/jpeg')
+    expect(imageMediaType('loop.gif')).toBe('image/gif')
+    expect(imageMediaType('shot.webp')).toBe('image/webp')
+    expect(imageMediaType('icon.bmp')).toBe('image/bmp')
+    expect(imageMediaType('favicon.ico')).toBe('image/x-icon')
+    expect(imageMediaType('photo.avif')).toBe('image/avif')
   })
 
-  it('opens one last empty line for a terminated file', () => {
-    expect(linesOf('alpha\n')).toEqual(['alpha', ''])
+  it('reads the extension case-insensitively', () => {
+    expect(imageMediaType('SHOT.PNG')).toBe('image/png')
+    expect(imageMediaType('Photo.JpEg')).toBe('image/jpeg')
   })
 
-  it('returns one empty line for empty text', () => {
-    expect(linesOf('')).toEqual([''])
+  it('answers null for text files, unknown extensions, and bare names', () => {
+    expect(imageMediaType('src/index.ts')).toBeNull()
+    expect(imageMediaType('src/.gitignore')).toBeNull()
+    expect(imageMediaType('README')).toBeNull()
+  })
+})
+
+describe('formatBytes', () => {
+  it('spells bytes below one kilobyte as a whole count', () => {
+    expect(formatBytes(0)).toBe('0 B')
+    expect(formatBytes(11)).toBe('11 B')
+    expect(formatBytes(1023)).toBe('1023 B')
+  })
+
+  it('spells kilobytes with one decimal', () => {
+    expect(formatBytes(1024)).toBe('1.0 KB')
+    expect(formatBytes(1536)).toBe('1.5 KB')
+  })
+
+  it('spells megabytes with one decimal', () => {
+    expect(formatBytes(1024 * 1024)).toBe('1.0 MB')
+    expect(formatBytes(1024 * 1024 * 1.5)).toBe('1.5 MB')
   })
 })
 

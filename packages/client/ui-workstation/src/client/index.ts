@@ -30,7 +30,8 @@ import { WorkstationToggle, type WorkstationToggleInjected } from './Workstation
 
 export type { WorkstationKey } from './locales.ts'
 export type {
-  DirectoryLevel, FilePage, LevelState, ViewerState, WorkstationActionMap, WorkstationState,
+  DirectoryLevel, LevelState, TabFailureKind, TabImage, TabState,
+  WorkstationActionMap, WorkstationState,
 } from './store.ts'
 export type { WorkstationFace, WorkstationInject, WorkspaceFilesRemote } from './face.ts'
 export type { FileTreeProps } from './FileTree.tsx'

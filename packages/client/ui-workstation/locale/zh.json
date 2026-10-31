@@ -6,5 +6,18 @@
     "mode": "IDE/工作站",
     "enable": "切换到 IDE 布局",
     "disable": "回到对话布局"
+  },
+  "tab": {
+    "unsaved": "已修改",
+    "save": "保存",
+    "closeSave": "关闭并保存",
+    "saveFailed": "保存失败：{message}"
+  },
+  "editor": {
+    "label": "编辑 {name}"
+  },
+  "preview": {
+    "image": "图片预览",
+    "size": "大小 {size}"
   }
 }

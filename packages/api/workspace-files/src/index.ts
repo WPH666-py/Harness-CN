@@ -481,6 +481,47 @@ export class WorkspaceFiles extends TypertRemoteService {
   }
 
   /**
+   * Replace the complete UTF-8 content of one existing file.
+   * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+   * @param path - absolute path or path relative to the workspace root; files outside it are allowed, as for `read`.
+   * @param text - the complete text that replaces the file's content; NUL bytes are refused.
+   * @param signal - caller cancellation, before the atomic replacement is published.
+   * @returns the written file's metadata, with its version after the write, and its workspace path.
+   */
+  @Remote
+  async write(
+    workspaceFileScope: WorkspaceFileScope,
+    path: string,
+    text: string,
+    signal: AbortSignal,
+  ): Promise<WorkspaceFileMutation> {
+    const { root, entry } = await this.inspect(workspaceFileScope, path, signal)
+    // A save names a file. A directory is refused here rather than by
+    // `locateFile`'s regular-file gate so the caller is told the target is not
+    // a file at all, instead of that it is a file of the wrong kind.
+    if (entry.type === 'directory') {
+      throw new RemoteError('workspace-file/not-file', `"${path}" is a ${entry.type}`, { path })
+    }
+    const { target } = await this.locateFile(workspaceFileScope, path, signal)
+    if (text.includes(NUL)) {
+      throw new RemoteError('workspace-file/not-text', `"${path}" contains NUL bytes`, { path })
+    }
+    const limit = this.config.maxFileBytes
+    if (Buffer.byteLength(text, 'utf8') > limit) {
+      throw new RemoteError('workspace-file/too-large', `"${path}" exceeds the ${limit} byte full-file cap`, { path, limit })
+    }
+    const outcome = await this.mutation(this.ctx.fs.writeText(target, text, undefined, signal), path)
+    const written = await this.mutateOutcome({ target }, path, workspaceFileScope)
+    // The replacement reaches the filesystem seam directly, so no tool reports
+    // it; the change feed relays `fs/observed` alone, and a Remote call has no
+    // tool execution to carry, hence the absent actor.
+    this.ctx.emit('fs/observed', target, { kind: 'present', version: outcome.version }, undefined)
+    // A file outside the workspace has no workspace-relative path; report the
+    // absolute one rather than slicing it against a root that does not contain it.
+    return this.ctx.fs.contains(root, target) ? written : { ...written, path: this.ctx.fs.processPath(target) }
+  }
+
+  /**
    * Remove one entry inside the Session's workspace, or the entries one
    * directory contains.
    * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.

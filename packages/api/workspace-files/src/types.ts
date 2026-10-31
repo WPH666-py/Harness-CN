@@ -201,6 +201,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
       readonly path: string
       readonly kind: 'directory' | 'symlink' | 'other'
     }
+    /** A write named a directory; only a regular file holds text to replace. */
+    'workspace-file/not-file': { readonly path: string }
     /** The path is not a directory, so it has no children to list. */
     'workspace-file/not-directory': {
       readonly path: string

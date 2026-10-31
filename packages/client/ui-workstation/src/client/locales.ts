@@ -1,10 +1,10 @@
 /**
  * `workstation` namespace dictionaries, and the namespace's declaration.
  *
- * Four states need copy and nothing else does: the empty tree, the empty
- * viewer, the waiting states, and the two failure lines. The failure lines take
- * the endpoint's own message because the codes it can answer with — a path that
- * is gone, one outside the workspace, a file that is not text — are told apart
+ * The copy covers the empty tree, the empty editor, the waiting states, the
+ * failure lines, and the tab strip's own labels. The failure lines take the
+ * endpoint's own message because the codes it can answer with — a path that is
+ * gone, one outside the workspace, a file that is not text — are told apart
  * here already by which pane failed.
  *
  * The namespace merge lives with its key set so that any module naming
@@ -15,7 +15,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** Toggle labels, tree states, viewer states, and failure lines. */
+    /** Toggle labels, tree states, tab labels, editor states, and failure lines. */
     workstation: WorkstationKey
   }
 }
@@ -32,8 +32,14 @@ export const zh = {
   'tree.failed': '无法读取这个目录：{message}',
   'viewer.empty': '从左侧选择一个文件。',
   'viewer.loading': '正在读取文件…',
-  'viewer.more': '加载更多',
   'viewer.failed': '无法读取这个文件：{message}',
+  'tab.unsaved': '已修改',
+  'tab.save': '保存',
+  'tab.closeSave': '关闭并保存',
+  'tab.saveFailed': '保存失败：{message}',
+  'editor.label': '编辑 {name}',
+  'preview.image': '图片预览',
+  'preview.size': '大小 {size}',
   'session.none': '选择会话后可用。',
 } satisfies Record<string, string>
 
@@ -52,7 +58,13 @@ export const en = {
   'tree.failed': 'Could not read this directory: {message}',
   'viewer.empty': 'Select a file on the left.',
   'viewer.loading': 'Reading file…',
-  'viewer.more': 'Load more',
   'viewer.failed': 'Could not read this file: {message}',
+  'tab.unsaved': 'Unsaved',
+  'tab.save': 'Save',
+  'tab.closeSave': 'Close and save',
+  'tab.saveFailed': 'Save failed: {message}',
+  'editor.label': 'Editing {name}',
+  'preview.image': 'Image preview',
+  'preview.size': 'Size {size}',
   'session.none': 'Available once a Session is selected.',
 } satisfies Record<WorkstationKey, string>

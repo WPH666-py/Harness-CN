@@ -1,6 +1,6 @@
 /**
  * The workstation's view state: the directory levels the tree has asked for,
- * which of those directories are open, and the page of text the viewer shows.
+ * which of those directories are open, and the tabs the editor holds.
  *
  * One instance per application, not one per Session: the seat is declared
  * `scope: 'root'` because it describes the frame's presentation rather than a
@@ -15,7 +15,7 @@
 import { defineStore, type BoundActions, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import type { RemoteFailure } from '@deepseek-ai/dsh-api-remotes/client'
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
-import { FIRST_LINE } from './paths.ts'
+import { imageMediaType } from './paths.ts'
 
 /**
  * One directory's contents, as one level of the tree draws them.
@@ -37,27 +37,44 @@ export type LevelState =
   | { readonly kind: 'ready'; readonly level: DirectoryLevel }
   | { readonly kind: 'failed'; readonly failure: RemoteFailure }
 
+/** Which operation a tab's failure line reports. */
+export type TabFailureKind = 'read' | 'save'
+
+/** Decoded bytes of an image tab, and the size the viewer header shows. */
+export interface TabImage {
+  /** The complete file, as the read-bytes verb decoded it. */
+  readonly bytes: Uint8Array<ArrayBuffer>
+  /** File size in bytes at the read. */
+  readonly size: number
+}
+
 /**
- * The open file and the pages of it read so far.
+ * One open file, the buffer the editor shows, and the last read or save.
  *
- * `offset` is the next page's line offset, which is exactly how many lines the
- * endpoint has already handed over: the first page asks for 0, and each "load
- * more" asks for the count it has, so the arithmetic never depends on how the
- * text was split for display.
+ * `saved` is the Host's copy as of the last successful read or write, so the
+ * dirty flag is derived rather than maintained: every edit recomputes it, and a
+ * settlement can never claim a buffer is saved while it differs from `saved`.
+ * Image tabs keep an empty buffer and carry their bytes in `image`.
  */
-export interface ViewerState {
-  /** Absolute path of the open file, `null` while none is open. */
-  path: string | null
-  /** Lines read so far, in file order. */
-  lines: string[]
-  /** First line of the next page; line windows are 1-based. */
-  offset: number
-  /** The endpoint said the file ends in what has been read. */
-  eof: boolean
-  /** A page is in flight. */
+export interface TabState {
+  /** Absolute path of the file. */
+  path: string
+  /** Whether the tab edits text or previews an image. */
+  kind: 'text' | 'image'
+  /** The editor's buffer; empty while the first read is in flight. */
+  text: string
+  /** The buffer as last read or saved; the dirty flag compares against it. */
+  saved: string
+  /** The buffer holds edits the Host has not confirmed. */
+  dirty: boolean
+  /** The first read is in flight. */
   loading: boolean
-  /** Why the last page failed, `null` while none has. */
-  failure: RemoteFailure | null
+  /** Why the last read or save failed, `null` while none has. */
+  failure: string | null
+  /** Which operation produced `failure`. */
+  failedOn: TabFailureKind | null
+  /** Decoded bytes of an image tab; `null` for text tabs and while loading. */
+  image: TabImage | null
 }
 
 /** Tree column width before any user drag. */
@@ -66,6 +83,8 @@ const TREE_WIDTH_DEFAULT = 260
 const TREE_WIDTH_MIN = 180
 /** Tree drag clamp ceiling: beyond it the viewer loses its readable share. */
 const TREE_WIDTH_MAX = 520
+/** Open tabs beyond this close the oldest clean one. */
+const TAB_LIMIT = 8
 
 /** Everything the workstation draws, in one store instance. */
 export interface WorkstationState {
@@ -73,25 +92,17 @@ export interface WorkstationState {
   levels: Record<string, LevelState>
   /** Open directory paths; the root level draws open without being listed here. */
   expanded: string[]
-  /** The open file and the pages of it read so far. */
-  viewer: ViewerState
+  /** Open files, in the order their tabs were opened. */
+  tabs: TabState[]
+  /** Path of the focused tab, `null` while none is open. */
+  activePath: string | null
   /** Drawn width of the tree column in px; the viewer takes the rest of the seat. */
   treeWidth: number
 }
 
-/** One page of a file, as the viewer appends it. */
-export interface FilePage {
-  /** The lines this page added. */
-  readonly lines: readonly string[]
-  /** First line of the following page. */
-  readonly offset: number
-  /** The file ends within this page. */
-  readonly eof: boolean
-}
-
 /** The workstation store's write set. */
 export type WorkstationActionMap = {
-  /** Drop every loaded level and forget the open file, keeping what is expanded. */
+  /** Drop every loaded level and close every tab, keeping what is expanded. */
   reset: (draft: WorkstationState) => void
   /** Mark one directory as being listed. */
   loading: (draft: WorkstationState, path: string) => void
@@ -103,14 +114,22 @@ export type WorkstationActionMap = {
   expanded: (draft: WorkstationState, path: string) => void
   /** Close one directory's level in the tree. */
   collapsed: (draft: WorkstationState, path: string) => void
-  /** Start the viewer on one file, discarding whatever it showed before. */
-  opened: (draft: WorkstationState, path: string) => void
-  /** Mark the open file as reading its next page. */
-  paging: (draft: WorkstationState) => void
-  /** Append one page to the open file. */
-  paged: (draft: WorkstationState, page: FilePage) => void
-  /** Record why the open file's last page failed. */
-  pageFailed: (draft: WorkstationState, failure: RemoteFailure) => void
+  /** Add one file's tab, or focus it when it is already open. */
+  tabOpened: (draft: WorkstationState, path: string) => void
+  /** Focus an already open tab. */
+  tabFocused: (draft: WorkstationState, path: string) => void
+  /** Replace one tab's buffer from the editor. */
+  tabEdited: (draft: WorkstationState, path: string, text: string) => void
+  /** Record the text the endpoint read for one tab. */
+  tabLoaded: (draft: WorkstationState, path: string, text: string) => void
+  /** Record the bytes the endpoint read for one image tab. */
+  tabImageLoaded: (draft: WorkstationState, path: string, image: TabImage) => void
+  /** Record why one tab's last read or save failed. */
+  tabFailed: (draft: WorkstationState, path: string, message: string, failedOn: TabFailureKind) => void
+  /** Record one tab's buffer as saved on the Host. */
+  tabSaved: (draft: WorkstationState, path: string, text: string) => void
+  /** Remove one tab, focusing its neighbour when it was the active one. */
+  tabClosed: (draft: WorkstationState, path: string) => void
   /** Save the tree column's drag width, clamped into its contract range. */
   setTreeWidth: (draft: WorkstationState, px: number) => void
 }
@@ -131,6 +150,16 @@ function expand(state: WorkstationState, path: string): void {
 }
 
 /**
+ * The tab holding one path, when it is open.
+ * @param state - the draft.
+ * @param path - absolute file path.
+ * @returns the tab, or `undefined`.
+ */
+function tabOf(state: WorkstationState, path: string): TabState | undefined {
+  return state.tabs.find(tab => tab.path === path)
+}
+
+/**
  * Declare the workstation's store.
  *
  * A factory rather than a shared handle: the registration owns the instance, so
@@ -142,12 +171,13 @@ export function createWorkstationStore(): WorkstationStoreHandle {
     init: (): WorkstationState => ({
       levels: {},
       expanded: [],
-      viewer: { path: null, lines: [], offset: FIRST_LINE, eof: true, loading: false, failure: null },
+      tabs: [],
+      activePath: null,
       treeWidth: TREE_WIDTH_DEFAULT,
     }),
     actions: {
       /**
-       * Drop every loaded level and close the viewer's file.
+       * Drop every loaded level and close every tab.
        *
        * The Session changed, and the same path names a
        * different directory in a different workspace: keeping what was loaded
@@ -156,7 +186,8 @@ export function createWorkstationStore(): WorkstationStoreHandle {
        */
       reset: (d) => {
         d.levels = {}
-        d.viewer = { path: null, lines: [], offset: FIRST_LINE, eof: true, loading: false, failure: null }
+        d.tabs = []
+        d.activePath = null
       },
       /**
        * Mark one directory as being listed.
@@ -203,44 +234,139 @@ export function createWorkstationStore(): WorkstationStoreHandle {
         d.expanded = d.expanded.filter(at => at !== path)
       },
       /**
-       * Start the viewer on one file.
+       * Add one file's tab, or focus it when it is already open.
        *
-       * The page in flight for the previous file is retired by the face's own
-       * generation, not by this action, so clearing here is enough.
+       * The tab is added empty and loading: the face reads the file and settles
+       * it. A tab beyond the limit closes the oldest clean tab, so edits are
+       * never discarded to make room; when every tab is dirty the limit yields,
+       * because the alternative is dropping work the user still sees.
        * @param d - draft state.
        * @param path - absolute file path.
        */
-      opened: (d, path: string) => {
-        d.viewer = { path, lines: [], offset: FIRST_LINE, eof: false, loading: true, failure: null }
+      tabOpened: (d, path: string) => {
+        if (tabOf(d, path) !== undefined) {
+          d.activePath = path
+          return
+        }
+        d.tabs.push({
+          path,
+          kind: imageMediaType(path) === null ? 'text' : 'image',
+          text: '',
+          saved: '',
+          dirty: false,
+          loading: true,
+          failure: null,
+          failedOn: null,
+          image: null,
+        })
+        d.activePath = path
+        if (d.tabs.length <= TAB_LIMIT) return
+        const victim = d.tabs.find(tab => tab.path !== path && !tab.dirty)
+        if (victim !== undefined) d.tabs.splice(d.tabs.indexOf(victim), 1)
       },
       /**
-       * Mark the open file as reading its next page.
+       * Focus an already open tab.
        * @param d - draft state.
+       * @param path - absolute file path.
        */
-      paging: (d) => {
-        d.viewer.loading = true
-        d.viewer.failure = null
+      tabFocused: (d, path: string) => {
+        if (tabOf(d, path) !== undefined) d.activePath = path
       },
       /**
-       * Append one page to the open file.
+       * Replace one tab's buffer from the editor.
+       *
+       * The dirty flag is derived here so every writer — typing, a save
+       * settlement, a read settlement — agrees on what "unsaved" means.
        * @param d - draft state.
-       * @param page - the page the endpoint returned.
+       * @param path - absolute file path.
+       * @param text - the editor's whole buffer.
        */
-      paged: (d, page: FilePage) => {
-        d.viewer.lines.push(...page.lines)
-        d.viewer.offset = page.offset
-        d.viewer.eof = page.eof
-        d.viewer.loading = false
-        d.viewer.failure = null
+      tabEdited: (d, path: string, text: string) => {
+        const tab = tabOf(d, path)
+        if (tab === undefined) return
+        tab.text = text
+        tab.dirty = text !== tab.saved
       },
       /**
-       * Record why the open file's last page failed.
+       * Record the text the endpoint read for one tab.
        * @param d - draft state.
-       * @param failure - the settled Remote failure.
+       * @param path - absolute file path.
+       * @param text - the complete file text.
        */
-      pageFailed: (d, failure: RemoteFailure) => {
-        d.viewer.loading = false
-        d.viewer.failure = failure
+      tabLoaded: (d, path: string, text: string) => {
+        const tab = tabOf(d, path)
+        if (tab === undefined) return
+        tab.text = text
+        tab.saved = text
+        tab.dirty = false
+        tab.loading = false
+        tab.failure = null
+        tab.failedOn = null
+      },
+      /**
+       * Record the bytes the endpoint read for one image tab.
+       * @param d - draft state.
+       * @param path - absolute file path.
+       * @param image - the decoded file and its size.
+       */
+      tabImageLoaded: (d, path: string, image: TabImage) => {
+        const tab = tabOf(d, path)
+        if (tab === undefined) return
+        tab.image = image
+        tab.loading = false
+        tab.failure = null
+        tab.failedOn = null
+      },
+      /**
+       * Record why one tab's last read or save failed.
+       *
+       * A failed save leaves the tab open and dirty: the buffer is still the
+       * user's, and the failure line says why the Host does not have it.
+       * @param d - draft state.
+       * @param path - absolute file path.
+       * @param message - the endpoint's message.
+       * @param failedOn - which operation failed.
+       */
+      tabFailed: (d, path: string, message: string, failedOn: TabFailureKind) => {
+        const tab = tabOf(d, path)
+        if (tab === undefined) return
+        tab.loading = false
+        tab.failure = message
+        tab.failedOn = failedOn
+      },
+      /**
+       * Record one tab's buffer as saved on the Host.
+       *
+       * `saved` moves to the text that was written, and the dirty flag is
+       * recomputed against the buffer, so edits typed while the write was in
+       * flight keep the tab dirty.
+       * @param d - draft state.
+       * @param path - absolute file path.
+       * @param text - the text the Host accepted.
+       */
+      tabSaved: (d, path: string, text: string) => {
+        const tab = tabOf(d, path)
+        if (tab === undefined) return
+        tab.saved = text
+        tab.dirty = tab.text !== text
+        tab.failure = null
+        tab.failedOn = null
+      },
+      /**
+       * Remove one tab.
+       *
+       * Closing the active tab focuses the next one, or the previous one when
+       * the closed tab was last, so the viewer always shows something while a
+       * tab remains.
+       * @param d - draft state.
+       * @param path - absolute file path.
+       */
+      tabClosed: (d, path: string) => {
+        const at = d.tabs.findIndex(tab => tab.path === path)
+        if (at < 0) return
+        d.tabs.splice(at, 1)
+        if (d.activePath !== path) return
+        d.activePath = d.tabs[at]?.path ?? d.tabs[at - 1]?.path ?? null
       },
       /**
        * Save the tree column's drag width.

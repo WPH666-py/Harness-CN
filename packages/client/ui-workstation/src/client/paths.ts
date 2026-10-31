@@ -1,5 +1,6 @@
 /**
- * Path arithmetic for the workstation tree.
+ * Path arithmetic for the workstation tree, and the two file-shape helpers the
+ * tabs need: whether a path previews as an image, and how large a preview is.
  *
  * Every path here is the absolute path the listing endpoint was asked with:
  * the tree starts at the Session's working directory, and children are joined
@@ -8,15 +9,6 @@
  * next listing takes.
  */
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
-
-/**
- * The first line of a file, and so the offset the viewer's first page asks for.
- *
- * The read endpoint numbers line windows from 1 and rejects 0, while a paged
- * viewer naturally counts from 0; naming the constant here keeps every caller on
- * the endpoint's numbering.
- */
-export const FIRST_LINE = 1
 
 /**
  * Join one entry name onto an absolute directory path.
@@ -38,17 +30,46 @@ export function baseName(path: string): string {
   return at < 0 ? path : path.slice(at + 1)
 }
 
+/** Image media type by lowercase extension; anything absent here is edited as text. */
+const IMAGE_TYPES: Readonly<Record<string, string>> = {
+  avif: 'image/avif',
+  bmp: 'image/bmp',
+  gif: 'image/gif',
+  ico: 'image/x-icon',
+  jpeg: 'image/jpeg',
+  jpg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+}
+
 /**
- * Split one page of file text into the lines the viewer draws.
+ * The media type a path previews as, or `null` when it opens as text.
  *
- * The endpoint reports how many lines it returned; its `text` is that many
- * lines with `\n` between them, so a trailing separator opens one last empty
- * line, which is what an editor shows at the end of a terminated file.
- * @param text - the page's text.
- * @returns its lines, in order.
+ * Only the extension decides: the read verb reports a non-text file by failing,
+ * and a text file with an image extension is rare enough that its preview
+ * failing (and saying so) is the better trade than sniffing every byte.
+ * @param path - absolute file path.
+ * @returns the blob's media type, or `null` for a text tab.
  */
-export function linesOf(text: string): string[] {
-  return text.split('\n')
+export function imageMediaType(path: string): string | null {
+  const name = baseName(path)
+  const dot = name.lastIndexOf('.')
+  if (dot < 0) return null
+  return IMAGE_TYPES[name.slice(dot + 1).toLowerCase()] ?? null
+}
+
+/**
+ * A byte count as the viewer header shows it.
+ *
+ * Binary units, one decimal below a megabyte: the header has one short line and
+ * the exact count is not what the reader weighs a preview by.
+ * @param bytes - the file's size in bytes.
+ * @returns the size, unit-suffixed.
+ */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 /** Natural, case-insensitive name order, so `file2` precedes `file10`. */

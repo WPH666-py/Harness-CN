@@ -6,5 +6,18 @@
     "mode": "IDE / Workstation",
     "enable": "Switch to the IDE layout",
     "disable": "Back to the conversation layout"
+  },
+  "tab": {
+    "unsaved": "Unsaved",
+    "save": "Save",
+    "closeSave": "Close and save",
+    "saveFailed": "Save failed: {message}"
+  },
+  "editor": {
+    "label": "Editing {name}"
+  },
+  "preview": {
+    "image": "Image preview",
+    "size": "Size {size}"
   }
 }

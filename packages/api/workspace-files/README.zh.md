@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-使用本包可从 Web Client 预览 Session 文件系统允许读取的文件，并在该 Session 的工作区内增删条目。它按页读取 UTF-8 文本、按有界窗口或完整文件读取原始字节、从基文件目录解析关联文件，并报告文件元数据。文件读取可以指向工作区外路径；目录列举、已埋点的文件系统观察与每一项变更仍限定于工作区。本服务还会在工作区内创建、删除、复制和移动条目。
+使用本包可从 Web Client 预览 Session 文件系统允许读取的文件，并在该 Session 的工作区内增删条目。它按页读取 UTF-8 文本、按有界窗口或完整文件读取原始字节、从基文件目录解析关联文件，并报告文件元数据。文件读取可以指向工作区外路径；目录列举、已埋点的文件系统观察与改变条目形态的变更仍限定于工作区，而一次完整文本写入沿用读取所拥有的访问权限。本服务还会在工作区内创建、删除、复制和移动条目，并替换一个已有文件的完整文本。
 
 ## 目录
 
@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-把本包与 `dsh-fs`、`dsh-sandbox-policy`、Session store 和 Typert Gateway 一起挂载；bundle 把它紧随 Session Controller 之后挂载。每个方法都在线路上携带 Session 身份，Client 调用 `remote.workspaceFiles.read(sessionId, path, range, signal)`、`stat(sessionId, path, signal)`、`readBytes(sessionId, path, range, signal)`、`list(sessionId, path, signal)` 或 `changes(sessionId, signal)`，从不自己指定根。Host 读取 live Session header，cold Session 则使用持久层 `stat`；它不会激活 Agent、读取事件正文或借用父 Session 的根。live 读取不要求挂载 Session persistence；未挂载时 cold Session 无法解析，Gateway 返回 `gateway/lookup-not-found`。
+把本包与 `dsh-fs`、`dsh-sandbox-policy`、Session store 和 Typert Gateway 一起挂载；bundle 把它紧随 Session Controller 之后挂载。每个方法都在线路上携带 Session 身份，Client 调用 `remote.workspaceFiles.read(sessionId, path, range, signal)`、`stat(sessionId, path, signal)`、`readBytes(sessionId, path, range, signal)`、`list(sessionId, path, signal)`、`write(sessionId, path, text, signal)` 或 `changes(sessionId, signal)`，从不自己指定根。Host 读取 live Session header，cold Session 则使用持久层 `stat`；它不会激活 Agent、读取事件正文或借用父 Session 的根。live 读取不要求挂载 Session persistence；未挂载时 cold Session 无法解析，Gateway 返回 `gateway/lookup-not-found`。
 
 | 方法 | 返回 | 用途 |
 |---|---|---|
@@ -38,19 +38,22 @@ kind: "package-reference"
 | `changes()` | `WorkspaceFileWatchFrame` 流 | 订阅就绪确认，随后为工作区根内的文件系统观察 |
 | `createDirectory(path, name)` | `WorkspaceFileMutation { path, absolutePath, version, bytes? }` | 在 `path` 内新建一个名为 `name` 的目录 |
 | `createFile(path, name)` | `WorkspaceFileMutation` | 在 `path` 内新建一个名为 `name` 的空文件 |
+| `write(path, text)` | `WorkspaceFileMutation` | 在与 `read` 相同的访问权限下替换一个已有文件的完整 UTF-8 内容 |
 | `remove(path, { recursive?, contentsOnly? })` | `WorkspaceFileRemoval { sessionId, path }` | 一个条目，或一个目录所包含的条目 |
 | `copy(fromPath, toPath)` | `WorkspaceFileMutation` | 一个文件或一棵目录子树，落在不存在的目标上 |
 | `move(fromPath, toPath)` | `WorkspaceFileMutation` | 一个文件或一棵目录子树，重命名或改变位置 |
 
 ### 寻址与路径
 
-`read`、`readBytes`、`readAll`、`readRelated` 与 `stat` 接受绝对路径或相对于所选 Session 工作区根的路径。组合文件系统决定路径是否可读；本服务不额外要求文件读取限定于工作区。`readRelated` 从基文件所在目录解析相对文件系统路径，基文件或目标文件位于工作区外时同样适用。这些方法以文件系统执行环境中的绝对路径报告文件。`list` 仍限定于工作区，并以相对于该根的路径报告被列举目录。`changes` 同样只报告工作区根内已埋点的文件系统观察。
+`read`、`readBytes`、`readAll`、`readRelated` 与 `stat` 接受绝对路径或相对于所选 Session 工作区根的路径。组合文件系统决定路径是否可读；本服务不额外要求文件读取限定于工作区。`readRelated` 从基文件所在目录解析相对文件系统路径，基文件或目标文件位于工作区外时同样适用。这些方法以文件系统执行环境中的绝对路径报告文件。`write` 以同样的方式解析目标，因此在 `read` 可读取之处也能替换工作区外的文件。`list` 仍限定于工作区，并以相对于该根的路径报告被列举目录。`changes` 同样只报告工作区根内已埋点的文件系统观察。
 
 ### 变更操作
 
-每一项变更都限定于工作区。Host 解析 Session 工作区根，并相对该根解析目标；除非解析出的目标是该根本身或其后代，否则以 `workspace-file/outside-workspace` 拒绝该调用。路径可以是绝对路径或相对于工作区根的路径，与 `list` 接受的路径完全一致。
+改变条目形态的每一项变更都限定于工作区：`createDirectory`、`createFile`、`remove`、`copy` 与 `move`。Host 解析 Session 工作区根，并相对该根解析目标；除非解析出的目标是该根本身或其后代，否则以 `workspace-file/outside-workspace` 拒绝该调用。路径可以是绝对路径或相对于工作区根的路径，与 `list` 接受的路径完全一致。`write` 没有这层包含限制：它替换内容并沿用 `read` 的访问权限，因此在内容关卡之后说明。
 
 `createDirectory` 与 `createFile` 接收一个父目录外加一个 `name`，该名称必须是一个路径段：不含 `/`、不含 `\`、不是 `.` 或 `..`、不为空、不是空白，且首尾没有空白。所创建条目的 `path` 是父目录的工作区路径与 `name` 以 `/` 连接。名称已被占用时以 `workspace-file/exists` 失败；不做任何合并或覆盖。父目录不是目录时以 `workspace-file/not-directory` 失败，父目录不存在时以 `workspace-file/not-found` 失败。
+
+`write` 替换一个已有普通文件的完整 UTF-8 内容，是唯一处于包含规则之外的变更动词：它像 `read` 一样解析目标，因此只要文件系统后端允许读取，工作区外的文件也能被写入；答案中的 `path` 在工作区内相对于根，在工作区外则是绝对路径。目标是目录时以 `workspace-file/not-file` 失败；符号链接或其他非普通文件、以及不存在的路径，与 `read` 一样失败。文本含 NUL 字节时以 `workspace-file/not-text` 失败，超过 `maxFileBytes` 个 UTF-8 字节时以 `workspace-file/too-large` 失败。替换是无条件且原子的——不期望版本，因此不会发现并发改动——服务会为被写入的文件发射 `fs/observed`，打开中的 `changes` generation 报告的正是它。
 
 `remove` 删除 `path` 处的条目。仍包含条目的目录要求 `recursive: true`；未提供时调用以 `workspace-file/not-empty` 失败，且不删除任何内容。`contentsOnly: true` 删除目标目录所包含的内容并保留该目录本身，工作区根正是这样清空的；删除根本身是 `gateway/bad-request`。
 
@@ -79,7 +82,7 @@ kind: "package-reference"
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `maxBytes` | `2097152`（2 MiB） | 单页文本与单个字节窗口的字节上限（含）；更大的页或窗口失败 |
-| `maxFileBytes` | `33554432`（32 MiB） | `readAll` 和 `readRelated` 的完整文件字节上限（含）；更大文件以 `too-large` 失败 |
+| `maxFileBytes` | `33554432`（32 MiB） | `readAll`、`readRelated` 以及 `write` 可接受文本的完整文件字节上限（含）；更大文件或文本以 `too-large` 失败 |
 | `maxLines` | `5000` | 页大小的缺省值与上限（行）；更大的 `limit` 被拒绝 |
 | `maxEntries` | `2000` | 返回目录条目数上限；其余丢弃并报告截断 |
 
@@ -87,7 +90,7 @@ kind: "package-reference"
 
 ### 失败
 
-每种失败都是一个带类型化 details 的 `RemoteError` 代码，声明于 [`src/types.ts`](src/types.ts)：`workspace-file/not-found`、`workspace-file/outside-workspace`（目录列举与每一项变更）、`workspace-file/too-large`（带 `limit`，即适用的页、窗口或完整文件上限）、`workspace-file/not-text`、`workspace-file/not-regular-file`（`kind` 为 `directory`、`symlink` 或 `other`）、`workspace-file/not-directory`（`kind` 为 `file`、`symlink` 或 `other`），以及变更新增的两个——目标已被占用时的 `workspace-file/exists`，与非递归删除非空目录时的 `workspace-file/not-empty`。路径格式错误、名称不是一个路径段、以工作区根作为复制或移动的源，以及目标嵌套在自己的源之内，都是 `gateway/bad-request`。调用方按代码分支，绝不按消息文本。
+每种失败都是一个带类型化 details 的 `RemoteError` 代码，声明于 [`src/types.ts`](src/types.ts)：`workspace-file/not-found`、`workspace-file/outside-workspace`（目录列举与改变条目形态的变更）、`workspace-file/too-large`（带 `limit`，即适用的页、窗口、完整文件或写入文本上限）、`workspace-file/not-text`、`workspace-file/not-regular-file`（`kind` 为 `directory`、`symlink` 或 `other`）、`write` 指向目录而没有文本可替换时的 `workspace-file/not-file`、`workspace-file/not-directory`（`kind` 为 `file`、`symlink` 或 `other`），以及变更新增的两个——目标已被占用时的 `workspace-file/exists`，与非递归删除非空目录时的 `workspace-file/not-empty`。路径格式错误、名称不是一个路径段、以工作区根作为复制或移动的源，以及目标嵌套在自己的源之内，都是 `gateway/bad-request`。调用方按代码分支，绝不按消息文本。
 
 ### Client 文件资源
 
@@ -109,13 +112,13 @@ kind: "package-reference"
 
 ### 设计概念
 
-经 `ctx.fs` 的读取使用后端的读取权限；沙箱后端限制变更，而不限制读取。Typert lookup 从 live Session header 或持久层的 header-only `stat` 导出 `WorkspaceFileScope`，所以 cold subagent Session 不需要激活 Agent 或读取事件正文。本服务增加普通文件检查与有界传输，工作区包含要求属于目录列举、变更观察与每一个变更动词。变更只解析一次目标，并复用 `list` 的 `contains` 判定，而不另立第二套包含机制；创建则用受限父目录的进程路径加一个已校验路径段拼出子路径，因此该名称的任何写法都无法让结果移出该父目录。页从 `streamText` 切出，后者逐块解码并拒绝非 UTF-8：切页器对窗口之前的行只计数不保留，对窗口内的每个片段先按字节上限验收再缓冲，并在窗口之后的第一个字符处返回。流之前的一次 `stat` 给出页所报告的版本与大小。
+经 `ctx.fs` 的读取使用后端的读取权限；沙箱后端限制变更，而不限制读取。Typert lookup 从 live Session header 或持久层的 header-only `stat` 导出 `WorkspaceFileScope`，所以 cold subagent Session 不需要激活 Agent 或读取事件正文。本服务增加普通文件检查与有界传输，工作区包含要求属于目录列举、变更观察与改变条目形态的变更。`write` 是例外，因为保存必须被允许在任何读取被允许之处：它先过同一套路径与类型关卡，再过 NUL 与 UTF-8 字节上限关卡，然后做一次原子替换，并自行发射 `fs/observed`，因为没有工具会为一次 Remote 调用报告它。受包含检查的变更只解析一次目标，并复用 `list` 的 `contains` 判定，而不另立第二套包含机制；创建则用受限父目录的进程路径加一个已校验路径段拼出子路径，因此该名称的任何写法都无法让结果移出该父目录。页从 `streamText` 切出，后者逐块解码并拒绝非 UTF-8：切页器对窗口之前的行只计数不保留，对窗口内的每个片段先按字节上限验收再缓冲，并在窗口之后的第一个字符处返回。流之前的一次 `stat` 给出页所报告的版本与大小。
 
 ### 源码地图
 
 | 文件 | 职责 |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `WorkspaceFiles`：`workspaceFiles` 服务与 Remote 命名空间、`Config`、四道关、切页器、`read`、`readBytes`、`readAll`、`readRelated`、`stat`、`list`、`createDirectory`、`createFile`、`remove`、`copy`、`move` |
+| [`src/index.ts`](src/index.ts) | `WorkspaceFiles`：`workspaceFiles` 服务与 Remote 命名空间、`Config`、四道关、切页器、`read`、`readBytes`、`readAll`、`readRelated`、`stat`、`list`、`createDirectory`、`createFile`、`write`、`remove`、`copy`、`move` |
 | [`src/changes.ts`](src/changes.ts) | `WorkspaceChangeFeed`：`fs/observed` 订阅与每个打开的 `changes` generation 各一条队列 |
 | [`src/types.ts`](src/types.ts) | 线路类型与 `RemoteErrorDetailsMap` 错误码，以 `./types` 发布给 Client 包 |
 | [`src/client/index.ts`](src/client/index.ts)、[`provider.ts`](src/client/provider.ts)、[`change-feed.ts`](src/client/change-feed.ts) | 浏览器插件、文件元数据与每 Session 变更流 |
@@ -158,6 +161,7 @@ Typert 生成 `./typert` 与 `./remote` 暴露的 Host 与 Client Remote 产物�
 - **没有总行数**——页只报告 `eof`，不报告后面还有多少行；需要总数的消费方要翻到末尾或按 `bytes` 估算。
 - **超长单行没有页**——超过 `maxBytes` 的单行在包含它的每个窗口都以 `too-large` 失败，因为页按行而非按字节切。
 - **读取不具备事务性**——结果元数据来自内容读取之前的 stat；并发写入可能使报告版本与返回内容不一致。
+- **写入无条件**——`write` 不期望版本，因此保存会覆盖并发改动而不拒绝；要发现过期的编辑器缓冲区，该动词需要增加版本参数。
 - **generation 队列无界**——一个 `changes` generation 会缓冲每一条被包含的观察直到消费方 pull；停滞的消费方会在流的生命期内持续增长 Host 内存。
 - **`maxEntries` 限制的是答案，不是列举**——`list` 让 `ctx.fs.listDir` 列出全部子项后再截断数组，远超上限的目录仍让 Host 付出整个列举的代价（`fs-local` 上每个子项一次 stat）；要限制这份工作，需要文件系统 seam 的 `listDir` 支持上限。
 - **失效流保留元数据**——Host 结束 `changes` 或流终态失败后，已打开的值保持最后已知状态，直到重新打开。

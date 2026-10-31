@@ -1,6 +1,70 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/api/workspace-files/README.md
-README.md: 92fcd7a97ffa53090874c450896b3966679b7385
-README.zh.md: 5bd4116ce67e7dad4c5bd1056db010a222de338c
+/:
+  en: db8470fc4d58a63a
+  zh: c0e01408f8670d06
+/deepseek-ai-dsh-api-workspace-files:
+  en: d2885c72d12d9924
+  zh: e111f03d02383229
+/deepseek-ai-dsh-api-workspace-files/summary:
+  en: 948bc99fcb04b394
+  zh: 902c8f451232edea
+/deepseek-ai-dsh-api-workspace-files/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-api-workspace-files/use-this-package:
+  en: ead9a815a823f32a
+  zh: 9a539b638c1a66dc
+/deepseek-ai-dsh-api-workspace-files/use-this-package/addressing-and-paths:
+  en: e1edf061361690e1
+  zh: 56ecaf7070f5fc61
+/deepseek-ai-dsh-api-workspace-files/use-this-package/mutations:
+  en: 8a295a9ab5364d6e
+  zh: bede79c33bf41766
+/deepseek-ai-dsh-api-workspace-files/use-this-package/pages:
+  en: 9cd68b8be3390c80
+  zh: 26049ce447f00452
+/deepseek-ai-dsh-api-workspace-files/use-this-package/byte-windows:
+  en: e7ec8873dc078977
+  zh: 35ae2cd6aaa8f94e
+/deepseek-ai-dsh-api-workspace-files/use-this-package/file-read-and-directory-checks:
+  en: 2469ca85aa089eaf
+  zh: 21927e6e15f3276a
+/deepseek-ai-dsh-api-workspace-files/use-this-package/the-change-feed:
+  en: ec601195206adcd3
+  zh: 8745093e8bddb1dc
+/deepseek-ai-dsh-api-workspace-files/use-this-package/configuration:
+  en: a6c843437226f135
+  zh: f0c090b378242e23
+/deepseek-ai-dsh-api-workspace-files/use-this-package/failures:
+  en: 1776c46964ee9200
+  zh: fc67949021f318f7
+/deepseek-ai-dsh-api-workspace-files/use-this-package/client-file-resources:
+  en: 17c184e4eab90f8b
+  zh: e169275a7ff2eb19
+/deepseek-ai-dsh-api-workspace-files/understand-the-implementation:
+  en: 42b15ac6321706aa
+  zh: ce1d25bffb6948cd
+/deepseek-ai-dsh-api-workspace-files/understand-the-implementation/design-concept:
+  en: 0b3d2c717bf4f97b
+  zh: e0751c8cd43b339d
+/deepseek-ai-dsh-api-workspace-files/understand-the-implementation/source-map:
+  en: 4ac96847e7333f2f
+  zh: 7003bab6e940d135
+/deepseek-ai-dsh-api-workspace-files/further-exploration:
+  en: 71f00fb919d12181
+  zh: 7487171abdc0c0ee
+/deepseek-ai-dsh-api-workspace-files/model-experience:
+  en: 37b4264c8301323f
+  zh: 74ea89b3383ff7da
+/deepseek-ai-dsh-api-workspace-files/model-experience/kv-cache-effect:
+  en: ca75c51c89c2c9b0
+  zh: 03126f3b1aac5859
+/deepseek-ai-dsh-api-workspace-files/known-limitations-and-deferred-work:
+  en: d3a71f13478eb21c
+  zh: bee924e20bf9c335
+/deepseek-ai-dsh-api-workspace-files/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: e88aeb617ffb74ea

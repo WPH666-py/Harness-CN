@@ -1,6 +1,6 @@
 /**
- * The workstation seat: the tree beside the viewer, filling the frame's first
- * column while the frame presents the IDE layout.
+ * The workstation seat: the tree beside the tabbed editor, filling the frame's
+ * first column while the frame presents the IDE layout.
  *
  * The Session on screen travels in as a hook source, and its absence is a state
  * of its own — no Session, no workspace to list — rather than an error.
@@ -27,7 +27,10 @@ export type WorkstationProps =
  * @returns the seat's content.
  */
 export function Workstation(props: WorkstationProps): ReactNode {
-  const { t: translate, useStore, useSessions, useSessionId, actions, openDirectory, toggleDirectory, openFile, loadMore } = props
+  const {
+    t: translate, useStore, useSessions, useSessionId, actions,
+    openDirectory, toggleDirectory, openFile, focusTab, editTab, saveTab, closeTab,
+  } = props
   const sessionId = useSessionId(state => state)
   // The listing endpoint takes a directory path and has no spelling for "the
   // workspace root", so the tree starts from the Session's own working
@@ -46,11 +49,19 @@ export function Workstation(props: WorkstationProps): ReactNode {
         openDirectory={openDirectory}
         toggleDirectory={toggleDirectory}
         openFile={openFile}
+        focusTab={focusTab}
         root={root}
         width={treeWidth}
       />
       <TreeSplitter width={treeWidth} onResize={(px: number) => { actions.setTreeWidth(px) }} />
-      <FileViewer useStore={useStore} translate={translate} loadMore={loadMore} />
+      <FileViewer
+        useStore={useStore}
+        translate={translate}
+        focusTab={focusTab}
+        editTab={editTab}
+        saveTab={saveTab}
+        closeTab={closeTab}
+      />
     </div>
   )
 }

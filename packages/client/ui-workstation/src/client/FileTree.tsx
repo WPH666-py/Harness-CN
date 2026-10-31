@@ -1,7 +1,7 @@
 /**
  * The workstation's tree half: the Session's workspace, listed one level at a
- * time, with directories that expand in place and files that open into the
- * viewer beside it.
+ * time, with directories that expand in place and files that open in the
+ * editor's tabs.
  *
  * The tree starts at the Session's working directory and appends child names
  * onto it, so every key below the root is an absolute path the listing endpoint
@@ -34,8 +34,10 @@ export interface FileTreeProps {
   readonly openDirectory: WorkstationFace['openDirectory']
   /** Open or close one directory's level. */
   readonly toggleDirectory: WorkstationFace['toggleDirectory']
-  /** Open one file into the viewer. */
+  /** Open one file in its own tab. */
   readonly openFile: WorkstationFace['openFile']
+  /** Focus the tab of a file that is already open. */
+  readonly focusTab: WorkstationFace['focusTab']
   /**
    * The Session's working directory, which the tree lists first; `undefined`
    * while the Session summary that carries it has not arrived.
@@ -62,10 +64,13 @@ interface LevelProps extends LevelShare {
  * @returns the level's rows, or the state that stands in for them.
  */
 function Level(props: LevelProps): ReactNode {
-  const { path, depth, useStore, translate: t, openDirectory, toggleDirectory, openFile } = props
+  const { path, depth, useStore, translate: t, openDirectory, toggleDirectory, openFile, focusTab } = props
   const level = useStore(state => state.levels[path])
   const expanded = useStore(state => state.expanded.includes(path))
-  const open = useStore(state => state.viewer.path)
+  const activePath = useStore(state => state.activePath)
+  // A tab's path set as one string: a selector must return a stable value, so
+  // the tabs array itself cannot be what the row subscribes to.
+  const openPaths = useStore(state => state.tabs.map(tab => tab.path).join('\n'))
 
   // A level that was never asked for is asked for here, once: the store records
   // the request as `loading`, so the effect's dependency changes and stops.
@@ -100,11 +105,12 @@ function Level(props: LevelProps): ReactNode {
               data-workstation-entry={directory ? 'directory' : 'file'}
               data-workstation-path={child}
               aria-expanded={directory ? expanded : undefined}
-              aria-current={open === child ? 'true' : undefined}
+              aria-current={activePath === child ? 'true' : undefined}
               title={entry.name}
               style={{ paddingLeft: `${8 + depth * 12}px` }}
               onClick={() => {
                 if (directory) toggleDirectory(child, expanded)
+                else if (openPaths.split('\n').includes(child)) focusTab(child)
                 else openFile(child)
               }}
             >

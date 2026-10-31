@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Use this package to preview files readable through a Session's filesystem from the web client, and to change entries inside that Session's workspace. It reads UTF-8 text by page, reads bounded byte windows or complete files, resolves related files from a base file's directory, and reports file metadata. File reads may target paths outside the workspace; directory listing, instrumented filesystem observations, and every mutation remain workspace-scoped. The service also creates, removes, copies, and moves entries inside the workspace.
+Use this package to preview files readable through a Session's filesystem from the web client, and to change entries inside that Session's workspace. It reads UTF-8 text by page, reads bounded byte windows or complete files, resolves related files from a base file's directory, and reports file metadata. File reads may target paths outside the workspace; directory listing, instrumented filesystem observations, and the entry-shaping mutations remain workspace-scoped, while one complete-text write shares the access a read has. The service also creates, removes, copies, and moves entries inside the workspace, and replaces one existing file's complete text.
 
 ## Table of Contents
 
@@ -25,7 +25,7 @@ Use this package to preview files readable through a Session's filesystem from t
 <a id="use-this-package"></a>
 ## Use this package
 
-Mount the package beside `dsh-fs`, `dsh-sandbox-policy`, the Session store, and the Typert Gateway; the bundle does so right after the Session Controller. Every method takes the Session identity on the wire, so a Client calls `remote.workspaceFiles.read(sessionId, path, range, signal)`, `stat(sessionId, path, signal)`, `readBytes(sessionId, path, range, signal)`, `list(sessionId, path, signal)`, or `changes(sessionId, signal)` and never names a root itself. The Host reads a live Session header or uses persistence `stat` for a cold Session; it does not activate an Agent, read the event body, or borrow a parent Session's root. Session persistence is optional for live reads, but without it a cold Session cannot resolve and the Gateway returns `gateway/lookup-not-found`.
+Mount the package beside `dsh-fs`, `dsh-sandbox-policy`, the Session store, and the Typert Gateway; the bundle does so right after the Session Controller. Every method takes the Session identity on the wire, so a Client calls `remote.workspaceFiles.read(sessionId, path, range, signal)`, `stat(sessionId, path, signal)`, `readBytes(sessionId, path, range, signal)`, `list(sessionId, path, signal)`, `write(sessionId, path, text, signal)`, or `changes(sessionId, signal)` and never names a root itself. The Host reads a live Session header or uses persistence `stat` for a cold Session; it does not activate an Agent, read the event body, or borrow a parent Session's root. Session persistence is optional for live reads, but without it a cold Session cannot resolve and the Gateway returns `gateway/lookup-not-found`.
 
 | Method | Returns | Purpose |
 |---|---|---|
@@ -38,19 +38,22 @@ Mount the package beside `dsh-fs`, `dsh-sandbox-policy`, the Session store, and 
 | `changes()` | stream of `WorkspaceFileWatchFrame` | Subscription readiness, then filesystem observations inside the workspace root |
 | `createDirectory(path, name)` | `WorkspaceFileMutation { path, absolutePath, version, bytes? }` | One new directory named `name` inside `path` |
 | `createFile(path, name)` | `WorkspaceFileMutation` | One new empty file named `name` inside `path` |
+| `write(path, text)` | `WorkspaceFileMutation` | One existing file's complete UTF-8 content, replaced under the same access as `read` |
 | `remove(path, { recursive?, contentsOnly? })` | `WorkspaceFileRemoval { sessionId, path }` | One entry, or the entries one directory contains |
 | `copy(fromPath, toPath)` | `WorkspaceFileMutation` | One file or one directory subtree, at an absent destination |
 | `move(fromPath, toPath)` | `WorkspaceFileMutation` | One file or one directory subtree, renamed or relocated |
 
 ### Addressing and paths
 
-`read`, `readBytes`, `readAll`, `readRelated`, and `stat` accept an absolute path or one relative to the selected Session's workspace root. The composed filesystem decides whether the path is readable; the service does not impose workspace containment on file reads. `readRelated` resolves a relative filesystem path from the base file's directory, including when either file is outside the workspace. These methods report the file's absolute path in the filesystem's execution world. `list` remains workspace-scoped and reports the listed directory relative to that root. `changes` likewise reports only instrumented filesystem observations inside the workspace root.
+`read`, `readBytes`, `readAll`, `readRelated`, and `stat` accept an absolute path or one relative to the selected Session's workspace root. The composed filesystem decides whether the path is readable; the service does not impose workspace containment on file reads. `readRelated` resolves a relative filesystem path from the base file's directory, including when either file is outside the workspace. These methods report the file's absolute path in the filesystem's execution world. `write` resolves its target the same way, so it may replace a file outside the workspace exactly where `read` could read it. `list` remains workspace-scoped and reports the listed directory relative to that root. `changes` likewise reports only instrumented filesystem observations inside the workspace root.
 
 ### Mutations
 
-Every mutation is workspace-contained. The Host resolves the Session's workspace root, resolves the target against it, and refuses the call with `workspace-file/outside-workspace` unless the resolved target is that root or a descendant of it. A path may be absolute or relative to the workspace root, exactly as `list` accepts one.
+Every entry-shaping mutation is workspace-contained: `createDirectory`, `createFile`, `remove`, `copy`, and `move`. The Host resolves the Session's workspace root, resolves the target against it, and refuses the call with `workspace-file/outside-workspace` unless the resolved target is that root or a descendant of it. A path may be absolute or relative to the workspace root, exactly as `list` accepts one. `write` carries no such containment: it replaces content and shares `read`'s access, so it is described next to the content gates.
 
 `createDirectory` and `createFile` take a parent directory plus a `name`, and the name must be one path segment: no `/`, no `\`, no `.` or `..`, not empty, not blank, and no surrounding whitespace. The created entry's `path` is the parent's workspace path joined with that name by `/`. An occupied name fails with `workspace-file/exists`; nothing is merged or overwritten. A parent that is not a directory fails with `workspace-file/not-directory`, and a parent that does not exist fails with `workspace-file/not-found`.
+
+`write` replaces the complete UTF-8 content of one existing regular file and is the one mutating verb outside the containment rule: it resolves its target as `read` does, so a file outside the root is written wherever the filesystem backend allows the read, and the answer's `path` is workspace-relative inside the root and absolute outside it. A directory fails with `workspace-file/not-file`; a symlink or another non-regular target, and an absent path, fail as they do for `read`. Text carrying a NUL byte fails with `workspace-file/not-text`, and text above `maxFileBytes` UTF-8 bytes fails with `workspace-file/too-large`. The replacement is unconditional and atomic — it expects no version, so a concurrent change is not detected — and the service emits `fs/observed` for the written file, which is what an open `changes` generation reports.
 
 `remove` removes the entry at `path`. A directory that still contains entries requires `recursive: true`, and without it the call fails with `workspace-file/not-empty` and removes nothing. `contentsOnly: true` removes what the target directory contains and keeps the directory itself, which is how the workspace root is cleared; removing the root itself is a `gateway/bad-request`.
 
@@ -79,7 +82,7 @@ Every operation first uses `lstat` to reject a missing path, a final symlink, or
 | Field | Default | Meaning |
 |---|---|---|
 | `maxBytes` | `2097152` (2 MiB) | Inclusive byte cap on one page's text and on one byte window; a larger page or window fails |
-| `maxFileBytes` | `33554432` (32 MiB) | Inclusive complete-file cap for `readAll` and `readRelated`; larger files fail with `too-large` |
+| `maxFileBytes` | `33554432` (32 MiB) | Inclusive complete-file cap for `readAll` and `readRelated`, and for the text one `write` accepts; larger files fail with `too-large` |
 | `maxLines` | `5000` | Default and largest page size in lines; a larger `limit` is refused |
 | `maxEntries` | `2000` | Cap on returned directory entries; the rest is dropped and reported cut |
 
@@ -87,7 +90,7 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 ### Failures
 
-Each failure is one `RemoteError` code with typed details, declared in [`src/types.ts`](src/types.ts): `workspace-file/not-found`, `workspace-file/outside-workspace` (directory listing and every mutation), `workspace-file/too-large` (with `limit`, the applicable page, window, or complete-file cap), `workspace-file/not-text`, `workspace-file/not-regular-file` (`kind`: `directory`, `symlink`, or `other`), `workspace-file/not-directory` (`kind`: `file`, `symlink`, or `other`), and the two the mutations add — `workspace-file/exists` for an occupied destination, and `workspace-file/not-empty` for a non-recursive removal of a non-empty directory. A malformed path, a name that is not one segment, the workspace root as a copy or move source, and a destination nested inside its own source are `gateway/bad-request`. Callers branch on the code, never on message text.
+Each failure is one `RemoteError` code with typed details, declared in [`src/types.ts`](src/types.ts): `workspace-file/not-found`, `workspace-file/outside-workspace` (directory listing and the entry-shaping mutations), `workspace-file/too-large` (with `limit`, the applicable page, window, complete-file, or write-text cap), `workspace-file/not-text`, `workspace-file/not-regular-file` (`kind`: `directory`, `symlink`, or `other`), `workspace-file/not-file` for a directory a `write` names, which holds no text to replace, `workspace-file/not-directory` (`kind`: `file`, `symlink`, or `other`), and the two the mutations add — `workspace-file/exists` for an occupied destination, and `workspace-file/not-empty` for a non-recursive removal of a non-empty directory. A malformed path, a name that is not one segment, the workspace root as a copy or move source, and a destination nested inside its own source are `gateway/bad-request`. Callers branch on the code, never on message text.
 
 ### Client file resources
 
@@ -109,13 +112,13 @@ One supervised `changes` stream serves every followed file in a Session. Followe
 
 ### Design concept
 
-Reads through `ctx.fs` use the backend's read authority; the sandboxing backend fences mutations, not reads. A Typert lookup derives `WorkspaceFileScope` from a live Session header or the persistence service's header-only `stat`, so cold subagent Sessions need neither Agent activation nor event-body reads. The service adds regular-file checks and bounded transfer, while workspace containment belongs to directory listing, change observation, and every mutating verb. A mutation resolves its target once and reuses `list`'s `contains` predicate rather than a second containment mechanism; a create builds its child path from the confined parent's process path plus one validated segment, so no spelling of the name can move the result out of that parent. A page is cut from `streamText`, which decodes and rejects non-UTF-8 chunk by chunk: the cutter counts lines before the window without keeping them, admits each in-window segment against the byte cap before buffering it, and returns at the first character past the window. One `stat` before the stream names the version and size the page reports.
+Reads through `ctx.fs` use the backend's read authority; the sandboxing backend fences mutations, not reads. A Typert lookup derives `WorkspaceFileScope` from a live Session header or the persistence service's header-only `stat`, so cold subagent Sessions need neither Agent activation nor event-body reads. The service adds regular-file checks and bounded transfer, while workspace containment belongs to directory listing, change observation, and the entry-shaping mutations. `write` is the exception, because a save must be allowed wherever a read is: it runs the same path and kind gates, then the NUL and UTF-8 byte-cap gates, then one atomic replacement, and emits `fs/observed` itself since no tool reports a Remote call. A contained mutation resolves its target once and reuses `list`'s `contains` predicate rather than a second containment mechanism; a create builds its child path from the confined parent's process path plus one validated segment, so no spelling of the name can move the result out of that parent. A page is cut from `streamText`, which decodes and rejects non-UTF-8 chunk by chunk: the cutter counts lines before the window without keeping them, admits each in-window segment against the byte cap before buffering it, and returns at the first character past the window. One `stat` before the stream names the version and size the page reports.
 
 ### Source map
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `WorkspaceFiles`: the `workspaceFiles` service and Remote namespace, `Config`, the gates, the page cutter, `read`, `readBytes`, `readAll`, `readRelated`, `stat`, `list`, `createDirectory`, `createFile`, `remove`, `copy`, `move` |
+| [`src/index.ts`](src/index.ts) | `WorkspaceFiles`: the `workspaceFiles` service and Remote namespace, `Config`, the gates, the page cutter, `read`, `readBytes`, `readAll`, `readRelated`, `stat`, `list`, `createDirectory`, `createFile`, `write`, `remove`, `copy`, `move` |
 | [`src/changes.ts`](src/changes.ts) | `WorkspaceChangeFeed`: `fs/observed` subscription and one queue per open `changes` generation |
 | [`src/types.ts`](src/types.ts) | Wire types and the `RemoteErrorDetailsMap` codes, published as `./types` for Client packages |
 | [`src/client/index.ts`](src/client/index.ts), [`provider.ts`](src/client/provider.ts), [`change-feed.ts`](src/client/change-feed.ts) | Browser plugin, file metadata, and per-Session change feed |
@@ -158,6 +161,7 @@ None; this package neither assembles nor sends a provider request.
 - **No total line count** — a page reports `eof`, not how many lines follow; a consumer that needs the total pages to the end or estimates from `bytes`.
 - **One giant line has no page** — a single line above `maxBytes` fails `too-large` at every window that includes it, because pages are cut by lines, not bytes.
 - **Reads are not transactional** — result metadata comes from stat before content is read; a concurrent write can make the reported version and returned contents differ.
+- **Writes are unconditional** — `write` expects no version, so a save replaces a concurrent change without a refusal; detecting a stale editor buffer would need a version parameter on the verb.
 - **Unbounded generation queue** — a `changes` generation buffers every contained observation until its consumer pulls; a stalled consumer grows Host memory for the life of the stream.
 - **`maxEntries` bounds the answer, not the listing** — `list` asks `ctx.fs.listDir` for every child and cuts the array afterwards, so a directory far above the cap still costs the Host the whole listing (on `fs-local`, one stat per child); bounding that work needs a limit on the filesystem seam's `listDir`.
 - **Dead feeds retain metadata** — after the Host ends `changes` or the stream fails terminally, open values retain their last state until reopened.
