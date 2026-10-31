@@ -193,6 +193,22 @@ function patchInstalledQqbotConsole(root: string): Promise<void> {
     })
   })
 }
+function patchInstalledVoiceModeFocus(root: string): Promise<void> {
+  // The voice plugin's focus route rejects any Session the Host has not opened yet, so the page's
+  // first claim after a freshly materialized profile always missed and every start logged a
+  // `/voice-mode/focus … 403 (Forbidden)` in the browser console. Patching the installed bytes here
+  // puts the fix in the archived store, so every profile later materialized from this seed carries
+  // it. See scripts/patch-voice-mode-focus.mjs for why this cannot be configuration.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-voice-mode-focus.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: voice-mode focus patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
 function patchInstalledWeChatIdentity(root: string): Promise<void> {
   // WeChat's contact name for the bot belongs to Tencent's iLink platform, so the only name this
   // product controls is the one the bridge chats under: the built-in surface prompt the plugin
@@ -237,6 +253,16 @@ async function verifyWorkBuddyModelNull(root: string): Promise<void> {
     throw new Error(`desktop seed: ${script} does not export verifyWorkBuddyModelNull`)
   }
   module.verifyWorkBuddyModelNull(root)
+}
+
+/** Require the voice-mode focus patch in a tree the seed produced. */
+async function verifyVoiceModeFocus(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-voice-mode-focus.mjs')
+  const module = await import(pathToFileURL(script).href) as { verifyVoiceModeFocus?: (tree: string) => void }
+  if (typeof module.verifyVoiceModeFocus !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyVoiceModeFocus`)
+  }
+  module.verifyVoiceModeFocus(root)
 }
 
 async function verifyRuleEnginePatch(root: string): Promise<void> {
@@ -297,6 +323,8 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     // A store archive that missed the guard would crash the conversation input on first render.
     await verifyWorkBuddyModelNull(materialized)
 await verifyRemoteSshEmptyState(materialized)
+    // A store archive that missed it would log a rejected focus claim on every start.
+    await verifyVoiceModeFocus(materialized)
   } finally {
     rmSync(materialized, { recursive: true, force: true })
   }
@@ -365,6 +393,7 @@ await patchInstalledRuleEngine(join(SEED_ROOT, 'node_modules'))
   await patchInstalledWorkBuddyModelNull(join(SEED_ROOT, 'node_modules'))
 await patchInstalledRemoteSshEmptyState(join(SEED_ROOT, 'node_modules'))
 await patchInstalledQqbotConsole(join(SEED_ROOT, 'node_modules'))
+await patchInstalledVoiceModeFocus(installedModules)
 await applySeedPluginPatches(SEED_ROOT)
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
