@@ -33,7 +33,7 @@ $WixDir       = Join-Path $TauriRoot 'target\release\wix\x64'
 $LogFile      = Join-Path $RepoRoot 'build-tauri.log'
 $IconPath     = Join-Path $RepoRoot 'Harness.ico'
 $PortableGit  = 'D:\projects-py\git-portable\cmd\git.exe'
-$SiblingRepo  = Join-Path (Split-Path $RepoRoot -Parent) 'harness-0.1.5-rc.1'
+$SiblingRepo  = Join-Path (Split-Path (Split-Path $RepoRoot -Parent) -Parent) 'harness-0.1.5-rc.1'
 
 # Start from an empty log. The recovery check at the end reads this file to decide whether a
 # non-zero exit still produced its installer, and a message left by an earlier run would let a
@@ -99,10 +99,19 @@ function Repair-Msi([string]$Version) {
   }
   Write-Host ''
   Write-Host '=== Relinking the MSI with light.exe -sval ===' -ForegroundColor Cyan
-  $rc = Invoke-Logged -Exe $light -ExeArgs @(
-    '-sval', '-ext', 'WixUIExtension', '-ext', 'WixUtilExtension',
-    '-cultures:zh-CN', '-loc', 'locale.wxl', '-out', $out, 'main.wixobj'
-  ) -Log $LogFile -Append
+  # `light` resolves `main.wixobj` and `locale.wxl` against its working directory, and tauri
+  # runs it from elsewhere — the failed run in the log is `LGHT0103: The system cannot find
+  # the file 'main.wixobj'`. Absolute paths alone are not enough either: the relink has to
+  # happen inside the WiX output directory, so this pushes there first.
+  Push-Location -LiteralPath $WixDir
+  try {
+    $rc = Invoke-Logged -Exe $light -ExeArgs @(
+      '-sval', '-ext', 'WixUIExtension', '-ext', 'WixUtilExtension',
+      '-cultures:zh-CN', '-loc', (Join-Path $WixDir 'locale.wxl'), '-out', $out, $wixobj
+    ) -Log $LogFile -Append
+  } finally {
+    Pop-Location
+  }
   if ($rc -ne 0) {
     Write-Warning "light.exe -sval exited with $rc; the MSI was not produced."
     return $false
