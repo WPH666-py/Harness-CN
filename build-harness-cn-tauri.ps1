@@ -88,26 +88,85 @@ Assert-Command pnpm
 # `main.wixobj`, and `-sval` skips only the validation pass, so the MSI it links is the same
 # artifact the normal path produces.
 function Repair-Msi([string]$Version) {
+  $wxs = Join-Path $WixDir 'main.wxs'
   $wixobj = Join-Path $WixDir 'main.wixobj'
-  $light = Join-Path $WixDir 'wix\light.exe'
-  if (-not (Test-Path -LiteralPath $wixobj) -or -not (Test-Path -LiteralPath $light)) { return $false }
+  $locale = Join-Path $WixDir 'locale.wxl'
+  $toolset = Join-Path $WixDir 'wix'
+  $candle = Join-Path $toolset 'candle.exe'
+  $light = Join-Path $toolset 'light.exe'
+  if (-not (Test-Path -LiteralPath $light)) { return $false }
   New-Item -ItemType Directory -Force -Path $MsiDir | Out-Null
   $out = Join-Path $MsiDir ("Harness-CN_{0}_x64_zh-CN.msi" -f $Version)
-  if (Test-Path -LiteralPath $out) {
+  if ((Test-Path -LiteralPath $out) -and (Test-Path -LiteralPath $wixobj)) {
     $stamp = (Get-Item -LiteralPath $out).LastWriteTime
     if ($stamp -gt (Get-Item -LiteralPath $wixobj).LastWriteTime) { return $true }
   }
+  # Three things break the MSI phase on a prerelease version, and tauri reports all of them as
+  # the uninformative `failed to run ...candle.exe` / `...light.exe`:
+  #   1. `Product/@Version` carries the semver verbatim (`0.2.1-rc.10`), and candle only accepts
+  #      `x.x.x.x` integers: `CNDL0108: The Product/@Version attribute's value ... is not a
+  #      valid version`. Rewrite it to the numeric form, `-rc.N` becoming the fourth field.
+  #   2. `locale.wxl` holds the strings `main.wxs` references (`!(loc.TauriLanguage)` and the
+  #      feature descriptions); tauri writes it as part of the bundling step, so a failed run
+  #      leaves it missing: `LGHT0103: The system cannot find the file '...locale.wxl'`.
+  #   3. `light` resolves its inputs against its working directory, which is why the log for the
+  #      first half of this repair shows `LGHT0103: ... 'main.wixobj'`.
+  $numeric = $Version -replace '-rc\.', '.'
+  if (Test-Path -LiteralPath $wxs) {
+    $text = [IO.File]::ReadAllText($wxs)
+    $patch = [regex]::new('(?m)^(\s*Version=")([^"]+)(")')
+    $rewritten = $patch.Replace(
+      $text,
+      { param($m) $m.Groups[1].Value + $numeric + $m.Groups[3].Value },
+      1
+    )
+    if ($rewritten -ne $text) {
+      Write-Host "=== Rewriting the MSI product version to $numeric ===" -ForegroundColor Cyan
+      [IO.File]::WriteAllText($wxs, $rewritten, (New-Object System.Text.UTF8Encoding($false)))
+    }
+  }
+  if (-not (Test-Path -LiteralPath $locale) -and (Test-Path -LiteralPath $candle)) {
+    $wxl = @"
+<WixLocalization Culture="zh-cn" xmlns="http://schemas.microsoft.com/wix/2006/localization"><String Id="TauriLanguage">2052</String>
+<String Id="TauriCodepage">936</String>
+<String Id="LaunchApp">Launch Harness-CN</String>
+<String Id="DowngradeErrorMessage">A newer version of Harness-CN is already installed.</String>
+<String Id="PathEnvVarFeature">Add the install location of the Harness-CN executable to the PATH system environment variable. This allows the Harness-CN executable to be called from any location.</String>
+<String Id="InstallAppFeature">Installs Harness-CN.</String></WixLocalization>
+"@
+    [IO.File]::WriteAllText($locale, $wxl, (New-Object System.Text.UTF8Encoding($false)))
+  }
+  if ((Test-Path -LiteralPath $candle) -and (Test-Path -LiteralPath $wxs)) {
+    $needsCompile = -not (Test-Path -LiteralPath $wixobj)
+    if (-not $needsCompile) {
+      $needsCompile = (Get-Item -LiteralPath $wixobj).LastWriteTime -lt (Get-Item -LiteralPath $wxs).LastWriteTime
+    }
+    if ($needsCompile) {
+      Write-Host ''
+      Write-Host '=== Compiling the MSI with candle.exe ===' -ForegroundColor Cyan
+      Push-Location -LiteralPath $WixDir
+      try {
+        $rc = Invoke-Logged -Exe $candle -ExeArgs @(
+          '-ext', 'WixUIExtension', '-ext', 'WixUtilExtension', '-arch', 'x64',
+          '-out', $wixobj, $wxs
+        ) -Log $LogFile -Append
+      } finally {
+        Pop-Location
+      }
+      if ($rc -ne 0 -or -not (Test-Path -LiteralPath $wixobj)) {
+        Write-Warning "candle.exe exited with $rc; the MSI was not produced."
+        return $false
+      }
+    }
+  }
+  if (-not (Test-Path -LiteralPath $wixobj)) { return $false }
   Write-Host ''
   Write-Host '=== Relinking the MSI with light.exe -sval ===' -ForegroundColor Cyan
-  # `light` resolves `main.wixobj` and `locale.wxl` against its working directory, and tauri
-  # runs it from elsewhere — the failed run in the log is `LGHT0103: The system cannot find
-  # the file 'main.wixobj'`. Absolute paths alone are not enough either: the relink has to
-  # happen inside the WiX output directory, so this pushes there first.
   Push-Location -LiteralPath $WixDir
   try {
     $rc = Invoke-Logged -Exe $light -ExeArgs @(
       '-sval', '-ext', 'WixUIExtension', '-ext', 'WixUtilExtension',
-      '-cultures:zh-CN', '-loc', (Join-Path $WixDir 'locale.wxl'), '-out', $out, $wixobj
+      '-cultures:zh-CN', '-loc', $locale, '-out', $out, $wixobj
     ) -Log $LogFile -Append
   } finally {
     Pop-Location
