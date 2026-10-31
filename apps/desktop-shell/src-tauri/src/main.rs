@@ -312,7 +312,11 @@ fn open_in_browser(target: &tauri::Url) {
 fn restart_shell(app: &AppHandle) {
     platform::release_single_instance();
     match std::env::current_exe().map(|exe| Command::new(exe).spawn()) {
-        Ok(Ok(_)) => app.exit(0),
+        Ok(Ok(_)) => {
+            // This process is being replaced, so the launch guard must not hold it alive.
+            QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+            app.exit(0);
+        }
         _ => platform::show_error("Harness-CN", "无法重新启动应用，请手动退出后重新打开。"),
     }
 }
@@ -434,6 +438,12 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
         Handshake::Message { title, body } => platform::show_error(&title, &body),
         Handshake::Fatal { message } => {
             platform::show_error("Harness-CN 启动失败", &message);
+            // The launch guard keeps this process alive while the sidecar is still running and no
+            // workspace window exists, which is exactly the state a fatal handshake leaves behind.
+            // Without this flag the exit below is cancelled, the splash is gone, and the process
+            // sits there holding the single-instance claim: every later click only signals this
+            // windowless corpse and leaves, so the product looks like it does not start.
+            QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
             app.exit(1);
         }
     }
@@ -510,15 +520,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
         }
     };
     match id {
-        "restart" => {
-            // The single-instance claim belongs to this process, so it has to be given up before
-            // the replacement starts; otherwise the new process sees a running shell and leaves.
-            platform::release_single_instance();
-            match std::env::current_exe().map(|exe| Command::new(exe).spawn()) {
-                Ok(Ok(_)) => app.exit(0),
-                _ => platform::show_error("Harness-CN", "无法重新启动应用，请手动退出后重新打开。"),
-            }
-        }
+        "restart" => restart_shell(app),
         "servers" => app_window(SERVERS, "/shell/servers.html", "服务器管理", 820.0, 760.0),
     "plugins" => window(PLUGINS, "/shell/plugin-manager.html", "内置插件", 900.0, 620.0),
         "qq-console" => app_window(QQ_CONSOLE, "/?panel=qq-console", "QQ 群管理", 1024.0, 720.0),
