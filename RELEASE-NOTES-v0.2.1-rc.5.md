@@ -5,21 +5,21 @@
 ## 安装
 
 - 安装包：`Harness-CN_0.2.1-rc.5_x64-setup.exe`（NSIS）或 `.msi`
-- 离线包：`Harness-CN-seed-0.2.1-rc.5.tar.zst.part1of10` … `part10of10`，共 10 个分卷（合计 627,187,442 字节），按序号依次拼接即可（见下方命令），放进 `data\desktop\seed\downloads\` 后启动会自动解包
+- 离线包：`Harness-CN-seed-0.2.1-rc.5.tar.zst.part1` … `part10`，共 10 个分卷（合计 627,187,442 字节），按序号依次拼接即可（见下方命令），放进 `data\desktop\seed\downloads\` 后启动会自动解包
 - 已有安装可以覆盖升级；数据目录 `data\` 保持不变
 
 ```powershell
 $parts = @(
-  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part1of10',
-  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part2of10',
-  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part3of10',
-  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part4of10',
-  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part5of10',
-  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part6of10',
-  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part7of10',
-  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part8of10',
-  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part9of10',
-  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part10of10',
+  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part1',
+  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part2',
+  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part3',
+  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part4',
+  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part5',
+  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part6',
+  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part7',
+  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part8',
+  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part9',
+  'Harness-CN-seed-0.2.1-rc.5.tar.zst.part10',
 )
 $out = [IO.File]::Create("$PWD\Harness-CN-seed-0.2.1-rc.5.tar.zst")
 try { foreach ($p in $parts) { $in = [IO.File]::OpenRead("$PWD\$p"); try { $in.CopyTo($out) } finally { $in.Dispose() } } } finally { $out.Dispose() }

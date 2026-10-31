@@ -3,8 +3,14 @@
  *
  * Gitee refuses an attachment over 100 MB while GitHub does not, so the Harness-CN release process
  * publishes the offline package whole on GitHub and as fixed-size parts on Gitee. The parts are a
- * byte-for-byte cut of the archive: concatenating them in name order restores it exactly, which the
- * plain-text manifest written beside them states together with every digest.
+ * byte-for-byte cut of the archive: concatenating them in the order this script prints restores it
+ * exactly, which the plain-text manifest written beside them states together with every digest.
+ *
+ * THE PART NAME IS A CONTRACT with the first launch. `apps/desktop-shell/src/seed-package.ts`
+ * discovers a split archive by `Harness-CN-seed-<version>.tar.zst.part<number>` — a bare number,
+ * numbered from one, with no total in the name — and refuses a release whose numbering has a gap.
+ * A name carrying anything else after the number (`.part1of10`, a suffix, a label) is invisible to
+ * that reader, and the release then looks like one that never published the seed at all.
  *
  *   node scripts/release/split-offline-package.mjs --version 0.1.5-rc.27
  *   node scripts/release/split-offline-package.mjs --asset <path> --out <dir> --part-mib 64
@@ -54,7 +60,9 @@ const buffer = Buffer.alloc(4 * 1024 * 1024)
 const parts = []
 let offset = 0
 for (let index = 0; index < count; index += 1) {
-  const partName = `${name}.part${String(index + 1)}of${String(count)}`
+  // Bare numbering from one: this is the name the first launch looks for, and the total is recorded
+  // in the manifest beside the parts rather than in each name.
+  const partName = `${name}.part${String(index + 1)}`
   const path = join(outDir, partName)
   const target = Math.min(partBytes, total - offset)
   const sink = createWriteStream(path)
