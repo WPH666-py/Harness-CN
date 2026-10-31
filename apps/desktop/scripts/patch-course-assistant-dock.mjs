@@ -48,19 +48,25 @@ const BEFORE = [
   '    }',
 ].join('\n')
 
-/** Replacement: the same wrapper around one labelled button. */
+/**
+ * Replacement: the same wrapper around one labelled button.
+ *
+ * The button carries its pill styling inline. The plugin's own stylesheet never reaches this page —
+ * the app injects no sheet whose rules mention `ca-dock` — so a class-only patch renders with the
+ * browser's default button chrome. Inline styles survive whatever the host does with the sheet.
+ */
 const AFTER = [
   '    function Dock({ open }) {',
   '      return h(',
   "        'div',",
   "        { className: 'ca-dock' },",
-  "        h('button', { className: 'ca-dock-button', onClick: open }, '课程助手面板'),",
+  "        h('button', { className: 'ca-dock-button', style: { border: '1px solid var(--dsw-alias-border-l1,#d9dee7)', background: 'var(--dsw-alias-bg-layer-1,#ffffff)', color: 'var(--dsw-alias-brand-primary,#1a6cff)', cursor: 'pointer', fontFamily: 'inherit', fontSize: '11.5px', lineHeight: '1.4', padding: '3px 10px', borderRadius: '999px' }, onClick: open }, '课程助手面板'),",
   '      )',
   '    }',
 ].join('\n')
 
 /** Marker that only the patched dock carries. */
-const MARKER = "h('button', { className: 'ca-dock-button', onClick: open }, '课程助手面板'),"
+const MARKER = "className: 'ca-dock-button', style: {"
 
 /** Original dock CSS: a gapped row with a borderless text button in it. */
 const CSS_BEFORE = [

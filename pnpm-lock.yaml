@@ -1768,6 +1768,9 @@ importers:
       '@deepseek-ai/dsh-fs':
         specifier: workspace:*
         version: link:../../fs/fs
+      '@deepseek-ai/dsh-fs-sandbox':
+        specifier: workspace:*
+        version: link:../../fs/fs-sandbox
       '@deepseek-ai/dsh-sandbox-policy':
         specifier: workspace:*
         version: link:../../sandbox/sandbox-policy

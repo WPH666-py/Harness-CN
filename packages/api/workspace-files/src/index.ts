@@ -26,6 +26,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-fs'
 import type { FsDirEntry, FsErrorCode, FsInfo, FsPathInfo, FsTarget } from '@deepseek-ai/dsh-fs'
+import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -450,7 +451,7 @@ export class WorkspaceFiles extends TypertRemoteService {
     // One explicit segment under an existing parent never needs an ancestor
     // walk, and `recursive` would turn an occupied name into a success.
     return this.mutateOutcome(
-      await this.mutation(this.ctx.fs.createDirectory(target, {}, signal), workspacePath),
+      await this.mutation(this.ctx.fs.createDirectory(target, {}, signal, this.fenceOf(workspaceFileScope)), workspacePath),
       workspacePath,
       workspaceFileScope,
     )
@@ -474,7 +475,7 @@ export class WorkspaceFiles extends TypertRemoteService {
     const { workspacePath, created, workspaceRoot } = await this.childPath(workspaceFileScope, path, name, signal)
     const target = await this.ctx.fs.resolve(created, { cwd: workspaceRoot, signal })
     return this.mutateOutcome(
-      await this.mutation(this.ctx.fs.createFile(target, signal), workspacePath),
+      await this.mutation(this.ctx.fs.createFile(target, signal, this.fenceOf(workspaceFileScope)), workspacePath),
       workspacePath,
       workspaceFileScope,
     )
@@ -510,7 +511,7 @@ export class WorkspaceFiles extends TypertRemoteService {
     if (Buffer.byteLength(text, 'utf8') > limit) {
       throw new RemoteError('workspace-file/too-large', `"${path}" exceeds the ${limit} byte full-file cap`, { path, limit })
     }
-    const outcome = await this.mutation(this.ctx.fs.writeText(target, text, undefined, signal), path)
+    const outcome = await this.mutation(this.ctx.fs.writeText(target, text, undefined, signal, this.fenceOf(workspaceFileScope)), path)
     const written = await this.mutateOutcome({ target }, path, workspaceFileScope)
     // The replacement reaches the filesystem seam directly, so no tool reports
     // it; the change feed relays `fs/observed` alone, and a Remote call has no
@@ -548,11 +549,11 @@ export class WorkspaceFiles extends TypertRemoteService {
       const entries = await this.ctx.fs.listDir(target, signal)
       for (const entry of entries) {
         throwIfAborted(signal)
-        await this.removeContained(root, entry.target, { recursive: true }, signal)
+        await this.removeContained(root, entry.target, { recursive: true }, signal, this.fenceOf(workspaceFileScope))
       }
       return { path: workspacePath, sessionId: workspaceFileScope.sessionId }
     }
-    await this.removeContained(root, target, { recursive: options.recursive === true }, signal)
+    await this.removeContained(root, target, { recursive: options.recursive === true }, signal, this.fenceOf(workspaceFileScope))
     return { path: workspacePath, sessionId: workspaceFileScope.sessionId }
   }
 
@@ -573,7 +574,7 @@ export class WorkspaceFiles extends TypertRemoteService {
   ): Promise<WorkspaceFileMutation> {
     const { from, to, fromPath: sourcePath, toWorkspacePath } = await this.mutationPair(workspaceFileScope, fromPath, toPath, signal)
     return this.mutateOutcome(
-      await this.mutation(this.ctx.fs.copy(from, to, signal), sourcePath),
+      await this.mutation(this.ctx.fs.copy(from, to, signal, this.fenceOf(workspaceFileScope)), sourcePath),
       toWorkspacePath,
       workspaceFileScope,
     )
@@ -596,7 +597,7 @@ export class WorkspaceFiles extends TypertRemoteService {
   ): Promise<WorkspaceFileMutation> {
     const { from, to, fromPath: sourcePath, toWorkspacePath } = await this.mutationPair(workspaceFileScope, fromPath, toPath, signal)
     return this.mutateOutcome(
-      await this.mutation(this.ctx.fs.move(from, to, signal), sourcePath),
+      await this.mutation(this.ctx.fs.move(from, to, signal, this.fenceOf(workspaceFileScope)), sourcePath),
       toWorkspacePath,
       workspaceFileScope,
     )
@@ -707,14 +708,29 @@ export class WorkspaceFiles extends TypertRemoteService {
     target: FsTarget,
     options: { recursive: boolean },
     signal: AbortSignal,
+    fence: SandboxExecutionPolicy,
   ): Promise<void> {
     if (!this.ctx.fs.contains(root, target)) {
       throw new RemoteError('workspace-file/outside-workspace', `"${target.displayPath}" is outside the workspace`, { path: target.displayPath })
     }
     await this.mutation(
-      this.ctx.fs.remove(target, options, signal),
+      this.ctx.fs.remove(target, options, signal, fence),
       workspacePathOf(this.ctx.fs.fileUrl(root), this.ctx.fs.fileUrl(target)),
     )
+  }
+
+  /**
+   * The write fence one scope implies.
+   *
+   * A mutation reaches the filesystem sandbox without a policy when the caller omits one, and the
+   * sandbox then resolves the agentless fallback: the deployment root, not the Session's own
+   * workspace. Every write through this Remote therefore names the scope's fence explicitly, so a
+   * session whose workspace lives anywhere else can still edit its own files.
+   * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+   * @returns the per-call policy handed to the filesystem sandbox.
+   */
+  private fenceOf(workspaceFileScope: WorkspaceFileScope): SandboxExecutionPolicy {
+    return { ...this.ctx.sandboxPolicy.resolve(), workspaceRoot: workspaceFileScope.workspaceRoot }
   }
 
   /** Await one backend mutation, classifying its refusal into the wire vocabulary. */
