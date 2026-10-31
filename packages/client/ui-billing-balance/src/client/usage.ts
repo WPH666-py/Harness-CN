@@ -1,9 +1,12 @@
-/** Provider usage rows read from the billing host's usage-stats route. */
+/** Provider balance rows read from the billing host. */
 
-/** Same-origin route that returns one usage row per billing provider. */
+/** Same-origin route that returns one row per billing provider, each with its remaining balance. */
+export const BALANCE_PATH = '/api/billing/balance'
+
+/** Older route of the billing plugin: it reports aggregate usage rather than per-provider balances. */
 export const USAGE_STATS_PATH = '/api/billing/usage-stats'
 
-/** One provider row of the usage-stats response. */
+/** One provider row of a billing response. */
 export interface ProviderUsage {
   /** Stable provider identifier reported by the host. */
   readonly provider: string
@@ -49,15 +52,25 @@ export function readAmount(value: unknown): number | undefined {
 }
 
 /**
- * Parse the usage-stats payload, dropping rows the chip cannot use.
+ * Pick the provider rows out of either answer shape: the balance route wraps them in
+ * `balances`, the older usage route is the bare list.
  * @param payload - decoded JSON body.
- * @returns usable provider rows; empty for an unusable payload.
+ * @returns the row list, or an empty list for a payload carrying none.
+ */
+function rowsOf(payload: unknown): readonly unknown[] {
+  if (Array.isArray(payload)) return payload
+  if (isRecord(payload) && Array.isArray(payload.balances)) return payload.balances
+  return []
+}
+
+/**
+ * Parse a billing payload, dropping rows the chip cannot use.
+ * @param payload - decoded JSON body.
+ * @returns usable provider rows; empty for a payload carrying none.
  */
 export function parseUsageStats(payload: unknown): readonly ProviderUsage[] {
-  if (!Array.isArray(payload)) return []
-  const entries: readonly unknown[] = payload
   const rows: ProviderUsage[] = []
-  for (const entry of entries) {
+  for (const entry of rowsOf(payload)) {
     if (!isRecord(entry)) continue
     if (typeof entry.provider !== 'string') continue
     rows.push({
@@ -86,17 +99,34 @@ export function pickRemainingBalance(providers: readonly ProviderUsage[]): Remai
 }
 
 /**
- * Read the usage rows from the billing host's same-origin route.
+ * Read one billing route.
+ * @param path - same-origin route to request.
  * @param signal - aborts the request when the chip is torn down.
  * @returns parsed provider rows.
  */
-export async function fetchUsageStats(signal: AbortSignal): Promise<readonly ProviderUsage[]> {
-  const response = await fetch(USAGE_STATS_PATH, {
+async function readRoute(path: string, signal: AbortSignal): Promise<readonly ProviderUsage[]> {
+  const response = await fetch(path, {
     signal,
     credentials: 'same-origin',
     headers: { accept: 'application/json' },
   })
-  if (!response.ok) throw new Error(`usage-stats request failed with status ${String(response.status)}`)
+  if (!response.ok) throw new Error(`${path} request failed with status ${String(response.status)}`)
   const payload: unknown = await response.json()
   return parseUsageStats(payload)
+}
+
+/**
+ * Read the provider rows, preferring the balance route and falling back to the usage route
+ * when the installed billing plugin only serves the older one.
+ * @param signal - aborts the request when the chip is torn down.
+ * @returns parsed provider rows.
+ */
+export async function fetchUsageStats(signal: AbortSignal): Promise<readonly ProviderUsage[]> {
+  try {
+    const balances = await readRoute(BALANCE_PATH, signal)
+    if (balances.length > 0) return balances
+  } catch {
+    // An older plugin has no balance route; the usage route below is the fallback.
+  }
+  return readRoute(USAGE_STATS_PATH, signal)
 }
