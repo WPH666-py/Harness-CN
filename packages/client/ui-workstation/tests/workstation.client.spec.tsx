@@ -24,6 +24,25 @@ import type { WorkstationProps } from '../src/client/Workstation.tsx'
 /** The Session the whole spec pretends is on screen. */
 const SESSION = 'session-workstation' as SessionId
 
+/** The working directory that Session reports, which the tree lists first. */
+const ROOT = 'C:\\ws\\workstation'
+
+/**
+ * The Session list the seat reads the working directory out of.
+ * @param cwd - the Session's working directory, `undefined` for no Session at all.
+ * @returns a snapshot source shaped like the framework-provided hook's instance.
+ */
+function sessionsOf(cwd: string | undefined): { getSnapshot(): unknown; subscribe(listener: () => void): () => void } {
+  /** Built once: a fresh object per read would make `useSyncExternalStore` loop. */
+  const state = {
+    ids: cwd === undefined ? [] : [SESSION],
+    byId: cwd === undefined ? {} : { [SESSION]: { sessionId: SESSION, cwd } },
+    phase: 'ready',
+    projectionsBySession: {},
+  }
+  return { getSnapshot: () => state, subscribe: () => () => {} }
+}
+
 /** One view of a store instance, shaped like the framework-provided hook. */
 function hookOf<T>(
   instance: { getSnapshot(): T; subscribe(listener: () => void): () => void },
@@ -37,11 +56,11 @@ function hookOf<T>(
 function scripted(): { remote: WorkspaceFilesRemote; list: ReturnType<typeof vi.fn> } {
   /** Each directory answers with its own children, so no name repeats in the tree. */
   const levels: Record<string, WorkspaceDirectoryEntry[]> = {
-    '': [
+    [ROOT]: [
       { name: 'src', type: 'directory' },
       { name: 'README.md', type: 'file', size: 11 },
     ],
-    src: [{ name: 'index.ts', type: 'file', size: 4 }],
+    [`${ROOT}/src`]: [{ name: 'index.ts', type: 'file', size: 4 }],
   }
   const list = vi.fn(async (_session: SessionId, path: string) => ({
     ok: true as const,
@@ -76,6 +95,7 @@ describe('Workstation', () => {
     const face = workstationFace({ remote, sessionId: () => SESSION, signal: controller.signal })(instance.actions)
     const props = {
       useStore: hookOf(instance),
+      useSessions: hookOf(sessionsOf(ROOT)),
       useSessionId: hookOf({ getSnapshot: () => SESSION, subscribe: () => () => {} }),
       t: makeTranslate(zh),
       ...face,
@@ -84,13 +104,13 @@ describe('Workstation', () => {
     const { getByTitle, getByRole } = render(<Workstation {...props} />)
 
     await waitFor(() => { expect(getByTitle('README.md')).toBeTruthy() })
-    expect(list).toHaveBeenCalledWith(SESSION, '', controller.signal)
+    expect(list).toHaveBeenCalledWith(SESSION, ROOT, controller.signal)
     expect(getByRole('tree')).toBeTruthy()
 
     fireEvent.click(getByTitle('README.md'))
 
     await waitFor(() => { expect(instance.getSnapshot().viewer.lines).toEqual(['alpha', 'beta']) })
-    expect(instance.getSnapshot().viewer.path).toBe('README.md')
+    expect(instance.getSnapshot().viewer.path).toBe(`${ROOT}/README.md`)
     expect(instance.getSnapshot().viewer.eof).toBe(true)
   })
 
@@ -102,6 +122,7 @@ describe('Workstation', () => {
     const face = workstationFace({ remote, sessionId: () => undefined, signal: controller.signal })(instance.actions)
     const props = {
       useStore: hookOf(instance),
+      useSessions: hookOf(sessionsOf(undefined)),
       useSessionId: hookOf({ getSnapshot: () => undefined, subscribe: () => () => {} }),
       t: makeTranslate(zh),
       ...face,

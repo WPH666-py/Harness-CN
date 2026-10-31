@@ -3,10 +3,11 @@
  * time, with directories that expand in place and files that open into the
  * viewer beside it.
  *
- * Every path is workspace-relative, so the root is `''` and the tree never needs
- * the Session's absolute working directory. One level draws from the store and
- * one request goes through the injected face per level opened; the component
- * itself only decides what a click means.
+ * The tree starts at the Session's working directory and appends child names
+ * onto it, so every key below the root is an absolute path the listing endpoint
+ * already accepts. One level draws from the store and one request goes through
+ * the injected face per level opened; the component itself only decides what a
+ * click means.
  */
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
@@ -35,11 +36,19 @@ export interface FileTreeProps {
   readonly toggleDirectory: WorkstationFace['toggleDirectory']
   /** Open one file into the viewer. */
   readonly openFile: WorkstationFace['openFile']
+  /**
+   * The Session's working directory, which the tree lists first; `undefined`
+   * while the Session summary that carries it has not arrived.
+   */
+  readonly root: string | undefined
 }
 
+/** The share every level draws from, apart from its own path and indentation. */
+type LevelShare = Omit<FileTreeProps, 'root'>
+
 /** One level's props: the shared share plus its own path and indentation. */
-interface LevelProps extends FileTreeProps {
-  /** Workspace-relative path of the directory this level lists. */
+interface LevelProps extends LevelShare {
+  /** Absolute path of the directory this level lists. */
   readonly path: string
   /** How deep under the root the level sits, for indentation only. */
   readonly depth: number
@@ -115,11 +124,12 @@ function Level(props: LevelProps): ReactNode {
 
 /**
  * Draw the tree's header and its root level.
- * @param props - the shared share.
+ * @param props - the shared share and the Session's working directory.
  * @returns the tree column.
  */
 export function FileTree(props: FileTreeProps): ReactNode {
   const t = props.translate
+  const { root, ...share } = props
   return (
     <section className={css.tree} aria-label={t('tree.root')} data-workstation-tree>
       <header className={css.head}>
@@ -127,7 +137,9 @@ export function FileTree(props: FileTreeProps): ReactNode {
         <span className={css.title}>{t('tree.root')}</span>
       </header>
       <nav className={css.body}>
-        <Level {...props} path="" depth={0} />
+        {root === undefined
+          ? <div className={css.status} data-workstation-level="pending">{t('tree.loading')}</div>
+          : <Level {...share} path={root} depth={0} />}
       </nav>
     </section>
   )

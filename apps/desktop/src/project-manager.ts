@@ -757,14 +757,23 @@ function inspectPlugin(projectDir: string, requestedName: string): DesktopPlugin
   }
   const dsh = manifest.dsh
   const bundle = isRecord(dsh) ? dsh.bundle : undefined
-  const patch = isRecord(bundle) ? bundle.patch : undefined
-  if (typeof patch !== 'string' || patch === '') {
+  const declared = isRecord(bundle) ? bundle.patch : undefined
+  // A published plugin declares this either as one path or as a list of paths, and both are the
+  // same thing to the desktop project: patch documents to compose onto the profile. Accepting
+  // only the single-path form rejected plugins that are otherwise fine (`dsh-rigorquant@0.7.0`
+  // shipped a two-entry list), which fails the whole launch with "does not declare
+  // dsh.bundle.patch" even though the declaration is right there.
+  const patches = typeof declared === 'string' ? [declared] : Array.isArray(declared) ? declared : []
+  const usablePatches = patches.filter((entry): entry is string => typeof entry === 'string' && entry !== '')
+  if (usablePatches.length === 0) {
     throw new Error(`desktop project: ${requestedName}@${manifest.version} does not declare dsh.bundle.patch`)
   }
   const packageDir = dirname(manifestPath)
-  const patchPath = resolve(packageDir, patch)
-  if ((patchPath !== packageDir && !patchPath.startsWith(packageDir + sep)) || !existsSync(patchPath)) {
-    throw new Error(`desktop project: ${requestedName}@${manifest.version} declares an invalid bundle patch`)
+  for (const patch of usablePatches) {
+    const patchPath = resolve(packageDir, patch)
+    if ((patchPath !== packageDir && !patchPath.startsWith(packageDir + sep)) || !existsSync(patchPath)) {
+      throw new Error(`desktop project: ${requestedName}@${manifest.version} declares an invalid bundle patch`)
+    }
   }
   return { name: requestedName, version: manifest.version, bundled: BUNDLED_PLUGIN_NAMES.has(requestedName) }
 }

@@ -1,26 +1,36 @@
 /**
  * Path arithmetic for the workstation tree.
  *
- * Every path here is workspace-relative — `''` is the workspace root, exactly
- * what the listing endpoint takes when a request names no directory — and
- * children are joined with `/` on every platform: the Host resolves mixed
- * separators, and `/` is what the tree uses as its key.
+ * Every path here is the absolute path the listing endpoint was asked with:
+ * the tree starts at the Session's working directory, and children are joined
+ * with `/` on every platform because the Host resolves mixed separators, so the
+ * joined string is both the key the store files a level under and the path the
+ * next listing takes.
  */
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
 
 /**
- * Join one entry name onto a workspace-relative directory path.
- * @param parent - workspace-relative directory path, `''` for the root.
+ * The first line of a file, and so the offset the viewer's first page asks for.
+ *
+ * The read endpoint numbers line windows from 1 and rejects 0, while a paged
+ * viewer naturally counts from 0; naming the constant here keeps every caller on
+ * the endpoint's numbering.
+ */
+export const FIRST_LINE = 1
+
+/**
+ * Join one entry name onto an absolute directory path.
+ * @param parent - directory path to join onto.
  * @param name - the entry's basename.
- * @returns the entry's workspace-relative path.
+ * @returns the entry's path.
  */
 export function childPath(parent: string, name: string): string {
   return parent === '' ? name : `${parent}/${name}`
 }
 
 /**
- * The last segment of a workspace-relative path.
- * @param path - workspace-relative path.
+ * The last segment of a path.
+ * @param path - the path to shorten.
  * @returns its basename, `''` for the root.
  */
 export function baseName(path: string): string {

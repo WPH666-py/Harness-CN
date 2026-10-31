@@ -26,8 +26,13 @@ export type WorkstationProps =
  * @returns the seat's content.
  */
 export function Workstation(props: WorkstationProps): ReactNode {
-  const { t: translate, useStore, useSessionId, openDirectory, toggleDirectory, openFile, loadMore } = props
+  const { t: translate, useStore, useSessions, useSessionId, openDirectory, toggleDirectory, openFile, loadMore } = props
   const sessionId = useSessionId(state => state)
+  // The listing endpoint takes a directory path and has no spelling for "the
+  // workspace root", so the tree starts from the Session's own working
+  // directory: the Session summary carries it, and it is the same directory the
+  // Session's tools write into.
+  const root = useSessions(state => sessionId === undefined ? undefined : state.byId[sessionId]?.cwd)
   if (sessionId === undefined) {
     return <div className={css.status} data-workstation-state="no-session">{translate('session.none')}</div>
   }
@@ -39,6 +44,7 @@ export function Workstation(props: WorkstationProps): ReactNode {
         openDirectory={openDirectory}
         toggleDirectory={toggleDirectory}
         openFile={openFile}
+        root={root}
       />
       <FileViewer useStore={useStore} translate={translate} loadMore={loadMore} />
     </div>

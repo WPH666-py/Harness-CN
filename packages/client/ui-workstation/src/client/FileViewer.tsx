@@ -32,12 +32,14 @@ export function FileViewer(props: FileViewerProps): ReactNode {
   const open = viewer.path
   return (
     <section className={css.viewer} data-workstation-viewer>
-      <header className={css.head}>
-        {open === null
-          ? <span className={css.path}>{t('viewer.empty')}</span>
-          : <span className={css.path} title={open}>{open}</span>}
-        {viewer.loading ? <span className={css.hint}>{t('viewer.loading')}</span> : null}
-      </header>
+      {open === null
+        ? null
+        : (
+          <header className={css.head}>
+            <span className={css.path} title={open}>{open}</span>
+            {viewer.loading ? <span className={css.hint}>{t('viewer.loading')}</span> : null}
+          </header>
+        )}
       <div className={css.body}>
         {viewer.failure === null ? null : (
           <p className={css.status} role="alert">{t('viewer.failed', { message: viewer.failure.message })}</p>

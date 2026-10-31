@@ -15,7 +15,7 @@
  */
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { linesOf } from './paths.ts'
+import { FIRST_LINE, linesOf } from './paths.ts'
 import type { WorkstationActions } from './store.ts'
 
 /**
@@ -33,7 +33,7 @@ export interface WorkstationFace {
   readonly openDirectory: (path: string) => void
   /**
    * Open or close one directory's level.
-   * @param path - workspace-relative directory path.
+   * @param path - absolute directory path.
    * @param expanded - whether the tree currently draws it open.
    */
   readonly toggleDirectory: (path: string, expanded: boolean) => void
@@ -41,7 +41,7 @@ export interface WorkstationFace {
   readonly openFile: (path: string) => void
   /**
    * Append the next page of the open file.
-   * @param path - workspace-relative file path the viewer has open.
+   * @param path - absolute file path the viewer has open.
    * @param offset - line offset the page starts at.
    */
   readonly loadMore: (path: string, offset: number) => void
@@ -101,7 +101,7 @@ export function workstationFace(
     /**
      * List one directory into its level.
      * @param session - the Session whose workspace is listed.
-     * @param path - workspace-relative directory path.
+     * @param path - absolute directory path.
      */
     const list = (session: SessionId, path: string): void => {
       const generation = (generations.get(path) ?? 0) + 1
@@ -120,8 +120,8 @@ export function workstationFace(
     /**
      * Read one page of a file into the viewer.
      * @param session - the Session whose workspace holds the file.
-     * @param path - workspace-relative file path.
-     * @param offset - line offset the page starts at.
+     * @param path - absolute file path.
+     * @param offset - first line of the page; the endpoint reads line windows 1-based.
      * @param first - whether this is the file's first page, which opens the viewer.
      */
     const page = (session: SessionId, path: string, offset: number, first: boolean): void => {
@@ -162,7 +162,7 @@ export function workstationFace(
       openFile: (path) => {
         const session = target()
         if (session === undefined) return
-        page(session, path, 0, true)
+        page(session, path, FIRST_LINE, true)
       },
       loadMore: (path, offset) => {
         const session = target()
