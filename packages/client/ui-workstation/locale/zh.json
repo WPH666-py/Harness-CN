@@ -1,5 +1,10 @@
 {
   "meta": {
     "title": "ui-workstation"
+  },
+  "toggle": {
+    "mode": "IDE/工作站",
+    "enable": "切换到 IDE 布局",
+    "disable": "回到对话布局"
   }
 }

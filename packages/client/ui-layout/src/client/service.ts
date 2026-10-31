@@ -30,13 +30,20 @@ export type PanelActions = BoundActions<ReturnType<typeof createLayoutStore>>
  * in a spec — still constructs a controller; every other transition it exposes
  * is required.
  */
-export type LayoutPanelActions = Omit<PanelActions, 'setWorkstation'> & {
+export type LayoutPanelActions = Omit<PanelActions, 'setWorkstation' | 'setWorkstationWidth'> & {
   setWorkstation?: (on: boolean) => void
+  setWorkstationWidth?: (px: number) => void
 }
 
 /** The presentation source a controller reports when its host has none. */
 const HIDDEN_WORKSTATION: HostObservable<boolean> = {
   getSnapshot: () => false,
+  subscribe: () => () => {},
+}
+
+/** The seat width a controller reports when its host has none. */
+const UNSAVED_WORKSTATION_WIDTH: HostObservable<number | null> = {
+  getSnapshot: () => null,
   subscribe: () => () => {},
 }
 
@@ -77,6 +84,18 @@ export interface ILayout {
   setWorkstation(on: boolean): void
   /** Toggle the workstation layout. */
   toggleWorkstation(): void
+  /**
+   * Saved workstation seat width in px, or null while the ratio default applies.
+   *
+   * Optional like the seat's writer, so a controller built before the seat became
+   * resizable still satisfies this face.
+   */
+  readonly workstationWidth?: HostObservable<number | null>
+  /**
+   * Save the workstation seat's drag width.
+   * @param px - requested width in px; the store clamps it into the frame's range.
+   */
+  setWorkstationWidth?(px: number): void
 }
 
 /** Cross-plugin panel-action face (ctx.layout). */
@@ -89,12 +108,15 @@ export class LayoutController implements ILayout {
    * @param panelInfo - root store's shared central-panel selection source.
    * @param workstation - root store's shared workstation-presentation source;
    *   omitting it reports the seat as permanently hidden.
+   * @param workstationWidth - root store's shared seat-width preference;
+   *   omitting it reports no saved width.
    */
   constructor(
     private readonly panels: LayoutPanelActions,
     private readonly hasMainPanel: (id: MainPanelId) => boolean,
     readonly panelInfo: HostObservable<PanelInfo>,
     readonly workstation: HostObservable<boolean> = HIDDEN_WORKSTATION,
+    readonly workstationWidth: HostObservable<number | null> = UNSAVED_WORKSTATION_WIDTH,
   ) {}
 
   /** Select a global panel or return to the Conversation. */
@@ -141,5 +163,10 @@ export class LayoutController implements ILayout {
   /** Toggle the workstation layout against its current presentation. */
   toggleWorkstation(): void {
     this.panels.setWorkstation?.(!this.workstation.getSnapshot())
+  }
+
+  /** Save the workstation seat's drag width. */
+  setWorkstationWidth(px: number): void {
+    this.panels.setWorkstationWidth?.(px)
   }
 }

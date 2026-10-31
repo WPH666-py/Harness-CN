@@ -1,13 +1,12 @@
-/* The tree keeps its own width: it is a navigation column beside the viewer, not
-   a pane that grows with the seat. Its body scrolls independently so a deep
-   level never pushes the viewer's header around. */
+/* The tree's column width is drawn inline from the seat's splitter: it is a
+   navigation column beside the viewer, not a pane that grows with the seat. Its
+   body scrolls independently so a deep level never pushes the viewer's header
+   around. */
 .tree {
   display: flex;
-  flex: 0 0 260px;
+  flex: 0 0 auto;
   flex-direction: column;
-  width: 260px;
   min-width: 0;
-  max-width: 280px;
   overflow: hidden;
   background: var(--dsw-specific-sidebar-fill);
   border-right: 0.5px solid var(--dsw-alias-border-l3);

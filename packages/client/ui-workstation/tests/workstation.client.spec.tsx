@@ -4,12 +4,13 @@
  *
  * The seat's contract is narrow on purpose — a level loads when the tree first
  * draws it, a file click fills the viewer, and no Session means no request at
- * all — so these three cases cover the promise without reaching for a fake of
- * the whole client runtime.
+ * all — so these cases cover the promise without reaching for a fake of the
+ * whole client runtime. The splitter is driven directly, because the store owns
+ * the width it settles.
  */
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -84,27 +85,74 @@ function scripted(): { remote: WorkspaceFilesRemote; list: ReturnType<typeof vi.
   }
 }
 
-afterEach(cleanup)
+/** Mount the seat over a fresh store instance and the scripted Remote. */
+function mountSeat(cwd: string | null = ROOT) {
+  const directory = cwd ?? undefined
+  const instance = createWorkstationStore().create()
+  const controller = new AbortController()
+  const { remote, list } = scripted()
+  const face = workstationFace({ remote, sessionId: () => (directory === undefined ? undefined : SESSION), signal: controller.signal })(instance.actions)
+  const props = {
+    useStore: hookOf(instance),
+    actions: instance.actions,
+    useSessions: hookOf(sessionsOf(directory)),
+    useSessionId: hookOf({ getSnapshot: () => (directory === undefined ? undefined : SESSION), subscribe: () => () => {} }),
+    t: makeTranslate(zh),
+    ...face,
+  } as unknown as WorkstationProps
+  return { ...render(<Workstation {...props} />), instance, list }
+}
+
+/** Dispatch one pointer event; jsdom types no pointer capture, stubbed below. */
+function pointer(handle: Element, type: string, clientX: number, pointerId = 1, button = 0): void {
+  act(() => { handle.dispatchEvent(new PointerEvent(type, { pointerId, clientX, button, bubbles: true })) })
+}
+
+/** The splitter between the panes. */
+function splitter(container: HTMLElement): Element {
+  const handle = container.querySelector('[data-workstation-resizer]')
+  if (handle === null) throw new Error('missing workstation resizer')
+  return handle
+}
+
+/** The drawn tree column. */
+function treeColumn(container: HTMLElement): HTMLElement {
+  const tree = container.querySelector<HTMLElement>('[data-workstation-tree]')
+  if (tree === null) throw new Error('missing workstation tree')
+  return tree
+}
+
+const restoreProperties: (() => void)[] = []
+
+beforeEach(() => {
+  // jsdom has no pointer capture: each element retains the actual pointer id.
+  const captured = new WeakMap<Element, number>()
+  const methods: [string, (this: Element, id: number) => unknown][] = [
+    ['setPointerCapture', function (this: Element, id: number) { captured.set(this, id) }],
+    ['releasePointerCapture', function (this: Element) { captured.delete(this) }],
+    ['hasPointerCapture', function (this: Element, id: number) { return captured.get(this) === id }],
+  ]
+  for (const [key, value] of methods) {
+    const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, key)
+    restoreProperties.push(() => {
+      if (descriptor === undefined) Reflect.deleteProperty(Element.prototype, key)
+      else Object.defineProperty(Element.prototype, key, descriptor)
+    })
+    Object.defineProperty(Element.prototype, key, { configurable: true, writable: true, value })
+  }
+})
+
+afterEach(() => {
+  cleanup()
+  for (const restore of restoreProperties.splice(0).reverse()) restore()
+})
 
 describe('Workstation', () => {
   it('lists the root level and fills the viewer with a clicked file', async () => {
-    const store = createWorkstationStore()
-    const instance = store.create()
-    const controller = new AbortController()
-    const { remote, list } = scripted()
-    const face = workstationFace({ remote, sessionId: () => SESSION, signal: controller.signal })(instance.actions)
-    const props = {
-      useStore: hookOf(instance),
-      useSessions: hookOf(sessionsOf(ROOT)),
-      useSessionId: hookOf({ getSnapshot: () => SESSION, subscribe: () => () => {} }),
-      t: makeTranslate(zh),
-      ...face,
-    } as unknown as WorkstationProps
-
-    const { getByTitle, getByRole } = render(<Workstation {...props} />)
+    const { getByTitle, getByRole, instance, list } = mountSeat()
 
     await waitFor(() => { expect(getByTitle('README.md')).toBeTruthy() })
-    expect(list).toHaveBeenCalledWith(SESSION, ROOT, controller.signal)
+    expect(list).toHaveBeenCalledWith(SESSION, ROOT, expect.any(AbortSignal))
     expect(getByRole('tree')).toBeTruthy()
 
     fireEvent.click(getByTitle('README.md'))
@@ -115,22 +163,40 @@ describe('Workstation', () => {
   })
 
   it('asks for nothing while no Session is selected', () => {
-    const store = createWorkstationStore()
-    const instance = store.create()
-    const controller = new AbortController()
-    const { remote, list } = scripted()
-    const face = workstationFace({ remote, sessionId: () => undefined, signal: controller.signal })(instance.actions)
-    const props = {
-      useStore: hookOf(instance),
-      useSessions: hookOf(sessionsOf(undefined)),
-      useSessionId: hookOf({ getSnapshot: () => undefined, subscribe: () => () => {} }),
-      t: makeTranslate(zh),
-      ...face,
-    } as unknown as WorkstationProps
-
-    const { getByText } = render(<Workstation {...props} />)
+    const { getByText, list } = mountSeat(null)
 
     expect(getByText(zh['session.none'])).toBeTruthy()
     expect(list).not.toHaveBeenCalled()
+  })
+
+  it('draws the tree at the stored width beside the splitter and the viewer', () => {
+    const { container, instance } = mountSeat()
+
+    expect(treeColumn(container).style.width).toBe('260px')
+    expect(splitter(container).getAttribute('role')).toBe('separator')
+    expect(instance.getSnapshot().treeWidth).toBe(260)
+  })
+
+  it('resizes the tree through the splitter and clamps the reported width', () => {
+    const { container, instance } = mountSeat()
+    const handle = splitter(container)
+
+    pointer(handle, 'pointerdown', 260)
+    pointer(handle, 'pointermove', 360)
+    pointer(handle, 'pointerup', 360)
+    expect(instance.getSnapshot().treeWidth).toBe(360)
+    expect(treeColumn(container).style.width).toBe('360px')
+
+    pointer(handle, 'pointerdown', 360)
+    pointer(handle, 'pointermove', -2000)
+    pointer(handle, 'pointerup', -2000)
+    expect(instance.getSnapshot().treeWidth).toBe(180)
+    expect(treeColumn(container).style.width).toBe('180px')
+
+    pointer(handle, 'pointerdown', 180)
+    pointer(handle, 'pointermove', 5000)
+    pointer(handle, 'pointerup', 5000)
+    expect(instance.getSnapshot().treeWidth).toBe(520)
+    expect(treeColumn(container).style.width).toBe('520px')
   })
 })

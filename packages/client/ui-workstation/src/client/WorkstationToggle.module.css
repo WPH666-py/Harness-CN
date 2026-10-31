@@ -1,22 +1,24 @@
-/* A header control the size of the neighbouring icon buttons, with the pressed
-   state carried by the frame's own selection fill. */
+/* The header item reads as a labelled mode button: a light-blue chip with a
+   hairline frame, not a bare glyph among the header's icon buttons. */
 .trigger {
   display: inline-flex;
   gap: 4px;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
-  min-height: 28px;
-  padding: 3px 4px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--dsw-alias-label-tertiary);
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 5px;
+  background: var(--dsw-alias-state-business-tertiary);
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .trigger:hover {
-  color: var(--dsw-alias-label-secondary);
+  border-color: var(--dsw-alias-state-business-primary);
 }
 
 .trigger:focus-visible {
@@ -25,6 +27,7 @@
 }
 
 .trigger[data-active] {
-  background: var(--dsw-alias-interactive-bg-active, var(--dsw-alias-interactive-bg-hover));
-  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-state-business-primary);
+  background: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-label-primary-foreground);
 }

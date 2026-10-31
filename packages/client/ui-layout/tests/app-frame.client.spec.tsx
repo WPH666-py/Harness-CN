@@ -124,7 +124,7 @@ function tracks(frame: HTMLElement): number[] {
   return [Number(match[1]), rightbar]
 }
 
-function handleFor(frame: HTMLElement, side: 'sidebar' | 'rightbar'): HTMLElement {
+function handleFor(frame: HTMLElement, side: 'sidebar' | 'rightbar' | 'workstation'): HTMLElement {
   const handle = frame.querySelector<HTMLElement>(`[data-side="${side}"]`)
   if (handle === null) throw new Error(`missing ${side} resize handle`)
   return handle
@@ -637,6 +637,68 @@ describe('AppFrame pointer resizing', () => {
     expect(animationFrames.size).toBe(0)
     expect(handle.hasPointerCapture(1)).toBe(false)
     if (change !== 'unmount') expect(frame.dataset.dragging).toBeUndefined()
+  })
+})
+
+/* The workstation template is one seat track, the centre's protected minimum,
+   and no right track whoever the right panel reports. */
+function seatTrack(frame: HTMLElement): number {
+  const match = /^([\d.]+)px minmax\(400px, 1fr\) 0px$/.exec(frame.style.gridTemplateColumns)
+  if (match === null) throw new Error(`unexpected workstation template: ${frame.style.gridTemplateColumns}`)
+  return Number(match[1])
+}
+
+describe('AppFrame workstation seat', () => {
+  it('fills column one with the seat and offers only its boundary handle', () => {
+    const { frame, instance, getByTestId } = mountFrame()
+    act(() => { instance.actions.setWorkstation(true) })
+    expect(frame.dataset.workstation).toBe('true')
+    expect(seatTrack(frame)).toBe(1190)
+    expect(handleFor(frame, 'workstation').style.left).toBe('1190px')
+    expect(frame.querySelector('[data-side="sidebar"]')).toBeNull()
+    expect(frame.querySelector('[data-side="rightbar"]')).toBeNull()
+    expect(getByTestId('shell.workstation-content').parentElement?.hasAttribute('data-shell-workstation')).toBe(true)
+  })
+
+  it('drags the boundary without unmounting the conversation', () => {
+    const { frame, instance, getByTestId } = mountFrame()
+    act(() => { instance.actions.setWorkstation(true) })
+    const conversation = getByTestId('main-content')
+    const handle = handleFor(frame, 'workstation')
+    pointer(handle, 'pointerdown', 1190)
+    expect(frame.dataset.dragging).toBe('true')
+    pointer(handle, 'pointermove', 1090)
+    act(flushFrames)
+    expect(seatTrack(frame)).toBe(1090)
+    pointer(handle, 'pointerup', 1090)
+    expect(instance.getSnapshot().layoutInfo.workstationWidth).toBe(1090)
+    expect(handle.style.left).toBe('1090px')
+    expect(frame.dataset.dragging).toBeUndefined()
+    expect(getByTestId('main-content')).toBe(conversation)
+  })
+
+  it('clamps the seat between its minimum and the centre floor', () => {
+    const { frame, instance } = mountFrame()
+    act(() => { instance.actions.setWorkstation(true) })
+    resize(1280)
+    expect(seatTrack(frame)).toBe(794)
+    drag(handleFor(frame, 'workstation'), 794, 100)
+    expect(instance.getSnapshot().layoutInfo.workstationWidth).toBe(520)
+    drag(handleFor(frame, 'workstation'), 520, 5000)
+    expect(instance.getSnapshot().layoutInfo.workstationWidth).toBe(880)
+    expect(seatTrack(frame)).toBe(880)
+  })
+
+  it('keeps the saved width when the layout leaves and returns', () => {
+    const { frame, instance } = mountFrame()
+    act(() => { instance.actions.setWorkstation(true) })
+    drag(handleFor(frame, 'workstation'), 1190, 990)
+    expect(instance.getSnapshot().layoutInfo.workstationWidth).toBe(990)
+    act(() => { instance.actions.setWorkstation(false) })
+    expect(frame.dataset.workstation).toBeUndefined()
+    expect(frame.querySelector('[data-side="workstation"]')).toBeNull()
+    act(() => { instance.actions.setWorkstation(true) })
+    expect(seatTrack(frame)).toBe(990)
   })
 })
 

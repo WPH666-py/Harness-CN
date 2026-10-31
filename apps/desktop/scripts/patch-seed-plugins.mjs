@@ -16,7 +16,14 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 /** Plugins withdrawn from this release. */
-const REMOVED = ['@furongjun1999/dsh-memory']
+const REMOVED = [
+  '@furongjun1999/dsh-memory',
+  // VSCodeMode polled `/edrv/rpc` about nine times a second and starved the page's socket pool,
+  // which is what left the connection indicator stuck on `connecting` (0.2.1-rc.7 report).
+  'dsh-vscode-mode',
+  // Research Graph: a sidebar footer button the product does not ship.
+  'dsh-scifork',
+]
 
 /** Plugins this release adds, with the spec a later install would use and the package name. */
 const ADDED = [

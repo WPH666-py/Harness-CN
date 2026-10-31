@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "title": "ui-billing-balance"
+  },
+  "balance": {
+    "remaining": "Balance {amount}",
+    "month": "This month {amount}"
+  },
+  "dashboard": {
+    "open": "Open the usage and billing dashboard"
+  }
+}

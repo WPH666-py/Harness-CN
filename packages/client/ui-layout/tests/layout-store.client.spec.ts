@@ -22,6 +22,7 @@ describe('createLayoutStore', () => {
         rightbarFullscreen: false,
         rightbarInstant: false,
         workstation: false,
+        workstationWidth: null,
       },
     })
   })
@@ -120,7 +121,7 @@ describe('main panel selection', () => {
     expect(store.getSnapshot().layoutInfo).toBe(selected.layoutInfo)
   })
 
-  it.each(['setSidebar', 'toggleSidebar', 'setViewportWidth', 'setRightbar', 'openRightbar', 'closeRightbar'] as const)(
+  it.each(['setSidebar', 'toggleSidebar', 'setViewportWidth', 'setRightbar', 'openRightbar', 'closeRightbar', 'setWorkstationWidth'] as const)(
     'preserves panelInfo identity when %s changes layoutInfo', (action) => {
       const { store, actions } = createLayoutStore().create()
       actions.selectPanel(panelA)
@@ -133,6 +134,7 @@ describe('main panel selection', () => {
         case 'setRightbar': actions.setRightbar(500); break
         case 'openRightbar': actions.openRightbar(true, true); break
         case 'closeRightbar': actions.closeRightbar(); break
+        case 'setWorkstationWidth': actions.setWorkstationWidth(700); break
       }
       expect(store.getSnapshot().panelInfo).toBe(previous.panelInfo)
       expect(store.getSnapshot().layoutInfo).not.toBe(previous.layoutInfo)
@@ -223,6 +225,27 @@ describe('right panel', () => {
   })
 })
 
+describe('workstation seat', () => {
+  it('clamps the saved seat width to the seat minimum and the centre floor', () => {
+    const { store, actions } = createLayoutStore().create()
+    actions.setViewportWidth(1280)
+    actions.setWorkstationWidth(9999)
+    expect(store.getSnapshot().layoutInfo.workstationWidth).toBe(880)
+    actions.setWorkstationWidth(1)
+    expect(store.getSnapshot().layoutInfo.workstationWidth).toBe(520)
+  })
+
+  it('rounds the drag width and keeps it across resizes and layout leaves', () => {
+    const { store, actions } = createLayoutStore().create()
+    actions.setWorkstationWidth(700.6)
+    expect(store.getSnapshot().layoutInfo.workstationWidth).toBe(701)
+    actions.setViewportWidth(1280)
+    actions.setWorkstation(true)
+    actions.setWorkstation(false)
+    expect(store.getSnapshot().layoutInfo).toMatchObject({ workstation: false, workstationWidth: 701 })
+  })
+})
+
 describe('right panel instant geometry', () => {
   it.each([true, false])('closes fullscreen with track=%s in one instant update and retains repeated close reports', (track) => {
     const { store, actions } = createLayoutStore().create()
@@ -262,7 +285,7 @@ describe('right panel instant geometry', () => {
     expect(store.getSnapshot().layoutInfo).toMatchObject({ rightbarTrack: false, rightbarInstant: false })
   })
 
-  it.each(['setSidebar', 'toggleSidebar', 'setRightbar', 'setViewportWidth'] as const)('clears instant geometry on %s', (action) => {
+  it.each(['setSidebar', 'toggleSidebar', 'setRightbar', 'setViewportWidth', 'setWorkstationWidth'] as const)('clears instant geometry on %s', (action) => {
     const { store, actions } = createLayoutStore().create()
     actions.openRightbar(true, true)
     actions.closeRightbar()

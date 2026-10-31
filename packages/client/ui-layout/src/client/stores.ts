@@ -5,8 +5,8 @@
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import type { MainPanelId } from './service.ts'
 import {
-  clampWidth, RIGHTBAR_DEFAULT_RATIO, RIGHTBAR_MAX_RATIO, RIGHTBAR_MIN,
-  SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN,
+  CENTER_MIN, clampWidth, RIGHTBAR_DEFAULT_RATIO, RIGHTBAR_MAX_RATIO, RIGHTBAR_MIN,
+  SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, WORKSTATION_MIN,
 } from './columns.ts'
 
 /**
@@ -56,6 +56,12 @@ type LayoutInfo = {
    * so neither the main panel nor the Session selection changes.
    */
   workstation: boolean
+  /**
+   * Saved workstation seat width in px, or null while the ratio default
+   * applies. The seat is the frame's first column in that layout; a drag
+   * replaces the default and the preference survives leaving the layout.
+   */
+  workstationWidth: number | null
 }
 
 /**
@@ -72,6 +78,7 @@ type LayoutActions = {
   openRightbar: (draft: LayoutState, track: boolean, fullscreen: boolean) => void
   closeRightbar: (draft: LayoutState) => void
   setWorkstation: (draft: LayoutState, on: boolean) => void
+  setWorkstationWidth: (draft: LayoutState, px: number) => void
 }
 
 /**
@@ -97,6 +104,7 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         rightbarFullscreen: false,
         rightbarInstant: false,
         workstation: false,
+        workstationWidth: null,
       },
     }),
     actions: {
@@ -156,6 +164,13 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
       setWorkstation: (d, on: boolean) => {
         if (d.layoutInfo.workstation === on) return
         d.layoutInfo.workstation = on
+      },
+      // The seat's own drag width. Its neighbouring tracks are not laid out in
+      // this presentation, so the centre's protected minimum is the only
+      // ceiling; the drag is clamped against the frame it was measured on.
+      setWorkstationWidth: (d, px: number) => {
+        d.layoutInfo.rightbarInstant = false
+        d.layoutInfo.workstationWidth = clampWidth(px, WORKSTATION_MIN, Math.max(WORKSTATION_MIN, d.layoutInfo.viewportWidth - CENTER_MIN))
       },
     },
   })

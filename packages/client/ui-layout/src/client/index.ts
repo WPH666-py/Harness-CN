@@ -196,8 +196,12 @@ export function apply(ctx: ClientContext): void {
       getSnapshot: () => instance.getSnapshot().layoutInfo.workstation,
       subscribe: listener => instance.subscribe(listener),
     }
+    const workstationWidth: HostObservable<number | null> = {
+      getSnapshot: () => instance.getSnapshot().layoutInfo.workstationWidth,
+      subscribe: listener => instance.subscribe(listener),
+    }
     const layout = new LayoutController(instance.actions, id =>
-      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo, workstation)
+      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo, workstation, workstationWidth)
     const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: layout.panelInfo, workstation: layout.workstation } })
     const disposeService = ctx.reflect.provide('layout', layout)
     const disposeRegistration = ctx.slots.register({

@@ -86,6 +86,12 @@
   display: none;
 }
 
+/* The seat keeps one handle: its border with the centre column, the only track
+   boundary this presentation lays out. */
+.frame[data-workstation] .handle[data-side='workstation'] {
+  display: block;
+}
+
 .centerCol {
   min-width: 0;
   display: flex;

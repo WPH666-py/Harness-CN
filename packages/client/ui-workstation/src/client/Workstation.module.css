@@ -16,3 +16,18 @@
   color: var(--dsw-alias-label-tertiary);
   font-size: 12px;
 }
+
+/* The split strip is a 6px hit area rather than the hairline it paints: a
+   pointer must find it without the panes losing their room. */
+.resizer {
+  flex: 0 0 6px;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+.resizer:hover,
+.resizer[data-dragging] {
+  background: var(--dsw-alias-interactive-bg-hover);
+}

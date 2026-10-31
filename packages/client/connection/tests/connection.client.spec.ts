@@ -740,7 +740,8 @@ describe('connection lifecycle', () => {
     }, FAST)
 
     controller.start()
-    await vi.waitFor(() => { expect(states).toEqual(['connected']) })
+    // A stopped loop publishes its last state once and never claims an attempt is still running.
+    await vi.waitFor(() => { expect(states).toEqual(['connected', 'disconnected']) })
     await vi.waitFor(() => { expect(source.activeCount).toBe(0) })
     expect(connected).toBe(0)
   })
@@ -795,6 +796,101 @@ describe('connection lifecycle', () => {
       expect(source.activeCount).toBe(1)
     } finally {
       controller.stop()
+    }
+  })
+
+  it('starts a new attempt after the settle grace when a cancelled generation never settles', async () => {
+    vi.useFakeTimers()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const states: ConnectionState[] = []
+    let calls = 0
+    const source: ConnectionGenerationSource = () => {
+      calls++
+      return new Promise<void>(() => undefined)
+    }
+    const controller = new ConnectionController(source, {
+      onStateChange: state => states.push(state),
+    }, FAST)
+    controller.start()
+    try {
+      await vi.advanceTimersByTimeAsync(FAST.generationReadyTimeoutMs)
+      expect(calls).toBe(1)
+      expect(warnSpy).toHaveBeenCalledWith('[connection] connection generation was not ready within 500ms; cancelling generation')
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(calls).toBe(1)
+      expect(states).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(warnSpy).toHaveBeenCalledWith('[connection] the cancelled generation is still settling after 5000ms; starting a new one')
+      expect(states).toEqual(['connecting'])
+      await vi.advanceTimersByTimeAsync(20)
+      expect(warnSpy).toHaveBeenCalledWith('[connection] connection lost, retry #1')
+      expect(calls).toBe(2)
+    } finally {
+      controller.stop()
+      warnSpy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps a connected generation across the settle grace window', async () => {
+    vi.useFakeTimers()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const states: ConnectionState[] = []
+    const source = new FakeGenerationSource()
+    const controller = new ConnectionController(source.source, {
+      onStateChange: state => states.push(state),
+    }, FAST)
+    controller.start()
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(states).toEqual(['connected'])
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(warnSpy).not.toHaveBeenCalled()
+      expect(states).toEqual(['connected'])
+      expect(source.activeCount).toBe(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      controller.stop()
+      warnSpy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    { label: 'connected', firstAttemptFails: false },
+    { label: 'connecting', firstAttemptFails: true },
+  ])('publishes disconnected exactly once when stop() ends a $label loop', async ({ firstAttemptFails }) => {
+    vi.useFakeTimers()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const states: ConnectionState[] = []
+    const stateBeforeStop: ConnectionState = firstAttemptFails ? 'connecting' : 'connected'
+    let calls = 0
+    const source: ConnectionGenerationSource = (signal, ready) => {
+      calls++
+      if (firstAttemptFails && calls === 1) return Promise.reject(new Error('offline'))
+      ready({ home: '/h' })
+      return new Promise<void>((resolve) => {
+        signal.addEventListener('abort', () => { resolve() }, { once: true })
+      })
+    }
+    const controller = new ConnectionController(source, {
+      onStateChange: state => states.push(state),
+    }, FAST)
+    controller.start()
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(states).toEqual([stateBeforeStop])
+
+      controller.stop()
+      expect(states).toEqual([stateBeforeStop, 'disconnected'])
+      controller.stop()
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(states).toEqual([stateBeforeStop, 'disconnected'])
+      expect(calls).toBe(1)
+    } finally {
+      controller.stop()
+      warnSpy.mockRestore()
+      vi.useRealTimers()
     }
   })
 })

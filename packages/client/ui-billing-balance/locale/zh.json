@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "title": "ui-billing-balance"
+  },
+  "balance": {
+    "remaining": "余额 {amount}",
+    "month": "本月 {amount}"
+  },
+  "dashboard": {
+    "open": "打开用量与账单面板"
+  }
+}

@@ -60,6 +60,13 @@ export interface ViewerState {
   failure: RemoteFailure | null
 }
 
+/** Tree column width before any user drag. */
+const TREE_WIDTH_DEFAULT = 260
+/** Tree drag clamp floor: a directory name beside its disclosure glyph. */
+const TREE_WIDTH_MIN = 180
+/** Tree drag clamp ceiling: beyond it the viewer loses its readable share. */
+const TREE_WIDTH_MAX = 520
+
 /** Everything the workstation draws, in one store instance. */
 export interface WorkstationState {
   /** Level state by absolute directory path; an absent path was never asked for. */
@@ -68,6 +75,8 @@ export interface WorkstationState {
   expanded: string[]
   /** The open file and the pages of it read so far. */
   viewer: ViewerState
+  /** Drawn width of the tree column in px; the viewer takes the rest of the seat. */
+  treeWidth: number
 }
 
 /** One page of a file, as the viewer appends it. */
@@ -102,6 +111,8 @@ export type WorkstationActionMap = {
   paged: (draft: WorkstationState, page: FilePage) => void
   /** Record why the open file's last page failed. */
   pageFailed: (draft: WorkstationState, failure: RemoteFailure) => void
+  /** Save the tree column's drag width, clamped into its contract range. */
+  setTreeWidth: (draft: WorkstationState, px: number) => void
 }
 
 /** The handle a registration declares and a component reads. */
@@ -132,6 +143,7 @@ export function createWorkstationStore(): WorkstationStoreHandle {
       levels: {},
       expanded: [],
       viewer: { path: null, lines: [], offset: FIRST_LINE, eof: true, loading: false, failure: null },
+      treeWidth: TREE_WIDTH_DEFAULT,
     }),
     actions: {
       /**
@@ -229,6 +241,17 @@ export function createWorkstationStore(): WorkstationStoreHandle {
       pageFailed: (d, failure: RemoteFailure) => {
         d.viewer.loading = false
         d.viewer.failure = failure
+      },
+      /**
+       * Save the tree column's drag width.
+       *
+       * The viewer is what remains of the seat, so only the tree's own range is
+       * clamped here; the frame owns how much room the seat itself gets.
+       * @param d - draft state.
+       * @param px - requested width in px.
+       */
+      setTreeWidth: (d, px: number) => {
+        d.treeWidth = Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, Math.round(px)))
       },
     },
   })

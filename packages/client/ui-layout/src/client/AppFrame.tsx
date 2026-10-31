@@ -55,7 +55,7 @@ function RightbarColumn(props: { children?: ReactNode }) {
  * One drag handle: pointer capture, rAF-throttled dx reports against the drag-start origin.
  * `side` keys the hover-reveal CSS to the owning column.
  */
-function DragHandle(props: { side: 'sidebar' | 'rightbar'; left: number; onStart: () => void; onDrag: (dx: number) => void; onEnd: () => void }) {
+function DragHandle(props: { side: 'sidebar' | 'rightbar' | 'workstation'; left: number; onStart: () => void; onDrag: (dx: number) => void; onEnd: () => void }) {
   const [dragging, setDragging] = useState(false)
   const origin = useRef(0)
   const latest = useRef(0)
@@ -176,12 +176,18 @@ export function AppFrame({
   colsRef.current = cols
   const rightbarWidth = useRef(normal.rightbar)
   rightbarWidth.current = normal.rightbar
+  // The seat's resolved width is its rendered column edge, so a drag base taken
+  // here cannot jump; the saved preference survives leaving the layout.
+  const workstationWidth = workstationColumn(viewport, layoutInfo.workstationWidth)
+  const workstationWidthRef = useRef(workstationWidth)
+  workstationWidthRef.current = workstationWidth
 
   // The drag base is the rendered width captured at drag start (grabbing a
   // concession-clamped panel must not jump back to the stored preference);
   // it stays frozen for the whole gesture so dx deltas do not compound.
   const sidebarBase = useRef(0)
   const rightbarBase = useRef(0)
+  const workstationBase = useRef(0)
   // Track-level transitions pause for the whole gesture: eased tracks would
   // detach the column edge from the pointer (AppFrame.module.css).
   const [dragging, setDragging] = useState(false)
@@ -230,6 +236,10 @@ export function AppFrame({
   const onRightbarDrag = useCallback((dx: number) => {
     actions.setRightbar(rightbarBase.current - dx)
   }, [actions])
+  const onWorkstationStart = useCallback(() => { workstationBase.current = workstationWidthRef.current; setDragging(true) }, [])
+  const onWorkstationDrag = useCallback((dx: number) => {
+    actions.setWorkstationWidth(workstationBase.current + dx)
+  }, [actions])
   const productTitle = process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')
   // The rendered template lets the grid solve the squeeze natively: the centre
   // declares its protected minimum and the right column bids up to the clamped
@@ -259,7 +269,6 @@ export function AppFrame({
   // columns step aside, and the centre keeps the Conversation it already had —
   // that is what preserves its draft and scroll position across the toggle.
   const workstation = layoutInfo.workstation
-  const workstationWidth = workstationColumn(viewport)
   const workstationSeat = useMemo(() => renderSlot('shell.workstation', {}), [renderSlot])
 
   return (
@@ -314,6 +323,11 @@ export function AppFrame({
       {!sidebarCollapsed && !workstation && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
       {!workstation && layoutInfo.rightbarShown && !layoutInfo.rightbarFullscreen && normal.rightbar > 0 && (
         <DragHandle side="rightbar" left={viewport - normal.rightbar} onStart={onRightbarStart} onDrag={onRightbarDrag} onEnd={onDragEnd} />
+      )}
+      {/* The seat's boundary with the centre column: the conversation stays
+          mounted in column two while the seat takes or gives px. */}
+      {workstation && (
+        <DragHandle side="workstation" left={workstationWidth} onStart={onWorkstationStart} onDrag={onWorkstationDrag} onEnd={onDragEnd} />
       )}
     </div>
   )

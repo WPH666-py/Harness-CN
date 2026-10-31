@@ -308,6 +308,11 @@
     - id: ui-workstation
       name: '@deepseek-ai/dsh-client-ui-workstation'
 
+    # The account's remaining balance, or this month's spend, in the frame's
+    # bottom row — laid out in both the conversation and the workstation mode.
+    - id: ui-billing-balance
+      name: '@deepseek-ai/dsh-client-ui-billing-balance'
+
     - id: ui-settings
       name: '@deepseek-ai/dsh-client-ui-settings'
 

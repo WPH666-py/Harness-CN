@@ -2,11 +2,10 @@
  * The Conversation-header control that swaps the frame into the workstation
  * layout and back.
  *
- * One click toggles: the Button carries the pressed state, and the title says
- * what the click will do rather than what the mode is.
+ * One click toggles: the button shows the mode's name, carries the pressed
+ * state, and names the change the click performs.
  */
 import type { ReactNode } from 'react'
-import { IconCodeOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { UseWorkstation } from '@deepseek-ai/dsh-client-ui-layout/client'
 import css from './WorkstationToggle.module.css'
@@ -35,19 +34,19 @@ export function WorkstationToggle(props: WorkstationToggleProps): ReactNode {
   const { t, toggleWorkstation, useWorkstation } = props
   const useMode = useWorkstation ?? useHiddenWorkstation
   const active = useMode(state => state)
-  const label = t('toggle.label')
+  const action = active ? t('toggle.disable') : t('toggle.enable')
   return (
     <button
       type="button"
       className={css.trigger}
-      aria-label={label}
+      aria-label={action}
+      title={action}
       aria-pressed={active}
-      title={active ? t('toggle.disable') : t('toggle.enable')}
       data-workstation-toggle
       data-active={active || undefined}
       onClick={() => { toggleWorkstation() }}
     >
-      <IconCodeOutlineMedium />
+      {t('toggle.mode')}
     </button>
   )
 }

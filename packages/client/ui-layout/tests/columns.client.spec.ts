@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampWidth, computeColumns } from '../src/client/columns.ts'
+import { clampWidth, computeColumns, workstationColumn } from '../src/client/columns.ts'
 
 describe('clampWidth', () => {
   it('clamps into the range and rounds', () => {
@@ -49,5 +49,24 @@ describe('computeColumns', () => {
   it('leaves a closed right track closed when the frame widens', () => {
     expect(computeColumns(755, 0, 0).rightbar).toBe(0)
     expect(computeColumns(1920, 0, 0).rightbar).toBe(0)
+  })
+})
+
+describe('workstationColumn', () => {
+  it('starts at the 62% ratio while the centre keeps its floor', () => {
+    expect(workstationColumn(1920)).toBe(1190)
+    expect(workstationColumn(1280)).toBe(794)
+  })
+
+  it('lets a saved width win inside the seat and centre ranges', () => {
+    expect(workstationColumn(1920, 900)).toBe(900)
+    expect(workstationColumn(1920, 1)).toBe(520)
+    expect(workstationColumn(1920, 9999)).toBe(1520)
+    expect(workstationColumn(1280, 9999)).toBe(880)
+  })
+
+  it('holds the seat minimum on a frame narrower than it', () => {
+    expect(workstationColumn(700)).toBe(520)
+    expect(workstationColumn(700, 480)).toBe(520)
   })
 })

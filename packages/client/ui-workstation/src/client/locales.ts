@@ -15,16 +15,16 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** Toggle name, tree states, viewer states, and failure lines. */
+    /** Toggle labels, tree states, viewer states, and failure lines. */
     workstation: WorkstationKey
   }
 }
 
 /** Simplified Chinese dictionary and key-set source of truth. */
 export const zh = {
-  'toggle.label': '工作台',
+  'toggle.mode': 'IDE/工作站',
   'toggle.enable': '切换到 IDE 布局',
-  'toggle.disable': '切回对话布局',
+  'toggle.disable': '回到对话布局',
   'tree.root': '工作区',
   'tree.loading': '正在读取…',
   'tree.empty': '空目录',
@@ -42,9 +42,9 @@ export type WorkstationKey = keyof typeof zh
 
 /** English dictionary, complete against the key set. */
 export const en = {
-  'toggle.label': 'Workstation',
+  'toggle.mode': 'IDE / Workstation',
   'toggle.enable': 'Switch to the IDE layout',
-  'toggle.disable': 'Switch back to the conversation layout',
+  'toggle.disable': 'Back to the conversation layout',
   'tree.root': 'Workspace',
   'tree.loading': 'Reading…',
   'tree.empty': 'Empty directory',

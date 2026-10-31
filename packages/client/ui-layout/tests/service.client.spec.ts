@@ -1,7 +1,7 @@
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { describe, expect, it, vi } from 'vitest'
 import { LayoutController } from '../src/client/service.ts'
-import type { MainPanelId, PanelActions } from '../src/client/service.ts'
+import type { LayoutPanelActions, MainPanelId, PanelActions } from '../src/client/service.ts'
 
 function fakePanels(): PanelActions {
   return {
@@ -14,6 +14,7 @@ function fakePanels(): PanelActions {
     openRightbar: vi.fn(),
     closeRightbar: vi.fn(),
     setWorkstation: vi.fn(),
+    setWorkstationWidth: vi.fn(),
   }
 }
 
@@ -102,5 +103,30 @@ describe('LayoutController', () => {
     service.dispose()
     expect(pending.aborted).toBe(true)
     service.dispose()
+  })
+
+  it('reports the saved seat width and forwards drag widths to its actions', () => {
+    const panels = fakePanels()
+    const width = createSnapshotStore<number | null>(null)
+    const service = new LayoutController(panels, () => true, createSnapshotStore({ activePanelId: null }), undefined, width)
+    expect(service.workstationWidth.getSnapshot()).toBeNull()
+    service.setWorkstationWidth(640)
+    expect(panels.setWorkstationWidth).toHaveBeenCalledWith(640)
+  })
+
+  it('reports an unsaved width for a frame whose actions predate the seat', () => {
+    const panels: LayoutPanelActions = {
+      selectPanel: vi.fn(),
+      retainMainPanels: vi.fn(),
+      setSidebar: vi.fn(),
+      toggleSidebar: vi.fn(),
+      setViewportWidth: vi.fn(),
+      setRightbar: vi.fn(),
+      openRightbar: vi.fn(),
+      closeRightbar: vi.fn(),
+    }
+    const service = new LayoutController(panels, () => true, createSnapshotStore({ activePanelId: null }))
+    expect(service.workstationWidth.getSnapshot()).toBeNull()
+    service.setWorkstationWidth(640)
   })
 })

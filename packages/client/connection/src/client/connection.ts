@@ -20,6 +20,13 @@ export interface ConnectionGeneration {
 const MANUAL_RECONNECT = new Error('connection: manual reconnect requested')
 const NETWORK_STATE_CHANGED = new Error('connection: browser network state changed')
 
+/**
+ * How long a cancelled generation may take to settle before the loop moves on without it.
+ * A source that never settles (typically a carrier stuck in a resource-starved connect) would
+ * otherwise suspend the retry loop for good, leaving the page reporting `connecting` forever.
+ */
+const SOURCE_SETTLE_GRACE_MS = 5_000
+
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     const t = setTimeout(done, ms)
@@ -37,6 +44,25 @@ function waitForAbort(signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     signal.addEventListener('abort', () => { resolve() }, { once: true })
   })
+}
+
+/**
+ * Wait for a cancelled generation to settle, but never longer than `ms`.
+ * @param settlement - the generation's own settlement promise, which never rejects.
+ * @param ms - grace in ms before the loop abandons it.
+ * @returns whether it settled inside the grace.
+ */
+async function settlesWithin(settlement: Promise<void>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const grace = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => { resolve(false) }, ms)
+  })
+  const settled = await Promise.race([settlement.then(() => true), grace])
+  if (timer !== undefined) clearTimeout(timer)
+  if (!settled) {
+    console.warn(`[connection] the cancelled generation is still settling after ${String(ms)}ms; starting a new one`)
+  }
+  return settled
 }
 
 /** Connection lifecycle state published after the first attempt has an outcome. */
@@ -107,6 +133,8 @@ export class ConnectionController {
     this.current = null
     this.retryDelay?.abort()
     this.retryDelay = null
+    // A stopped loop never publishes again, so the last state must not claim an attempt is running.
+    this.emitState('disconnected')
   }
 
   /** Reset the retry sequence and replace the current generation or retry delay immediately. */
@@ -159,6 +187,19 @@ export class ConnectionController {
   /** Re-read both mutable liveness guards after a potentially reentrant sink. */
   private isGenerationActive(controller: AbortController): boolean {
     return this.isRunning() && !controller.signal.aborted
+  }
+
+  /**
+   * Wait for the current generation to end before the next attempt starts.
+   * A live generation has no deadline: it settles when its source ends. A cancelled generation gets
+   * the settle grace, so a source that ignores its abort signal cannot suspend the loop for good.
+   * @param settlement - the generation's own settlement promise, which never rejects.
+   * @param controller - the generation being awaited.
+   */
+  private async awaitGenerationEnd(settlement: Promise<void>, controller: AbortController): Promise<void> {
+    await Promise.race([settlement, waitForAbort(controller.signal)])
+    if (!controller.signal.aborted || !this.isRunning()) return
+    await settlesWithin(settlement, SOURCE_SETTLE_GRACE_MS)
   }
 
   private async loop(): Promise<void> {
@@ -260,7 +301,7 @@ export class ConnectionController {
         if (!ac.signal.aborted) ac.abort(error)
       }
 
-      await failed
+      await this.awaitGenerationEnd(failed, ac)
       if (!this.isRunning()) return
       if (manualAttempt) this.attempt = 0
       retry = true

@@ -66,12 +66,15 @@ export function computeColumns(viewport: number, sidebar: number, rightbar: numb
  * Width of the workstation column while the IDE layout is presented.
  *
  * The seat holds a file tree beside a file viewer, so it takes a share of the
- * frame rather than the navigation column's preference; the centre keeps its
- * protected minimum whenever the frame has room for it.
+ * frame rather than the navigation column's preference. A user drag replaces
+ * that share and is clamped into the same range, whose ceiling leaves the
+ * centre its protected minimum: a 1280px frame caps the seat at 880px, so the
+ * conversation keeps the 400px it would have beside an open right panel.
  * @param viewport - available frame width in px.
+ * @param stored - saved drag width in px, or null while the ratio default applies.
  * @returns the column width in px.
  */
-export function workstationColumn(viewport: number): number {
+export function workstationColumn(viewport: number, stored: number | null = null): number {
   const ceiling = Math.max(WORKSTATION_MIN, viewport - CENTER_MIN)
-  return clampWidth(viewport * WORKSTATION_RATIO, WORKSTATION_MIN, ceiling)
+  return clampWidth(stored ?? viewport * WORKSTATION_RATIO, WORKSTATION_MIN, ceiling)
 }

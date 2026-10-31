@@ -41,10 +41,12 @@ export interface FileTreeProps {
    * while the Session summary that carries it has not arrived.
    */
   readonly root: string | undefined
+  /** Drawn column width in px, owned by the seat's splitter; the viewer takes the rest. */
+  readonly width: number
 }
 
 /** The share every level draws from, apart from its own path and indentation. */
-type LevelShare = Omit<FileTreeProps, 'root'>
+type LevelShare = Omit<FileTreeProps, 'root' | 'width'>
 
 /** One level's props: the shared share plus its own path and indentation. */
 interface LevelProps extends LevelShare {
@@ -129,9 +131,9 @@ function Level(props: LevelProps): ReactNode {
  */
 export function FileTree(props: FileTreeProps): ReactNode {
   const t = props.translate
-  const { root, ...share } = props
+  const { root, width, ...share } = props
   return (
-    <section className={css.tree} aria-label={t('tree.root')} data-workstation-tree>
+    <section className={css.tree} style={{ width: `${width}px` }} aria-label={t('tree.root')} data-workstation-tree>
       <header className={css.head}>
         <IconWorkspaceTreeOutlineMedium />
         <span className={css.title}>{t('tree.root')}</span>
