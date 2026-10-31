@@ -15,7 +15,12 @@
 # non-ASCII byte in this file breaks parsing there.
 [CmdletBinding()]
 param(
-  [switch]$SkipPrepare
+  [switch]$SkipPrepare,
+  # Commit the Client bundle reports as its build identity. A tree without `.git`
+  # cannot answer `git rev-parse HEAD`, which the official profile requires, so
+  # the identity arrives here instead: the argument, then the environment, then
+  # the sibling checkout's HEAD.
+  [string]$CommitHash
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,8 +28,12 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot     = $PSScriptRoot
 $TauriRoot    = Join-Path $RepoRoot 'apps\desktop-shell\src-tauri'
 $ArtifactsDir = Join-Path $TauriRoot 'target\release\bundle\nsis'
+$MsiDir       = Join-Path $TauriRoot 'target\release\bundle\msi'
+$WixDir       = Join-Path $TauriRoot 'target\release\wix\x64'
 $LogFile      = Join-Path $RepoRoot 'build-tauri.log'
 $IconPath     = Join-Path $RepoRoot 'Harness.ico'
+$PortableGit  = 'D:\projects-py\git-portable\cmd\git.exe'
+$SiblingRepo  = Join-Path (Split-Path $RepoRoot -Parent) 'harness-0.1.5-rc.1'
 
 # Start from an empty log. The recovery check at the end reads this file to decide whether a
 # non-zero exit still produced its installer, and a message left by an earlier run would let a
@@ -70,6 +79,37 @@ Assert-Command node
 Assert-Command cargo
 Assert-Command pnpm
 
+# Relink the MSI when `tauri build` fails inside WiX.
+#
+# `light.exe` runs ICE validation actions that talk to the Windows Installer service; on a
+# machine where that service is unreachable or the user's `%TEMP%` refuses WiX's temporary
+# collection, linking stops with `LGHT0001` (access denied on a temp file) or `LGHT0217`
+# (`无法访问 Windows Installer 服务` / `0x643`). Both happen after candle has already written
+# `main.wixobj`, and `-sval` skips only the validation pass, so the MSI it links is the same
+# artifact the normal path produces.
+function Repair-Msi([string]$Version) {
+  $wixobj = Join-Path $WixDir 'main.wixobj'
+  $light = Join-Path $WixDir 'wix\light.exe'
+  if (-not (Test-Path -LiteralPath $wixobj) -or -not (Test-Path -LiteralPath $light)) { return $false }
+  New-Item -ItemType Directory -Force -Path $MsiDir | Out-Null
+  $out = Join-Path $MsiDir ("Harness-CN_{0}_x64_zh-CN.msi" -f $Version)
+  if (Test-Path -LiteralPath $out) {
+    $stamp = (Get-Item -LiteralPath $out).LastWriteTime
+    if ($stamp -gt (Get-Item -LiteralPath $wixobj).LastWriteTime) { return $true }
+  }
+  Write-Host ''
+  Write-Host '=== Relinking the MSI with light.exe -sval ===' -ForegroundColor Cyan
+  $rc = Invoke-Logged -Exe $light -ExeArgs @(
+    '-sval', '-ext', 'WixUIExtension', '-ext', 'WixUtilExtension',
+    '-cultures:zh-CN', '-loc', 'locale.wxl', '-out', $out, 'main.wixobj'
+  ) -Log $LogFile -Append
+  if ($rc -ne 0) {
+    Write-Warning "light.exe -sval exited with $rc; the MSI was not produced."
+    return $false
+  }
+  return (Test-Path -LiteralPath $out)
+}
+
 # --- Release identity and packaging environment ------------------------------
 #
 # The fork's own application identity. `DSH_DESKTOP_UNSIGNED=1` selects the unsigned path that
@@ -77,6 +117,39 @@ Assert-Command pnpm
 # unsigned mode of its own, so this fork adds one and a build needs no signing material.
 $env:DSH_DESKTOP_APP_ID = 'com.harnesscn.desktop'
 $env:DSH_DESKTOP_UNSIGNED = '1'
+
+# --- Build environment the pipeline cannot infer -----------------------------
+#
+# Three settings the official profile needs and that a release build must not
+# leave to the operator (each one has already broken a build of this fork):
+#
+#   1. DSH_CLIENT_COMMIT_HASH / DSH_CLIENT_VERSION: `scripts/client-build-environment.ts`
+#      shells out to `git rev-parse HEAD` for the official profile, and this tree has no
+#      `.git` (the release tree is assembled by copying), so the build dies with
+#      `spawnSync git ENOENT`. Both variables are required together.
+#   2. TEMP / TMP: esbuild removes its temporary files from `%LOCALAPPDATA%\Temp` at the
+#      end of the Web build; when that directory denies the delete, the whole `build:web`
+#      gate fails with `[vite:esbuild-transpile] ... Access is denied`. A directory this
+#      build owns makes the removal succeed.
+$planned = (Get-Content -LiteralPath (Join-Path $RepoRoot 'package.json') -Raw | ConvertFrom-Json).version
+
+if (-not $CommitHash) { $CommitHash = $env:DSH_CLIENT_COMMIT_HASH }
+if (-not $CommitHash -and (Test-Path -LiteralPath $PortableGit) -and (Test-Path -LiteralPath (Join-Path $SiblingRepo '.git'))) {
+  $CommitHash = (& $PortableGit -C $SiblingRepo rev-parse HEAD).Trim()
+}
+if (-not $CommitHash -or $CommitHash -notmatch '^[0-9a-fA-F]{7,40}$') {
+  throw 'No usable commit identity: pass -CommitHash <sha>, set DSH_CLIENT_COMMIT_HASH, or keep the sibling checkout with its .git in place.'
+}
+$env:DSH_CLIENT_COMMIT_HASH = $CommitHash
+$env:DSH_CLIENT_VERSION = $planned
+
+$BuildTmp = Join-Path (Split-Path $RepoRoot -Parent) 'tmp'
+New-Item -ItemType Directory -Force -Path $BuildTmp | Out-Null
+$env:TEMP = $BuildTmp
+$env:TMP = $BuildTmp
+Write-Host ("Build identity: {0} {1}" -f $planned, $CommitHash) -ForegroundColor DarkGray
+Write-Host ("Scratch directory: {0}" -f $BuildTmp) -ForegroundColor DarkGray
+
 if (-not (Test-Path $IconPath)) {
   throw "Application icon not found at $IconPath."
 }
@@ -117,10 +190,18 @@ if ($rc -ne 0) {
   if (Test-Path -LiteralPath $LogFile) { $log = Get-Content -LiteralPath $LogFile -Raw }
   $watchdogKilled = $log -match 'produced no output and touched nothing'
   $tauriFinished  = $log -match 'Finished 1 bundle'
-  if ($produced.Count -gt 0 -and ($watchdogKilled -or $tauriFinished)) {
+  # WiX failures leave the NSIS bundle and the candle output behind, so the MSI can be
+  # relinked here instead of costing another full build.
+  $msiMissing = -not (Test-Path -LiteralPath (Join-Path $MsiDir ("Harness-CN_{0}_x64_zh-CN.msi" -f $planned)))
+  $msiRepaired = $false
+  if ($msiMissing -and ($log -match 'light\.exe|LGHT|wix')) { $msiRepaired = Repair-Msi -Version $planned }
+  if ($produced.Count -gt 0 -and ($watchdogKilled -or $tauriFinished -or $msiRepaired)) {
     Write-Warning "The build reported exit code $rc, but the installer for $planned was written anyway."
     if ($watchdogKilled) {
       Write-Warning 'Cause: DSH Desktop''s pnpm runner killed the run for five minutes of silence; `tauri build` says nothing while rustc compiles.'
+    }
+    if ($msiRepaired) {
+      Write-Warning 'Cause: WiX could not run its ICE validation actions; the MSI was relinked with `light.exe -sval` from the existing main.wixobj.'
     }
     Write-Warning 'Treating this as a completed build. Verify the installer before publishing.'
   } else {
