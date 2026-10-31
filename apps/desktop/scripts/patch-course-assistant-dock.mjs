@@ -60,7 +60,7 @@ const AFTER = [
   '      return h(',
   "        'div',",
   "        { className: 'ca-dock' },",
-  "        h('button', { className: 'ca-dock-button', style: { border: '1px solid var(--dsw-alias-border-l1,#d9dee7)', background: 'var(--dsw-alias-bg-layer-1,#ffffff)', color: 'var(--dsw-alias-brand-primary,#1a6cff)', cursor: 'pointer', fontFamily: 'inherit', fontSize: '11.5px', lineHeight: '1.4', padding: '3px 10px', borderRadius: '999px' }, onClick: open }, '课程助手面板'),",
+  "        h('button', { className: 'ca-dock-button', style: { border: '1px solid var(--dsw-alias-border-l1,#d9dee7)', background: 'var(--dsw-alias-bg-layer-1,#ffffff)', color: 'var(--dsw-alias-brand-primary,#1a6cff)', cursor: 'pointer', fontFamily: 'inherit', fontSize: '11.5px', lineHeight: '1.4', padding: '3px 10px', borderRadius: '999px', whiteSpace: 'nowrap' }, onClick: open }, '课程助手面板'),",
   '      )',
   '    }',
 ].join('\n')
