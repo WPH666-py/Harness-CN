@@ -27,6 +27,10 @@ export const RIGHTBAR_MIN = 300
 export const RIGHTBAR_MAX_RATIO = 0.7
 /** First-open right panel preference as a fraction of the frame. */
 export const RIGHTBAR_DEFAULT_RATIO = 0.45
+/** Workstation column width as a fraction of the frame while the IDE layout is presented. */
+export const WORKSTATION_RATIO = 0.62
+/** Workstation column floor: a file tree beside a readable slice of the viewer. */
+export const WORKSTATION_MIN = 520
 
 /**
  * Clamp a panel width into its contract range.
@@ -56,4 +60,18 @@ export function computeColumns(viewport: number, sidebar: number, rightbar: numb
     ? 0
     : Math.min(available, clampWidth(rightbar, RIGHTBAR_MIN, viewport * RIGHTBAR_MAX_RATIO))
   return { sidebar: s, center: Math.max(0, viewport - s - r), rightbar: r }
+}
+
+/**
+ * Width of the workstation column while the IDE layout is presented.
+ *
+ * The seat holds a file tree beside a file viewer, so it takes a share of the
+ * frame rather than the navigation column's preference; the centre keeps its
+ * protected minimum whenever the frame has room for it.
+ * @param viewport - available frame width in px.
+ * @returns the column width in px.
+ */
+export function workstationColumn(viewport: number): number {
+  const ceiling = Math.max(WORKSTATION_MIN, viewport - CENTER_MIN)
+  return clampWidth(viewport * WORKSTATION_RATIO, WORKSTATION_MIN, ceiling)
 }

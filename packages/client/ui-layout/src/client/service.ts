@@ -24,6 +24,22 @@ export interface PanelInfo {
 /** The layout store's bound action set (framework-baked, draft params peeled). */
 export type PanelActions = BoundActions<ReturnType<typeof createLayoutStore>>
 
+/**
+ * Panel actions the controller drives. The workstation writer stays optional so
+ * a host that predates the workstation seat — or a hand-built panel-action fake
+ * in a spec — still constructs a controller; every other transition it exposes
+ * is required.
+ */
+export type LayoutPanelActions = Omit<PanelActions, 'setWorkstation'> & {
+  setWorkstation?: (on: boolean) => void
+}
+
+/** The presentation source a controller reports when its host has none. */
+const HIDDEN_WORKSTATION: HostObservable<boolean> = {
+  getSnapshot: () => false,
+  subscribe: () => () => {},
+}
+
 /** Panel navigation and geometry actions exposed through ctx.layout. */
 export interface ILayout {
   /** Selected central panel from the same root store used by `usePanelInfo`. */
@@ -51,6 +67,16 @@ export interface ILayout {
   openRightbar(track: boolean, fullscreen: boolean): void
   /** Report the right panel as hidden: no track, no handle. */
   closeRightbar(): void
+  /** Whether the frame presents the workstation layout. */
+  readonly workstation: HostObservable<boolean>
+  /**
+   * Show or hide the workstation layout.
+   * @param on - true seats the workstation in the first column and collapses the
+   *   right column; false restores the navigation and right columns.
+   */
+  setWorkstation(on: boolean): void
+  /** Toggle the workstation layout. */
+  toggleWorkstation(): void
 }
 
 /** Cross-plugin panel-action face (ctx.layout). */
@@ -61,11 +87,14 @@ export class LayoutController implements ILayout {
    * @param panels - actions of the instance shared with the root entry.
    * @param hasMainPanel - checks the live main-slot registry for a panel id.
    * @param panelInfo - root store's shared central-panel selection source.
+   * @param workstation - root store's shared workstation-presentation source;
+   *   omitting it reports the seat as permanently hidden.
    */
   constructor(
-    private readonly panels: PanelActions,
+    private readonly panels: LayoutPanelActions,
     private readonly hasMainPanel: (id: MainPanelId) => boolean,
     readonly panelInfo: HostObservable<PanelInfo>,
+    readonly workstation: HostObservable<boolean> = HIDDEN_WORKSTATION,
   ) {}
 
   /** Select a global panel or return to the Conversation. */
@@ -102,5 +131,15 @@ export class LayoutController implements ILayout {
   /** Report the right panel as hidden: no track, no handle. */
   closeRightbar(): void {
     this.panels.closeRightbar()
+  }
+
+  /** Show or hide the workstation layout. */
+  setWorkstation(on: boolean): void {
+    this.panels.setWorkstation?.(on)
+  }
+
+  /** Toggle the workstation layout against its current presentation. */
+  toggleWorkstation(): void {
+    this.panels.setWorkstation?.(!this.workstation.getSnapshot())
   }
 }

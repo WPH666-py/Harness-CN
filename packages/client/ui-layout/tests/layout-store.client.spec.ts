@@ -21,6 +21,7 @@ describe('createLayoutStore', () => {
         rightbarTrack: false,
         rightbarFullscreen: false,
         rightbarInstant: false,
+        workstation: false,
       },
     })
   })

@@ -32,6 +32,9 @@ export type { ILayout, MainPanelId, PanelInfo } from './service.ts'
 /** Selector hook over root-scoped panel selection. */
 export type UsePanelInfo = SnapshotSelectorHook<PanelInfo>
 
+/** Selector hook over the frame's workstation presentation. */
+export type UseWorkstation = SnapshotSelectorHook<boolean>
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** The outward face only; the concrete service stays inside this plugin. */
@@ -48,6 +51,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface GlobalStandardProps {
     /** Subscribe to the selected main panel independently of parent renders. */
     usePanelInfo: UsePanelInfo
+    /**
+     * Subscribe to the frame's workstation presentation independently of parent
+     * renders. Optional because a host or a hand-built prop fixture may predate
+     * the seat; a component that reads it must fall back to a constant.
+     */
+    useWorkstation?: UseWorkstation
   }
 
   interface SlotMap {
@@ -117,6 +126,18 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * the lights or the controls.
      */
     'shell.leading': { kind: 'single'; scope: 'root' }
+    /**
+     * The workstation seat: a whole-column surface that takes the first grid
+     * column while the frame presents the workstation layout, and steps aside
+     * for the navigation column when it does not. Both are mounted at once —
+     * only one is laid out — so an occupant keeps its state across the toggle.
+     *
+     * The centre column is not part of this seat: it keeps whatever main panel
+     * is selected, which is what lets a Conversation survive the swap with its
+     * draft and scroll position. The right column collapses to zero width while
+     * the seat is presented. OCCUPIED by ui-workstation's tree-plus-viewer pair.
+     */
+    'shell.workstation': { kind: 'single'; scope: 'root' }
   }
 }
 
@@ -171,9 +192,13 @@ export function apply(ctx: ClientContext): void {
       getSnapshot: () => instance.getSnapshot().panelInfo,
       subscribe: listener => instance.subscribe(listener),
     }
+    const workstation: HostObservable<boolean> = {
+      getSnapshot: () => instance.getSnapshot().layoutInfo.workstation,
+      subscribe: listener => instance.subscribe(listener),
+    }
     const layout = new LayoutController(instance.actions, id =>
-      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo)
-    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: layout.panelInfo } })
+      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo, workstation)
+    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: layout.panelInfo, workstation: layout.workstation } })
     const disposeService = ctx.reflect.provide('layout', layout)
     const disposeRegistration = ctx.slots.register({
       name: 'root',
@@ -185,6 +210,7 @@ export function apply(ctx: ClientContext): void {
         'shell.bottom': { kind: 'single', scope: 'root' },
         'shell.overlay': { kind: 'list', scope: 'root' },
         'shell.leading': { kind: 'single', scope: 'root' },
+        'shell.workstation': { kind: 'single', scope: 'root' },
       },
       store,
     }, AppFrame)

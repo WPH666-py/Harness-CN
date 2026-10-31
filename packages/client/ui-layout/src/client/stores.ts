@@ -49,6 +49,13 @@ type LayoutInfo = {
   rightbarFullscreen: boolean
   /** Suppress transitions for a fullscreen exit until another geometry action. */
   rightbarInstant: boolean
+  /**
+   * Whether the frame presents the workstation layout: the first column becomes
+   * the workstation seat (workspace tree plus file viewer) and the right column
+   * is collapsed. Presentation only — the centre column keeps the Conversation,
+   * so neither the main panel nor the Session selection changes.
+   */
+  workstation: boolean
 }
 
 /**
@@ -64,6 +71,7 @@ type LayoutActions = {
   setRightbar: (draft: LayoutState, px: number) => void
   openRightbar: (draft: LayoutState, track: boolean, fullscreen: boolean) => void
   closeRightbar: (draft: LayoutState) => void
+  setWorkstation: (draft: LayoutState, on: boolean) => void
 }
 
 /**
@@ -88,6 +96,7 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         rightbarTrack: false,
         rightbarFullscreen: false,
         rightbarInstant: false,
+        workstation: false,
       },
     }),
     actions: {
@@ -139,6 +148,14 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         d.layoutInfo.rightbarShown = false
         d.layoutInfo.rightbarTrack = false
         d.layoutInfo.rightbarFullscreen = false
+      },
+      // The document-workspace swap: the sidebar and rightbar tracks step aside
+      // for the workstation seat, while the centre keeps its occupant mounted.
+      // No panel or Session field is touched, which is what lets a conversation
+      // survive the toggle with its draft and scroll position.
+      setWorkstation: (d, on: boolean) => {
+        if (d.layoutInfo.workstation === on) return
+        d.layoutInfo.workstation = on
       },
     },
   })

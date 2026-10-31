@@ -1,0 +1,18 @@
+/* The seat is one row: a fixed-ish navigation column and a viewer that takes
+   the rest of the width. Neither pane may push the other wider. */
+.root {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}

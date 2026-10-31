@@ -303,6 +303,11 @@
     - id: ui-sidebar-files
       name: '@deepseek-ai/dsh-client-ui-sidebar-files'
 
+    # The workstation seat: a file tree beside a viewer in the frame's first
+    # column, opened and closed from the Conversation header.
+    - id: ui-workstation
+      name: '@deepseek-ai/dsh-client-ui-workstation'
+
     - id: ui-settings
       name: '@deepseek-ai/dsh-client-ui-settings'
 
