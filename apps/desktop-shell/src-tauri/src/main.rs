@@ -86,10 +86,10 @@ static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::
 
 /// Whether closing the workspace window keeps the product running in the notification area.
 ///
-/// Opening the workspace costs a full plugin-tree start — tens of seconds cold — so the default is
-/// to keep it: the window hides and the next open is immediate. The tray entry flips this, and the
-/// choice is written to the installation's data directory so it survives a restart.
-static KEEP_IN_TRAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// The default is to quit: a close button that leaves the product running reads as a window that
+/// cannot be closed, and the user who wants the fast reopen can flip this from the tray. The choice
+/// is written to the installation's data directory so it survives a restart.
+static KEEP_IN_TRAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 const TRAY_QUIT_ID: &str = "tray-quit";
 /// Caption the tray tooltip and the fallback window lookup share.
@@ -606,12 +606,10 @@ fn keep_entry_label() -> String {
 
 /// Put the product in the notification area.
 ///
-/// The icon is what keeps the shell reachable once its window is closed. Opening the workspace is
-/// expensive — the sidecar rebuilds a runtime on the first launch, and a cold plugin tree costs tens
-/// of seconds — so a close that ended the process would pay that cost again the next time the user
-/// wanted the product. The close hides the window instead and the product keeps running; the middle
-/// entry flips that for users who would rather have the memory back, and the last entry is how
-/// either of them ends it for good.
+/// The icon is how the shell stays reachable when closing the window keeps the product running —
+/// opening the workspace costs a full plugin-tree start, so a user who asks for that behaviour gets
+/// an immediate reopen instead of paying it again. The middle entry flips it, and the last entry is
+/// how either choice ends the product for good.
 fn install_tray(app: &AppHandle) {
     // Rebuilding is how the toggle's own caption changes: the menu is replaced rather than mutated,
     // so there is one code path whether this is the first install or a flip.
@@ -619,7 +617,7 @@ fn install_tray(app: &AppHandle) {
     let build = || -> tauri::Result<()> {
         let show = MenuItemBuilder::with_id(TRAY_SHOW_ID, "显示主窗口").build(app)?;
         let keep = MenuItemBuilder::with_id(TRAY_KEEP_ID, keep_entry_label()).build(app)?;
-        let quit = MenuItemBuilder::with_id(TRAY_QUIT_ID, "退出 Harness-CN").build(app)?;
+        let quit = MenuItemBuilder::with_id(TRAY_QUIT_ID, format!("退出 {}", APP_NAME)).build(app)?;
         let menu = MenuBuilder::new(app).item(&show).item(&keep).item(&quit).build()?;
         let mut builder = TrayIconBuilder::with_id(TRAY_ID)
             .tooltip(APP_NAME)
