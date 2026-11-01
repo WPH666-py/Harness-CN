@@ -21,6 +21,7 @@ import { DesktopHostProcess } from '../../desktop/src/host-process.ts'
 import { DesktopLogBuffer, type DesktopLogSnapshot } from '../../desktop/src/log-buffer.ts'
 import { resolveDesktopLocale, type DesktopMessages } from '../../desktop/src/locale.ts'
 import { resolveDesktopPaths, type DesktopPaths } from '../../desktop/src/paths.ts'
+import { provisionReaBundle } from '../../desktop/src/rea-bundle.ts'
 import { adoptHarnessCnHome, describeHomeMigration, HARNESS_CN_HOME_ENV, migrateLegacyHarnessHome } from '../../desktop/src/product-home.ts'
 import {
   describeDesktopRecovery,
@@ -363,7 +364,8 @@ async function main(): Promise<void> {
   const messages = locale.messages
   const logs = new DesktopLogBuffer(join(options.logDirectory, 'harness.log'))
   const logShell = (text: string): void => { logs.line('shell', text) }
-  const paths = resolveDesktopPaths(adoptHome(logShell, options.resourceDir))
+  const home = adoptHome(logShell, options.resourceDir)
+  const paths = resolveDesktopPaths(home)
 
   // Node's own on-disk compile cache is what makes the backend's second start cheaper than its
   // first: every module it loads is compiled once and the bytecode is reused afterwards. It must
@@ -753,6 +755,17 @@ async function main(): Promise<void> {
     logShell(activated
       ? 'desktop runtime installed from the bundled seed'
       : 'desktop runtime already matches the bundled release')
+    // The REA plugin cannot do anything until its bundle is provisioned, and that download runs to
+    // about 800 MiB, so it happens beside the workspace rather than in front of it. The setup script
+    // is idempotent and resumes from its cache, so a later launch picks up where this one stopped.
+    const reaState = provisionReaBundle({
+      node: options.node,
+      profile: paths.profile,
+      plugins: paths.plugins,
+      home,
+      log: logShell,
+    })
+    logShell(`REA bundle: ${reaState}`)
     // Starting the Host is the one step with no denominator: dsh reports that it is ready, and
     // nothing in between counts anything, so this shows how long it has been running instead of a
     // percentage that would have to be invented. Silence is what a stuck launch looks like.

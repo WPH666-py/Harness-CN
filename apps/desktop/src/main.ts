@@ -14,6 +14,7 @@ import {
   type IpcMainInvokeEvent,
 } from 'electron'
 import { resolveDesktopPaths } from './paths.ts'
+import { provisionReaBundle } from './rea-bundle.ts'
 import { adoptHarnessCnHome, describeHomeMigration, migrateLegacyHarnessHome } from './product-home.ts'
 import {
   describeDesktopRecovery,
@@ -499,6 +500,16 @@ async function main(): Promise<void> {
       ? 'Desktop runtime installed from the bundled seed'
       : 'Desktop runtime already matches the bundled release')
   }
+  // The REA plugin cannot work until its bundle is provisioned, and it downloads about 800 MiB, so
+  // the setup runs beside the workspace instead of in front of it.
+  const reaState = provisionReaBundle({
+    node: resources.node,
+    profile: paths.profile,
+    plugins: paths.plugins,
+    home,
+    log: logShell,
+  })
+  logShell(`REA bundle: ${reaState}`)
   reportStartupProgress(0.95)
   host = await startHost()
   reportStartupProgress(1)

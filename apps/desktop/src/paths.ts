@@ -11,6 +11,7 @@ export interface DesktopPaths {
   readonly rollback: string
   readonly pending: string
   readonly lock: string
+  readonly plugins: string
   readonly pnpm: {
     readonly root: string
     readonly store: string
@@ -36,6 +37,7 @@ export function resolveDesktopPaths(dshHome: string = resolveDshHome()): Desktop
     rollback: join(root, 'rollback', 'profile'),
     pending: join(root, 'pending.json'),
     lock: join(root, 'lock'),
+    plugins: join(dshHome, 'plugins'),
     pnpm: {
       root: pnpm,
       store: join(pnpm, 'store'),
