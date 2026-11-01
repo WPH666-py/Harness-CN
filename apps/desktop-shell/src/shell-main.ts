@@ -551,7 +551,9 @@ async function main(): Promise<void> {
 
   const api: ShellApi = {
     status: () => status,
-    locale: () => locale,
+    // The startup page reads its copy from this locale, so it has to be the branded dictionary and
+    // not the raw one: handing out `locale` left a HarScience splash titled Harness-CN.
+    locale: () => ({ ...locale, messages }),
     logs: (): DesktopLogSnapshot => logs.snapshot(),
     clearLogs: (): DesktopLogSnapshot => {
       logs.clear()
