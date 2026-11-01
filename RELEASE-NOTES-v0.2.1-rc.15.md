@@ -36,11 +36,14 @@ $out.Dispose()
   - **R 4.6.2**：清华 TUNA → 中科大 → CRAN 官方。CRAN 只发布 Inno Setup 安装包，没有便携 ZIP，所以这一项是静默运行安装程序；需要提权的环境下会失败并在日志里记一行 `runtimes: r stopped (…)`，下次启动重试。
   - 下载与安装都在窗口之后进行，日志里能看到 `runtimes: <组件> trying <url>` / `ready` / `stopped (<原因>)`，装好后标记落在 `<安装目录>\data\runtimes\<组件>\`。
 - 编辑器一侧沿用 rc.14 的能力：多标签可编辑、Ctrl+S 保存、关闭即保存、图片预览、编码嗅探（UTF-8 / UTF-16 / GB18030，非 UTF-8 以只读方式显示）、行号栏与当前行淡蓝光标带、三栏 1 px 实线分隔、长行横向滚动。
+- 对话区在输入框上方留出 28 px 余量：长回答的最后一段不会再贴着输入卡上沿、落进它的淡出带里。
+- 侧栏的启动日志行、窗口标题、托盘提示都跟着分版走，HarScience 里不会再出现 `Harness-CN` 字样。
 
 ## 已知
 
 - REA 插件（逆向小工具）首次使用时另需约 800 MiB 运行时（Node、JDK、Ghidra 等），同样在后台自动下载；它的 IDA / Hopper / Kuna 集成需要自备授权软件。
-- `runtimes` 的 R 组件依赖安装程序静默安装，个别机器会因提权失败；Python 与 MinGW 是纯解压，不会提权。
+- `runtimes` 的 R 组件依赖安装程序静默安装：首次启动会在桌面上弹一次 UAC 授权框，点「是」即可；拒绝或超时的话日志里是 `runtimes: r stopped (installer exited with code 97)`，下次启动会自动重试。Python 与 MinGW 是纯解压，不会提权。
+- 首次启动还会给内置 Python 装上 `chemcore` 与 `rdkit`（化学工作台要用），同样优先走清华镜像；断网时化学工作台会提示「本地计算服务没起来」。
 - 打包机与上次相同的三处手工设置已固化进构建脚本：`DSH_CLIENT_COMMIT_HASH` / `DSH_CLIENT_VERSION` 由脚本推导，`TEMP` 指向可写目录，WiX 失败时用 `-sval` 重链 MSI。
 - `sharp` 的安装脚本被 pnpm 忽略（上游已知），`dsh-free-vision` 的构建脚本同理，不影响启动。
 - 离线包约 560–600 MiB，`store-archives` 体积仍是 Harness-CN 的两倍左右，原因未查清。
