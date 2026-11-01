@@ -464,6 +464,12 @@ button.crumb:hover {
 .embeddedBody[data-content-phase='active'] .viewArea {
   flex: 1 0 auto;
   min-height: auto;
+  /* Clearance under the transcript: the composer seat is sticky and rides the
+     same scroller, so without this reserve the last block lands flush against
+     the seat's top edge and its text sits inside the seat's 36px fade band —
+     the tail of a long reply reads as clipped by the input card. The reserve
+     only exists at the end of the content, so mid-scroll spacing is unchanged. */
+  padding-bottom: 28px;
 }
 
 .root[data-phase='active'] .composerSeat,
@@ -522,6 +528,9 @@ button.crumb:hover {
   flex: 1 1 0;
   min-height: 0;
   overflow: hidden;
+  /* A view that elects the composer overlay owns its own scrollers and fills
+     the box, so the transcript clearance above would only shrink it. */
+  padding-bottom: 0;
 }
 
 .scrollBody:has([data-conversation-composer-overlay]) > .composerSeat {

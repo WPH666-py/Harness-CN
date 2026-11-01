@@ -379,6 +379,12 @@ async function main(): Promise<void> {
   const home = adoptHome(logShell, options.resourceDir)
   const paths = resolveDesktopPaths(home)
 
+  // Adopt the provisioned interpreter before any Host process exists: plugins inherit the
+  // environment of the Host that loads them, and `dsh-chem-ui` shells out to `python3` by name.
+  // The directories may still be empty on the very first launch — PATH entries are resolved when
+  // the panel actually spawns, by which time the provisioning below has finished.
+  if (PRODUCT_NAME === SCIENCE_PRODUCT) adoptRuntimePath(home)
+
   // Node's own on-disk compile cache is what makes the backend's second start cheaper than its
   // first: every module it loads is compiled once and the bytecode is reused afterwards. It must
   // live outside the profile, which a release upgrade replaces wholesale, and it must exist before
@@ -640,7 +646,7 @@ async function main(): Promise<void> {
     deferredReady: () => deferredPluginsReady,
     launchToken: () => launchToken,
   })
-  logShell(`Harness-CN ${options.version} starting; workspace on ${running.origin}, shell windows on ${running.shellOrigin}`)
+  logShell(`${PRODUCT_NAME} ${options.version} starting; workspace on ${running.origin}, shell windows on ${running.shellOrigin}`)
   handshake({ type: 'listen', port: running.port, shellPort: running.shellPort })
 
   /** Guards {@link restartInPlace} against a second request while one is running. */
