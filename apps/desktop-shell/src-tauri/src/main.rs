@@ -93,7 +93,7 @@ static KEEP_IN_TRAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 
 const TRAY_QUIT_ID: &str = "tray-quit";
 /// Caption the tray tooltip and the fallback window lookup share.
-const APP_NAME: &str = "Harness-CN";
+const APP_NAME: &str = PRODUCT_NAME;
 
 /// Owned children, the port the sidecar published, and the account of a failed launch.
 #[derive(Default)]
@@ -306,7 +306,7 @@ fn open_in_browser(target: &tauri::Url) {
         && !target.host_str().is_some_and(|host| host == "127.0.0.1" || host == "localhost");
     if !allowed || !platform::open_external(target.as_str()) {
         platform::show_error(
-            "Harness-CN",
+            PRODUCT_NAME,
             &format!("无法在浏览器中打开这个链接：\n{}", target.as_str()),
         );
     }
@@ -324,7 +324,7 @@ fn restart_shell(app: &AppHandle) {
             QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
             app.exit(0);
         }
-        _ => platform::show_error("Harness-CN", "无法重新启动应用，请手动退出后重新打开。"),
+        _ => platform::show_error(PRODUCT_NAME, "无法重新启动应用，请手动退出后重新打开。"),
     }
 }
 
@@ -362,7 +362,7 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
                 let _ = splash.destroy();
             }
             install_menu(app);
-            open_window(app, MAIN, format!("{}/", origin(port)), "Harness-CN", 1280.0, 840.0, true);
+            open_window(app, MAIN, format!("{}/", origin(port)), PRODUCT_NAME, 1280.0, 840.0, true);
             if needs_api_key {
                 open_window(
                     app,
@@ -427,14 +427,14 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"));
             if !usable {
                 platform::show_error(
-                    "Harness-CN 更新失败",
+                    &product_title("更新失败"),
                     &format!("安装程序路径不可用：\n{}", path.display()),
                 );
                 return;
             }
             if !platform::spawn_installer(&path, &silent_switch) {
                 platform::show_error(
-                    "Harness-CN 更新失败",
+                    &product_title("更新失败"),
                     &format!(
                         "无法启动安装程序：\n{}\n\n安装包仍在下载目录中，可以手动运行它完成更新。",
                         path.display(),
@@ -543,7 +543,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
             // runs is what makes the marker on this menu entry actionable: the user sees why the
             // machine stopped being offered releases, not only that it did.
             if let Some(reason) = app.state::<Shell>().update_failure.lock().ok().and_then(|held| held.clone()) {
-                platform::show_error("Harness-CN", &format!("上次检查更新失败：\n{reason}"));
+                platform::show_error(PRODUCT_NAME, &format!("上次检查更新失败：\n{reason}"));
             }
             send_command(app, "check-updates");
         }
@@ -751,7 +751,7 @@ fn start_sidecar(app: AppHandle) {
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines() {
                 let Ok(line) = line else { break };
-                eprintln!("Harness-CN sidecar: {line}");
+                eprintln!("{} sidecar: {line}", PRODUCT_NAME);
                 if let Ok(mut captured) = owner.state::<Shell>().diagnostics.lock() {
                     captured.push_str(&line);
                     captured.push('\n');
