@@ -357,7 +357,8 @@ async function unpack(
   component: RuntimeComponent,
 ): Promise<void> {
   if (spec.archive === 'installer') {
-    await runInstaller(archive, partial)
+    // The installer's own scratch space, beside the partial tree rather than in `%TEMP%`.
+    await runInstaller(archive, partial, join(dirname(partial), '.installer-temp'))
     return
   }
   if (spec.archive === 'tar-gzip') {
@@ -382,28 +383,50 @@ async function unpack(
 /**
  * Run a vendor installer unattended into the partial directory.
  *
- * R's package is an Inno Setup installer with the standard silent switches. When Windows refuses to
- * launch it without elevation, the spawn or the exit code reports the failure and the component
- * stops; the next launch retries from scratch.
+ * R's package is an Inno Setup installer that refuses to run unelevated, and its bootstrap folder
+ * lives in `%TEMP%`, which some machines have locked down: a first attempt failed with
+ * "cannot create folder …\Temp\is-XXXX.tmp, error 5". So the child gets a temp directory this
+ * product owns, and the install itself is launched elevated — Windows shows one UAC prompt, and a
+ * refused prompt surfaces as a non-zero exit that the caller logs and retries next launch.
  * @param installer - downloaded installer executable.
  * @param target - directory the installer must write its tree into.
+ * @param scratch - directory the installer may use as its own temp space.
  */
-async function runInstaller(installer: string, target: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
+async function runInstaller(installer: string, target: string, scratch: string): Promise<void> {
+  await mkdir(scratch, { recursive: true })
+  const switches = `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR="${target}"`
+  // `Start-Process -Verb RunAs` is the only way to raise an elevation prompt from a child process;
+  // `-Wait -PassThru` keeps the exit code observable instead of fire-and-forget.
+  const elevated = await new Promise<number | null>((resolve, reject) => {
     const child = spawn(
-      installer,
-      ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', `/DIR=${target}`],
-      { stdio: 'ignore', windowsHide: true },
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `$p = Start-Process -FilePath '${installer.replaceAll("'", "''")}' -ArgumentList '${switches.replaceAll("'", "''")}' -Verb RunAs -PassThru -Wait; exit $p.ExitCode`,
+      ],
+      {
+        stdio: 'ignore',
+        windowsHide: true,
+        env: { ...process.env, TEMP: scratch, TMP: scratch },
+      },
     )
     child.on('error', reject)
-    child.on('exit', (code) => {
-      if (code === 0) {
-        resolve()
-      } else {
-        reject(new ProvisionError(`installer exited with code ${String(code ?? 'null')}`))
-      }
-    })
+    child.on('exit', (code) => { resolve(code) })
   })
+  if (elevated === 0) return
+  rejectInstaller(`installer exited with code ${String(elevated ?? 'null')}`)
+}
+
+/**
+ * Raise the retryable installer failure.
+ * @param message - what went wrong, for the log.
+ */
+function rejectInstaller(message: string): never {
+  throw new ProvisionError(message)
 }
 
 /**
