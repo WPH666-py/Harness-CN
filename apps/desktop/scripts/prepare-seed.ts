@@ -350,6 +350,21 @@ function inventory(root: string): readonly { path: string; bytes: number; sha256
   })
 }
 
+/**
+ * Whether an edition's seed ships a package.
+ *
+ * Editions carry different plugin sets, so a check that names a package only runs for the editions
+ * that carry it. Skipping is not the same as tolerating a missing package: `bundled-plugins.ts`
+ * decides what ships, and this asks that decision rather than assuming every release has every
+ * plugin.
+ * @param root - extracted seed root to inspect.
+ * @param packageName - npm name of the package to look for.
+ * @returns whether `<root>/node_modules/<packageName>` exists.
+ */
+function installedIn(root: string, packageName: string): boolean {
+  return existsSync(join(root, 'node_modules', ...packageName.split('/')))
+}
+
 async function verifyOfflineInstallation(release: DesktopRelease): Promise<void> {
   // The first launch rebuilds the profile from the seed's link manifest instead of running
   // pnpm, so that is what this proves: the recorded links resolve against the archived store
@@ -365,20 +380,20 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     }
     // Same tree, different question: the archived store has to produce the patched table too, or
     // only the machine that built the release would have it.
-    await verifyRuleEnginePatch(materialized)
+    if (installedIn(materialized, 'dsh-rule-engine')) await verifyRuleEnginePatch(materialized)
     // And the WeChat bridge has to come out of the archived store able to create a session.
-    await verifyWeChatSessionsPatch(materialized)
+    if (installedIn(materialized, 'dsh-wechat')) await verifyWeChatSessionsPatch(materialized)
     // And it has to come out of it answering to this product's name.
-    await verifyWeChatIdentityPatch(materialized)
+    if (installedIn(materialized, 'dsh-wechat')) await verifyWeChatIdentityPatch(materialized)
     // A store archive that missed the guard would crash the conversation input on first render.
-    await verifyWorkBuddyModelNull(materialized)
-await verifyRemoteSshEmptyState(materialized)
+    if (installedIn(materialized, 'dsh-workbuddy-connect')) await verifyWorkBuddyModelNull(materialized)
+    if (installedIn(materialized, 'dsh-remote-ssh-ops')) await verifyRemoteSshEmptyState(materialized)
     // A store archive that missed it would log a rejected focus claim on every start.
-    await verifyVoiceModeFocus(materialized)
+    if (installedIn(materialized, 'dsh-voice-mode')) await verifyVoiceModeFocus(materialized)
     // A store archive that missed this one would show the dock as two broken fragments.
-    await verifyCourseAssistantDock(materialized)
+    if (installedIn(materialized, 'dsh-course-assistant')) await verifyCourseAssistantDock(materialized)
     // And one that missed the close button would leave the user's only exit as a session navigation.
-    await verifyCourseAssistantPanel(materialized)
+    if (installedIn(materialized, 'dsh-course-assistant')) await verifyCourseAssistantPanel(materialized)
   } finally {
     rmSync(materialized, { recursive: true, force: true })
   }
