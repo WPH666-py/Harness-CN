@@ -224,6 +224,21 @@ function patchInstalledCourseAssistantDock(root: string): Promise<void> {
   })
 }
 
+function patchInstalledCourseAssistantPanel(root: string): Promise<void> {
+  // The panel's header renders 「历史」「清空」 and nothing that leaves it, so a user who opens it can
+  // only escape by navigating to a session. Patching the installed bytes here puts the close button
+  // in the archived store, so every profile later materialized from this seed carries it. See
+  // scripts/patch-course-assistant-panel.mjs for why this cannot be configuration.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-course-assistant-panel.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: course-assistant panel patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
 function patchInstalledWeChatIdentity(root: string): Promise<void> {
   // WeChat's contact name for the bot belongs to Tencent's iLink platform, so the only name this
   // product controls is the one the bridge chats under: the built-in surface prompt the plugin
@@ -290,6 +305,16 @@ async function verifyCourseAssistantDock(root: string): Promise<void> {
   module.verifyCourseAssistantDock(root)
 }
 
+/** Require the panel's close button in a tree the seed produced. */
+async function verifyCourseAssistantPanel(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-course-assistant-panel.mjs')
+  const module = await import(pathToFileURL(script).href) as { verifyCourseAssistantPanel?: (tree: string) => void }
+  if (typeof module.verifyCourseAssistantPanel !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyCourseAssistantPanel`)
+  }
+  module.verifyCourseAssistantPanel(root)
+}
+
 async function verifyRuleEnginePatch(root: string): Promise<void> {
   const catalog = join(root, 'node_modules', 'dsh-rule-engine', 'lib', 'core', 'tool-catalog.js')
   if (!existsSync(catalog)) {
@@ -352,6 +377,8 @@ await verifyRemoteSshEmptyState(materialized)
     await verifyVoiceModeFocus(materialized)
     // A store archive that missed this one would show the dock as two broken fragments.
     await verifyCourseAssistantDock(materialized)
+    // And one that missed the close button would leave the user's only exit as a session navigation.
+    await verifyCourseAssistantPanel(materialized)
   } finally {
     rmSync(materialized, { recursive: true, force: true })
   }
@@ -422,6 +449,7 @@ await patchInstalledRemoteSshEmptyState(join(SEED_ROOT, 'node_modules'))
 await patchInstalledQqbotConsole(join(SEED_ROOT, 'node_modules'))
 await patchInstalledVoiceModeFocus(installedModules)
     await patchInstalledCourseAssistantDock(installedModules)
+    await patchInstalledCourseAssistantPanel(installedModules)
 await applySeedPluginPatches(SEED_ROOT)
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform

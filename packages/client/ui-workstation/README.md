@@ -26,9 +26,12 @@ button; the tree keeps the Session's working directory as its root, and at most
 eight tabs stay open — when a ninth arrives, the oldest clean tab is closed
 first, while a tab with unsaved edits is never evicted.
 
-The active tab is a plain `<textarea>`: monospace, two spaces per Tab insertion,
-no autoformatting and no syntax highlighting. `dirty` means the buffer differs
-from the last saved copy.
+The active tab is a plain `<textarea>` under a line-number gutter: monospace, two
+spaces per Tab insertion, no autoformatting and no syntax highlighting. Lines
+never wrap — a long line scrolls inside the editor, and the gutter stays pinned
+to the left and scrolls only vertically — and a translucent band marks the line
+holding the caret, following clicks, arrow keys, selections, and scrolling.
+`dirty` means the buffer differs from the last saved copy.
 
 - **Ctrl/Cmd+S** saves the active tab.
 - **The close button saves first.** Closing a dirty tab calls the write verb and
@@ -39,6 +42,14 @@ from the last saved copy.
   and `.avif`, the viewer reads the file's bytes and draws them with
   `object-fit: contain`; the header shows the file's size. The blob URL is
   created when the image tab becomes active and revoked when it closes.
+- **A file that is not UTF-8 still opens.** The text verb refuses anything that is
+  not UTF-8, so the viewer falls back to the byte verb and decodes the bytes
+  itself: a byte order mark names UTF-8, UTF-16LE, or UTF-16BE; without one,
+  strict UTF-8 is tried, then strict GB18030. UTF-8 stays editable; a UTF-16 or
+  GB18030 tab opens read-only, with the header naming the encoding, because the
+  write verb only reproduces UTF-8. Bytes no encoding accepts — or bytes carrying
+  a NUL outside a UTF-16 byte order mark — are binary: the tab shows the file's
+  size instead of an editor and still closes like any other.
 
 Tabs, buffers, and the active tab live in the in-memory store beside the tree
 levels: a reload starts from an empty strip. Nothing is written except through
@@ -62,7 +73,8 @@ belongs in it unchanged.
 - Tree levels: `remote.workspaceFiles.list(sessionId, path, signal)`.
 - Text files: `remote.workspaceFiles.read(sessionId, path, { offset }, signal)`,
   paged to the end of the file and joined into one buffer.
-- Images: `remote.workspaceFiles.readBytes(sessionId, path, {}, signal)`.
+- Bytes: `remote.workspaceFiles.readBytes(sessionId, path, {}, signal)`, for an
+  image or for a text read the text verb refused as not UTF-8.
 - Saves: `remote.workspaceFiles.write(sessionId, path, text, signal)`.
 
 Paths are workspace-relative (`''` is the workspace root), which is how the

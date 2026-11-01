@@ -15,6 +15,7 @@
 import { defineStore, type BoundActions, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import type { RemoteFailure } from '@deepseek-ai/dsh-api-remotes/client'
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
+import type { FileEncoding } from './encoding.ts'
 import { imageMediaType } from './paths.ts'
 
 /**
@@ -54,13 +55,14 @@ export interface TabImage {
  * `saved` is the Host's copy as of the last successful read or write, so the
  * dirty flag is derived rather than maintained: every edit recomputes it, and a
  * settlement can never claim a buffer is saved while it differs from `saved`.
- * Image tabs keep an empty buffer and carry their bytes in `image`.
+ * Image tabs keep an empty buffer and carry their bytes in `image`; binary tabs
+ * keep an empty buffer too and carry only the size the byte read reported.
  */
 export interface TabState {
   /** Absolute path of the file. */
   path: string
-  /** Whether the tab edits text or previews an image. */
-  kind: 'text' | 'image'
+  /** Whether the tab edits text, previews an image, or stands in for a binary file. */
+  kind: 'text' | 'image' | 'binary'
   /** The editor's buffer; empty while the first read is in flight. */
   text: string
   /** The buffer as last read or saved; the dirty flag compares against it. */
@@ -75,6 +77,10 @@ export interface TabState {
   failedOn: TabFailureKind | null
   /** Decoded bytes of an image tab; `null` for text tabs and while loading. */
   image: TabImage | null
+  /** Encoding a text read decoded; `null` for image tabs, binary files, and while loading. */
+  encoding: FileEncoding | null
+  /** Size in bytes of a binary file; `null` until the byte read reports one. */
+  size: number | null
 }
 
 /** Tree column width before any user drag. */
@@ -120,10 +126,12 @@ export type WorkstationActionMap = {
   tabFocused: (draft: WorkstationState, path: string) => void
   /** Replace one tab's buffer from the editor. */
   tabEdited: (draft: WorkstationState, path: string, text: string) => void
-  /** Record the text the endpoint read for one tab. */
-  tabLoaded: (draft: WorkstationState, path: string, text: string) => void
+  /** Record the text the endpoint read for one tab, and the encoding that decoded it. */
+  tabLoaded: (draft: WorkstationState, path: string, text: string, encoding: FileEncoding) => void
   /** Record the bytes the endpoint read for one image tab. */
   tabImageLoaded: (draft: WorkstationState, path: string, image: TabImage) => void
+  /** Record one tab as a file the decode chain could not read as text. */
+  tabBinaryLoaded: (draft: WorkstationState, path: string, size: number) => void
   /** Record why one tab's last read or save failed. */
   tabFailed: (draft: WorkstationState, path: string, message: string, failedOn: TabFailureKind) => void
   /** Record one tab's buffer as saved on the Host. */
@@ -258,6 +266,8 @@ export function createWorkstationStore(): WorkstationStoreHandle {
           failure: null,
           failedOn: null,
           image: null,
+          encoding: null,
+          size: null,
         })
         d.activePath = path
         if (d.tabs.length <= TAB_LIMIT) return
@@ -289,11 +299,16 @@ export function createWorkstationStore(): WorkstationStoreHandle {
       },
       /**
        * Record the text the endpoint read for one tab.
+       *
+       * The encoding rides along because it decides whether the tab may be
+       * saved: a buffer decoded from anything but UTF-8 would be written back
+       * in a different encoding than the file arrived in.
        * @param d - draft state.
        * @param path - absolute file path.
        * @param text - the complete file text.
+       * @param encoding - the encoding that decoded the file's bytes.
        */
-      tabLoaded: (d, path: string, text: string) => {
+      tabLoaded: (d, path: string, text: string, encoding: FileEncoding) => {
         const tab = tabOf(d, path)
         if (tab === undefined) return
         tab.text = text
@@ -302,6 +317,7 @@ export function createWorkstationStore(): WorkstationStoreHandle {
         tab.loading = false
         tab.failure = null
         tab.failedOn = null
+        tab.encoding = encoding
       },
       /**
        * Record the bytes the endpoint read for one image tab.
@@ -313,6 +329,24 @@ export function createWorkstationStore(): WorkstationStoreHandle {
         const tab = tabOf(d, path)
         if (tab === undefined) return
         tab.image = image
+        tab.loading = false
+        tab.failure = null
+        tab.failedOn = null
+      },
+      /**
+       * Record one tab as a binary file.
+       *
+       * The placeholder needs the size and nothing else: the bytes were never
+       * decoded, so the tab has no buffer to show and nothing to save.
+       * @param d - draft state.
+       * @param path - absolute file path.
+       * @param size - file size in bytes at the read.
+       */
+      tabBinaryLoaded: (d, path: string, size: number) => {
+        const tab = tabOf(d, path)
+        if (tab === undefined) return
+        tab.kind = 'binary'
+        tab.size = size
         tab.loading = false
         tab.failure = null
         tab.failedOn = null

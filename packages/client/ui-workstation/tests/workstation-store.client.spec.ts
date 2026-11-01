@@ -34,7 +34,7 @@ describe('workstation store tree width', () => {
     const store = seat()
     store.actions.expanded('/ws/src')
     store.actions.tabOpened('/ws/README.md')
-    store.actions.tabLoaded('/ws/README.md', 'alpha')
+    store.actions.tabLoaded('/ws/README.md', 'alpha', 'utf-8')
     const before = store.getSnapshot()
     store.actions.setTreeWidth(320)
     const after = store.getSnapshot()
@@ -73,10 +73,31 @@ describe('workstation store tabs', () => {
     expect(store.getSnapshot().tabs[0]).toMatchObject({ loading: false, failure: null, image: { size: 4 } })
   })
 
+  it('keeps the encoding a text read decoded', () => {
+    const store = seat()
+    store.actions.tabOpened('/ws/legacy.txt')
+    store.actions.tabLoaded('/ws/legacy.txt', '中文', 'gb18030')
+    expect(store.getSnapshot().tabs[0]).toMatchObject({ kind: 'text', encoding: 'gb18030', dirty: false })
+  })
+
+  it('records a binary tab with the size the byte read reported', () => {
+    const store = seat()
+    store.actions.tabOpened('/ws/payload.bin')
+    expect(store.getSnapshot().tabs[0]).toMatchObject({ kind: 'text', encoding: null, size: null })
+    store.actions.tabBinaryLoaded('/ws/payload.bin', 2048)
+    expect(store.getSnapshot().tabs[0]).toMatchObject({
+      kind: 'binary',
+      size: 2048,
+      loading: false,
+      failure: null,
+      failedOn: null,
+    })
+  })
+
   it('marks the buffer dirty until the Host has the same text', () => {
     const store = seat()
     store.actions.tabOpened('/ws/a.ts')
-    store.actions.tabLoaded('/ws/a.ts', 'alpha')
+    store.actions.tabLoaded('/ws/a.ts', 'alpha', 'utf-8')
     expect(store.getSnapshot().tabs[0]).toMatchObject({ text: 'alpha', saved: 'alpha', dirty: false, loading: false })
     store.actions.tabEdited('/ws/a.ts', 'alpha!')
     expect(store.getSnapshot().tabs[0]).toMatchObject({ text: 'alpha!', dirty: true })
@@ -87,7 +108,7 @@ describe('workstation store tabs', () => {
   it('keeps a tab dirty when the buffer changed while the write was in flight', () => {
     const store = seat()
     store.actions.tabOpened('/ws/a.ts')
-    store.actions.tabLoaded('/ws/a.ts', 'one')
+    store.actions.tabLoaded('/ws/a.ts', 'one', 'utf-8')
     store.actions.tabEdited('/ws/a.ts', 'two')
     store.actions.tabSaved('/ws/a.ts', 'one')
     expect(store.getSnapshot().tabs[0]).toMatchObject({ text: 'two', saved: 'one', dirty: true })
@@ -96,7 +117,7 @@ describe('workstation store tabs', () => {
   it('reports why a save failed and leaves the buffer editable', () => {
     const store = seat()
     store.actions.tabOpened('/ws/a.ts')
-    store.actions.tabLoaded('/ws/a.ts', 'one')
+    store.actions.tabLoaded('/ws/a.ts', 'one', 'utf-8')
     store.actions.tabEdited('/ws/a.ts', 'two')
     store.actions.tabFailed('/ws/a.ts', 'disk full', 'save')
     expect(store.getSnapshot().tabs[0]).toMatchObject({
@@ -138,7 +159,7 @@ describe('workstation store tabs', () => {
     const store = seat()
     for (let at = 0; at < 8; at += 1) {
       store.actions.tabOpened(`/ws/${at}.ts`)
-      store.actions.tabLoaded(`/ws/${at}.ts`, 'saved')
+      store.actions.tabLoaded(`/ws/${at}.ts`, 'saved', 'utf-8')
       store.actions.tabEdited(`/ws/${at}.ts`, 'edited')
     }
     store.actions.tabOpened('/ws/last.ts')

@@ -132,27 +132,86 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+/* The body gives the code area its remaining height and does not scroll itself:
+   the textarea is the only scroller, so nothing outside it can move the text away
+   from the gutter and the caret band placed beside it. */
 .body {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
-  padding: 8px 0 24px;
-  overflow: auto;
+  padding: 8px 0 0;
+  overflow: hidden;
 }
 
-.editor {
+/* The gutter and the text share one font and one line box, so a number sits on
+   the line it numbers whatever each side's own markup is. */
+.code {
+  display: flex;
   flex: 1 1 auto;
-  width: auto;
   min-height: 0;
-  margin: 0 14px;
-  padding: 0;
-  border: 0;
-  background: transparent;
+  overflow: hidden;
   color: var(--dsw-alias-label-primary);
   font-family: var(--dsw-font-mono, ui-monospace, monospace);
   font-size: 12px;
-  line-height: 1.6;
+  /* Keep in step with LINE_HEIGHT in FileViewer.tsx, which places the caret band. */
+  line-height: 19px;
+}
+
+/* A fixed column outside the textarea: the text scrolls under it, sideways as
+   well, and the numbers never move with it. */
+.gutter {
+  flex: 0 0 auto;
+  padding: 0 10px 0 14px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  user-select: none;
+}
+
+.numbers {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: pre;
+}
+
+.viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* The band is painted before the textarea, so it sits under the text and spans
+   the whole width the editor draws into. */
+.bandLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 9%, transparent);
+}
+
+.editor {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 0 12px 0 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  /* Long lines scroll sideways instead of wrapping, so one buffered line stays
+     one drawn line and the gutter keeps counting it. */
+  white-space: pre;
+  overflow: auto;
   resize: none;
   tab-size: 2;
 }

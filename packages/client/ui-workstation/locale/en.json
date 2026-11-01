@@ -16,6 +16,10 @@
   "editor": {
     "label": "Editing {name}"
   },
+  "viewer": {
+    "readOnly": "Shown as {encoding}, read-only",
+    "binary": "Binary file, no text preview ({size})"
+  },
   "preview": {
     "image": "Image preview",
     "size": "Size {size}"

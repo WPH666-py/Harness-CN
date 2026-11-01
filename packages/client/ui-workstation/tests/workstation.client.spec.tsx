@@ -75,6 +75,19 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve }
 }
 
+/** The refusal the text read answers for a file whose bytes are not UTF-8. */
+function notText(path: string) {
+  return { ok: false, error: new RemoteError('workspace-file/not-text', 'not text', { path }) }
+}
+
+/** A whole-file byte read, as the Host answers one after refusing the text read. */
+function wholeBytes(path: string, data: Uint8Array<ArrayBuffer>) {
+  return {
+    ok: true,
+    value: { absolutePath: path, version: '1', path, offset: 0, bytes: data.byteLength, data, eof: true },
+  }
+}
+
 /** The Remote verbs the seat calls, scripted over one small tree. */
 interface Scripted {
   readonly remote: WorkspaceFilesHostRemote
@@ -216,6 +229,20 @@ function previewOf(container: HTMLElement): HTMLElement {
   const preview = container.querySelector<HTMLElement>('[data-workstation-preview]')
   if (preview === null) throw new Error('missing workstation preview')
   return preview
+}
+
+/** The gutter's number column. */
+function gutterOf(container: HTMLElement): HTMLElement {
+  const numbers = container.querySelector<HTMLElement>('[data-workstation-line-numbers]')
+  if (numbers === null) throw new Error('missing line numbers')
+  return numbers
+}
+
+/** The band drawn behind the line holding the caret. */
+function bandOf(container: HTMLElement): HTMLElement {
+  const band = container.querySelector<HTMLElement>('[data-workstation-current-line]')
+  if (band === null) throw new Error('missing current-line band')
+  return band
 }
 
 /**
@@ -365,6 +392,57 @@ describe('Workstation', () => {
     expect(instance.getSnapshot().tabs[0]?.text).toBe('  alpha\nbeta')
   })
 
+  it('numbers every line beside a horizontally scrolling editor', async () => {
+    const handle = mountSeat()
+    const { container } = handle
+
+    const area = await openEditor(handle, 'README.md')
+    const gutter = gutterOf(container)
+
+    expect(gutter.textContent).toBe('1\n2')
+    expect(gutter.style.width).toBe('1ch')
+    expect(area.getAttribute('wrap')).toBe('off')
+  })
+
+  it('widens the gutter once the file reaches a second digit', async () => {
+    const handle = mountSeat()
+    const { container } = handle
+
+    const area = await openEditor(handle, 'README.md')
+    fireEvent.change(area, { target: { value: '1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11' } })
+
+    expect(gutterOf(container).textContent).toBe('1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11')
+    expect(gutterOf(container).style.width).toBe('2ch')
+  })
+
+  it('moves the caret band to the line the caret sits on', async () => {
+    const handle = mountSeat()
+    const { container } = handle
+
+    const area = await openEditor(handle, 'README.md')
+    expect(bandOf(container).dataset.workstationCurrentLine).toBe('1')
+
+    area.setSelectionRange(8, 8)
+    fireEvent.keyUp(area, { key: 'ArrowDown' })
+    expect(bandOf(container).dataset.workstationCurrentLine).toBe('2')
+
+    area.setSelectionRange(0, 0)
+    fireEvent.click(area)
+    expect(bandOf(container).dataset.workstationCurrentLine).toBe('1')
+  })
+
+  it('keeps the gutter on the scrolled line and pins it horizontally', async () => {
+    const handle = mountSeat()
+    const { container } = handle
+
+    const area = await openEditor(handle, 'README.md')
+    stubProperty(area, 'scrollTop', 38)
+    fireEvent.scroll(area)
+
+    expect(gutterOf(container).style.transform).toBe('translateY(-38px)')
+    expect(bandOf(container).style.top).toBe('-38px')
+  })
+
   it('saves the active tab on Ctrl+S and clears the dirty flag', async () => {
     const handle = mountSeat()
     const { instance, write } = handle
@@ -439,7 +517,7 @@ describe('Workstation', () => {
 
     read.mockResolvedValueOnce({
       ok: false,
-      error: new RemoteError('workspace-file/not-text', 'not text', { path: README }),
+      error: new RemoteError('workspace-file/not-found', 'not text', { path: README }),
     })
     await waitFor(() => { expect(getByTitle('README.md')).toBeTruthy() })
     fireEvent.click(getByTitle('README.md'))
@@ -448,6 +526,80 @@ describe('Workstation', () => {
     expect(tabsOf(container)).toHaveLength(1)
     const alert = handle.getByRole('alert')
     expect(alert.textContent).toBe(translate('viewer.failed', { message: 'not text' }))
+    expect(container.querySelector('[data-workstation-editor]')).toBeNull()
+  })
+
+  it('opens a file the text verb refuses as GB18030 text, read-only', async () => {
+    const handle = mountSeat()
+    const { container, getByTitle, instance, read, readBytes, write } = handle
+
+    read.mockResolvedValueOnce(notText(README))
+    // 中文 in GB18030, the encoding the text verb refuses as not UTF-8.
+    readBytes.mockResolvedValueOnce(wholeBytes(README, new Uint8Array([0xd6, 0xd0, 0xce, 0xc4])))
+    await waitFor(() => { expect(getByTitle('README.md')).toBeTruthy() })
+    fireEvent.click(getByTitle('README.md'))
+
+    const area = await waitFor(() => editorOf(container))
+    expect(readBytes).toHaveBeenCalledWith(SESSION, README, {}, expect.any(AbortSignal))
+    expect(area.value).toBe('中文')
+    expect(area.readOnly).toBe(true)
+    expect(instance.getSnapshot().tabs[0]).toMatchObject({ kind: 'text', encoding: 'gb18030', failure: null })
+    expect(handle.getByText(translate('viewer.readOnly', { encoding: 'GB18030' }))).toBeTruthy()
+
+    fireEvent.keyDown(area, { key: 's', ctrlKey: true })
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('draws a binary placeholder with the file size instead of an editor', async () => {
+    const handle = mountSeat()
+    const { container, getByTitle, instance, read, readBytes, write } = handle
+
+    read.mockResolvedValueOnce(notText(README))
+    // Four bytes of PNG signature: no encoding in the chain accepts them.
+    readBytes.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        absolutePath: README,
+        version: '1',
+        path: README,
+        offset: 0,
+        bytes: 1024,
+        data: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0xff]),
+        eof: true,
+      },
+    })
+    await waitFor(() => { expect(getByTitle('README.md')).toBeTruthy() })
+    fireEvent.click(getByTitle('README.md'))
+
+    const placeholder = await waitFor(() => {
+      const node = container.querySelector<HTMLElement>('[data-workstation-binary]')
+      expect(node).toBeTruthy()
+      if (node === null) throw new Error('missing binary placeholder')
+      return node
+    })
+    expect(placeholder.textContent).toBe(translate('viewer.binary', { size: '1.0 KB' }))
+    expect(instance.getSnapshot().tabs[0]).toMatchObject({ kind: 'binary', size: 1024, failure: null })
+    expect(container.querySelector('[data-workstation-editor]')).toBeNull()
+
+    fireEvent.click(closeOf(container, README))
+    await waitFor(() => { expect(tabsOf(container)).toHaveLength(0) })
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('reports the byte read when the fallback after not-text fails too', async () => {
+    const handle = mountSeat()
+    const { container, getByTitle, instance, read, readBytes } = handle
+
+    read.mockResolvedValueOnce(notText(README))
+    readBytes.mockResolvedValueOnce({
+      ok: false,
+      error: new RemoteError('workspace-file/not-found', 'gone', { path: README }),
+    })
+    await waitFor(() => { expect(getByTitle('README.md')).toBeTruthy() })
+    fireEvent.click(getByTitle('README.md'))
+
+    await waitFor(() => { expect(instance.getSnapshot().tabs[0]?.failure).toBe('gone') })
+    expect(handle.getByRole('alert').textContent).toBe(translate('viewer.failed', { message: 'gone' }))
     expect(container.querySelector('[data-workstation-editor]')).toBeNull()
   })
 

@@ -57,8 +57,8 @@ describe('dsh-course-assistant dock patch', () => {
       patchCourseAssistantDock(installed.modules)
       const patched = readFileSync(installed.file, 'utf8')
       expect(hasCourseAssistantDockPatch(patched)).toBe(true)
-      expect(patched).toContain("h('button', { className: 'ca-dock-button', onClick: open }, '课程助手面板'),")
-      // The caption and the old label are gone, and the wrapper the slot's layout applies survives.
+      expect(patched).toContain("h('button', { className: 'ca-dock-button', style: {")
+      expect(patched).toContain("}, onClick: open }, '课程助手面板'),")
       expect(patched).not.toContain('🎓 课程助手')
       expect(patched).not.toContain('打开面板 →')
       expect(patched).toContain("{ className: 'ca-dock' },")
@@ -129,7 +129,8 @@ describe('dsh-course-assistant dock patch', () => {
     try {
       expect(() => patchCourseAssistantDock(installed.modules)).not.toThrow()
       const patched = readFileSync(installed.file, 'utf8')
-      expect(patched).toContain("h('button', { className: 'ca-dock-button', onClick: open }, '课程助手面板'),")
+      expect(patched).toContain("h('button', { className: 'ca-dock-button', style: {")
+      expect(patched).toContain("}, onClick: open }, '课程助手面板'),")
       expect(patched).not.toContain('.ca-dock-button{')
     } finally {
       rmSync(installed.profile, { recursive: true, force: true })

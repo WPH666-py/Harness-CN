@@ -78,6 +78,11 @@
 
 .frame[data-workstation] .workstationCol {
   display: block;
+  /* In this presentation the columns are different tools rather than one
+     document with panels, so the seam between the editor and the answer is
+     drawn as a solid rule at the primary label colour instead of the half-pixel
+     hairline the conversation layout uses. */
+  border-right: 1px solid var(--dsw-alias-label-primary);
 }
 
 .frame[data-workstation] .sidebarCol,

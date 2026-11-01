@@ -16,6 +16,10 @@
   "editor": {
     "label": "编辑 {name}"
   },
+  "viewer": {
+    "readOnly": "以 {encoding} 显示，只读",
+    "binary": "二进制文件，无法以文本方式预览（{size}）"
+  },
   "preview": {
     "image": "图片预览",
     "size": "大小 {size}"

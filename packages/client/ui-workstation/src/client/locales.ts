@@ -2,10 +2,11 @@
  * `workstation` namespace dictionaries, and the namespace's declaration.
  *
  * The copy covers the empty tree, the empty editor, the waiting states, the
- * failure lines, and the tab strip's own labels. The failure lines take the
- * endpoint's own message because the codes it can answer with — a path that is
- * gone, one outside the workspace, a file that is not text — are told apart
- * here already by which pane failed.
+ * failure lines, the read-only and binary placeholders a non-UTF-8 file lands in,
+ * and the tab strip's own labels. The failure lines take the endpoint's own
+ * message because the codes it can answer with — a path that is gone, one outside
+ * the workspace, a file that is not text — are told apart here already by which
+ * pane failed.
  *
  * The namespace merge lives with its key set so that any module naming
  * `TranslateNS<'workstation'>` or `PropsLocale<'workstation'>` needs only this
@@ -33,6 +34,8 @@ export const zh = {
   'viewer.empty': '从左侧选择一个文件。',
   'viewer.loading': '正在读取文件…',
   'viewer.failed': '无法读取这个文件：{message}',
+  'viewer.readOnly': '以 {encoding} 显示，只读',
+  'viewer.binary': '二进制文件，无法以文本方式预览（{size}）',
   'tab.unsaved': '已修改',
   'tab.save': '保存',
   'tab.closeSave': '关闭并保存',
@@ -59,6 +62,8 @@ export const en = {
   'viewer.empty': 'Select a file on the left.',
   'viewer.loading': 'Reading file…',
   'viewer.failed': 'Could not read this file: {message}',
+  'viewer.readOnly': 'Shown as {encoding}, read-only',
+  'viewer.binary': 'Binary file, no text preview ({size})',
   'tab.unsaved': 'Unsaved',
   'tab.save': 'Save',
   'tab.closeSave': 'Close and save',

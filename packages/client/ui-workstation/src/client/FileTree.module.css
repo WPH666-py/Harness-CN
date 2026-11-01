@@ -9,7 +9,10 @@
   min-width: 0;
   overflow: hidden;
   background: var(--dsw-specific-sidebar-fill);
-  border-right: 0.5px solid var(--dsw-alias-border-l3);
+  /* A solid rule at the primary label colour: the tree and the editor are two
+     tools side by side here, and a half-pixel hairline reads as a rendering
+     artefact rather than as the boundary between them. */
+  border-right: 1px solid var(--dsw-alias-label-primary);
 }
 
 .head {

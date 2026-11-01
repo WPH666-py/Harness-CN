@@ -16,6 +16,8 @@
 import type { ClientRemote, RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
 import type { WorkspaceFileMutation } from '@deepseek-ai/dsh-api-workspace-files/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { decodeFile } from './encoding.ts'
+import type { FileEncoding } from './encoding.ts'
 import { imageMediaType } from './paths.ts'
 import type { TabImage, WorkstationActions } from './store.ts'
 
@@ -104,8 +106,9 @@ export interface WorkstationFaceOptions {
 
 /** What one tab's load settled into. */
 type Loaded =
-  | { readonly state: 'text'; readonly text: string }
+  | { readonly state: 'text'; readonly text: string; readonly encoding: FileEncoding }
   | { readonly state: 'image'; readonly image: TabImage }
+  | { readonly state: 'binary'; readonly size: number }
   | { readonly state: 'failed'; readonly message: string }
   | { readonly state: 'retired' }
 
@@ -174,7 +177,8 @@ export function workstationFace(
     }
 
     /**
-     * Read one file's whole text, page by page, or its bytes when it is an image.
+     * Read one file: its whole text page by page, or its bytes when it is an
+     * image or when the text verb refuses it as not UTF-8.
      * @param session - the Session whose workspace holds the file.
      * @param path - absolute file path.
      * @param retired - whether a newer gesture has taken this path over.
@@ -202,12 +206,27 @@ export function workstationFace(
           options.signal,
         )
         if (retired()) return { state: 'retired' }
-        if (!result.ok) return { state: 'failed', message: result.error.message }
+        if (!result.ok) {
+          // The text verb refuses anything that is not valid UTF-8. The bytes
+          // still decide what the tab can show, so a refusal for that reason is
+          // not the tab's failure — only a failed byte read is.
+          if (result.error.code !== 'workspace-file/not-text') {
+            return { state: 'failed', message: result.error.message }
+          }
+          const bytes = await remote.workspaceFiles.readBytes(session, path, {}, options.signal)
+          if (retired()) return { state: 'retired' }
+          if (!bytes.ok) return { state: 'failed', message: bytes.error.message }
+          const decoded = decodeFile(bytes.value.data)
+          if (decoded.kind === 'binary') {
+            return { state: 'binary', size: bytes.value.bytes ?? bytes.value.data.byteLength }
+          }
+          return { state: 'text', text: decoded.text, encoding: decoded.encoding }
+        }
         pages.push(result.value.text)
         if (result.value.eof) break
         offset = result.value.offset + result.value.lines
       }
-      return { state: 'text', text: pages.join('\n') }
+      return { state: 'text', text: pages.join('\n'), encoding: 'utf-8' }
     }
 
     /**
@@ -266,7 +285,8 @@ export function workstationFace(
             return
           }
           if (loaded.state === 'image') actions.tabImageLoaded(path, loaded.image)
-          else actions.tabLoaded(path, loaded.text)
+          else if (loaded.state === 'binary') actions.tabBinaryLoaded(path, loaded.size)
+          else actions.tabLoaded(path, loaded.text, loaded.encoding)
         })
       },
       focusTab: (path) => {
