@@ -18,9 +18,19 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { DSH_HOME_ENV, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { PRODUCT_NAME } from './product.ts'
 
 /** Directory name of the Harness-CN home under the user's profile. */
 export const HARNESS_CN_HOME_DIR_NAME = '.harness-cn'
+
+/**
+ * Directory name this build owns under the user's profile.
+ *
+ * Two editions of the same harness share one profile otherwise: the last launch to write
+ * profiles/desktop wins, and the other product's next start pays a full runtime rebuild to
+ * replace a profile its sibling is still holding. The science edition therefore gets its own.
+ */
+export const PRODUCT_HOME_DIR_NAME = PRODUCT_NAME === 'HarScience' ? '.harscience' : HARNESS_CN_HOME_DIR_NAME
 
 /**
  * Environment variable that names a home for this product alone.
@@ -77,7 +87,7 @@ const DESKTOP_NEXT_PREFIX = 'desktop-next'
  * @returns the absolute `~/.harness-cn` path for the current user.
  */
 export function defaultHarnessCnHome(): string {
-  return join(homedir(), HARNESS_CN_HOME_DIR_NAME)
+  return join(homedir(), PRODUCT_HOME_DIR_NAME)
 }
 
 /**
