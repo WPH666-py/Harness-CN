@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HarScience",
+  "identifier": "com.harscience.desktop",
+  "bundle": {
+    "shortDescription": "Harness 科研理工版：数学建模、工科题解、学术文献、科学计算一条线。",
+    "icon": [
+      "icons/harscience.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/harscience.ico"
+      }
+    }
+  }
+}

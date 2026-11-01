@@ -16,6 +16,11 @@
 [CmdletBinding()]
 param(
   [switch]$SkipPrepare,
+  # Product to build: `harness-cn` keeps the office identity, `harscience` selects the science
+  # brand overlay, the science plugin set, and the runtime ladder. The two products differ only in
+  # configuration and bundled plugins, so one tree builds both.
+  [ValidateSet('harness-cn', 'harscience')]
+  [string]$Brand = 'harness-cn',
   # Commit the Client bundle reports as its build identity. A tree without `.git`
   # cannot answer `git rev-parse HEAD`, which the official profile requires, so
   # the identity arrives here instead: the argument, then the environment, then
@@ -96,7 +101,7 @@ function Repair-Msi([string]$Version) {
   $light = Join-Path $toolset 'light.exe'
   if (-not (Test-Path -LiteralPath $light)) { return $false }
   New-Item -ItemType Directory -Force -Path $MsiDir | Out-Null
-  $out = Join-Path $MsiDir ("Harness-CN_{0}_x64_zh-CN.msi" -f $Version)
+  $out = Join-Path $MsiDir ("{0}_{1}_x64_zh-CN.msi" -f $ProductName, $Version)
   if ((Test-Path -LiteralPath $out) -and (Test-Path -LiteralPath $wixobj)) {
     $stamp = (Get-Item -LiteralPath $out).LastWriteTime
     if ($stamp -gt (Get-Item -LiteralPath $wixobj).LastWriteTime) { return $true }
@@ -183,7 +188,19 @@ function Repair-Msi([string]$Version) {
 # The fork's own application identity. `DSH_DESKTOP_UNSIGNED=1` selects the unsigned path that
 # skips the EV certificate, the SafeNet token, and the updater origin; upstream 0.1.5-rc.1 has no
 # unsigned mode of its own, so this fork adds one and a build needs no signing material.
-$env:DSH_DESKTOP_APP_ID = 'com.harnesscn.desktop'
+if ($Brand -eq 'harscience') {
+  # The Tauri identifier and product name come from src-tauri/tauri.harscience.conf.json, which
+  # tauri-build.mjs merges through `--config`; these variables are what the Rust shell and the
+  # sidecar read, so all three have to name the same product.
+  $env:HARNESS_CN_BRAND = 'harscience'
+  $env:HARNESS_CN_PRODUCT = 'HarScience'
+  $env:DSH_DESKTOP_APP_ID = 'com.harscience.desktop'
+} else {
+  $env:HARNESS_CN_BRAND = ''
+  $env:HARNESS_CN_PRODUCT = 'Harness-CN'
+  $env:DSH_DESKTOP_APP_ID = 'com.harnesscn.desktop'
+}
+$ProductName = $env:HARNESS_CN_PRODUCT
 $env:DSH_DESKTOP_UNSIGNED = '1'
 
 # --- Build environment the pipeline cannot infer -----------------------------
@@ -260,7 +277,7 @@ if ($rc -ne 0) {
   $tauriFinished  = $log -match 'Finished 1 bundle'
   # WiX failures leave the NSIS bundle and the candle output behind, so the MSI can be
   # relinked here instead of costing another full build.
-  $msiMissing = -not (Test-Path -LiteralPath (Join-Path $MsiDir ("Harness-CN_{0}_x64_zh-CN.msi" -f $planned)))
+  $msiMissing = -not (Test-Path -LiteralPath (Join-Path $MsiDir ("{0}_{1}_x64_zh-CN.msi" -f $ProductName, $planned)))
   $msiRepaired = $false
   if ($msiMissing -and ($log -match 'light\.exe|LGHT|wix')) { $msiRepaired = Repair-Msi -Version $planned }
   if ($produced.Count -gt 0 -and ($watchdogKilled -or $tauriFinished -or $msiRepaired)) {

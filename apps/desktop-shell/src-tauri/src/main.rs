@@ -25,6 +25,21 @@ use serde::Deserialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+/// Product name baked into this binary.
+///
+/// The release driver sets `HARNESS_CN_PRODUCT` before cargo compiles, and `option_env!` reads it at
+/// compile time, so a branded build carries its name with no runtime configuration — an installed
+/// application has no environment to inherit one from. Building without the variable keeps the
+/// historical `Harness-CN` identity.
+const PRODUCT_NAME: &str = match option_env!("HARNESS_CN_PRODUCT") {
+    Some(name) => name,
+    None => "Harness-CN",
+};
+
+/// Builds a window or dialog title naming this product, e.g. `HarScience 启动失败`.
+fn product_title(suffix: &str) -> String {
+    format!("{PRODUCT_NAME} {suffix}")
+}
 
 /// Windows creation flag that keeps a console-subsystem child from opening a console window.
 ///
@@ -335,7 +350,7 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
                 app,
                 SPLASH,
                 format!("{}/shell/startup.html", shell_origin(app, shell_port)),
-                "Harness-CN 正在启动",
+                &product_title("正在启动"),
                 520.0,
                 560.0,
                 false,
@@ -437,7 +452,7 @@ fn apply_handshake(app: &AppHandle, message: Handshake) {
         }
         Handshake::Message { title, body } => platform::show_error(&title, &body),
         Handshake::Fatal { message } => {
-            platform::show_error("Harness-CN 启动失败", &message);
+            platform::show_error(&product_title("启动失败"), &message);
             // The launch guard keeps this process alive while the sidecar is still running and no
             // workspace window exists, which is exactly the state a fatal handshake leaves behind.
             // Without this flag the exit below is cancelled, the splash is gone, and the process
@@ -669,7 +684,7 @@ fn start_sidecar(app: AppHandle) {
     let resource_dir = match app.path().resource_dir() {
         Ok(directory) => plain_path(directory.join("resources")),
         Err(_) => {
-            platform::show_error("Harness-CN 启动失败", "找不到安装目录。");
+            platform::show_error(&product_title("启动失败"), "找不到安装目录。");
             app.exit(1);
             return;
         }
@@ -706,6 +721,9 @@ fn start_sidecar(app: AppHandle) {
         // (the other desktop product's, often exported machine-wide) from a home this product was
         // pointed at on purpose. Without the mark both products resolve one shared home.
         .env("HARNESS_CN_PACKAGED", "1")
+        // The branded shell names the product in its own startup copy, and the sidecar is the
+        // process that renders it; passing the compile-time name keeps both halves in agreement.
+        .env("HARNESS_CN_PRODUCT", PRODUCT_NAME)
         // `CREATE_NO_WINDOW` because `node.exe` would otherwise allocate the console this shell
         // has no use for. The sidecar is contained in a job immediately after it is spawned —
         // before it can load its own entry point, let alone start the Host — so no separate
@@ -721,7 +739,7 @@ fn start_sidecar(app: AppHandle) {
         Ok(child) => child,
         Err(error) => {
             platform::show_error(
-                "Harness-CN 启动失败",
+                &product_title("启动失败"),
                 &format!("无法启动内置运行时 {}\n{error}", node.display()),
             );
             app.exit(1);
@@ -732,7 +750,7 @@ fn start_sidecar(app: AppHandle) {
     // spawns under them — ends with this process, including when this process is killed outright.
     platform::contain_process_tree(&child);
     let Some(stdout) = child.stdout.take() else {
-        platform::show_error("Harness-CN 启动失败", "内置运行时没有可读的输出。");
+        platform::show_error(&product_title("启动失败"), "内置运行时没有可读的输出。");
         app.exit(1);
         return;
     };
@@ -780,7 +798,7 @@ fn start_sidecar(app: AppHandle) {
             }
             let detail = shell.diagnostics.lock().map(|text| text.clone()).unwrap_or_default();
             platform::show_error(
-                "Harness-CN 启动失败",
+                &product_title("启动失败"),
                 &format!(
                     "内置运行时未能启动。\n\n{}",
                     if detail.trim().is_empty() { "（没有诊断输出）" } else { detail.trim() },
@@ -861,7 +879,7 @@ fn main() {
     let app = match built {
         Ok(app) => app,
         Err(error) => {
-            platform::show_error("Harness-CN 启动失败", &error.to_string());
+            platform::show_error(&product_title("启动失败"), &error.to_string());
             platform::release_single_instance();
             return;
         }

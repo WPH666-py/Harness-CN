@@ -44,7 +44,7 @@ export interface BundledPlugin {
  * does not. An entry with `active: false` is installed without being listed, so it is
  * exempt.
  */
-export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
+const ALL_PLUGINS: readonly BundledPlugin[] = [
   {
     // This toolkit provisions a standalone Python runtime (about 35 MB) plus Pillow, NumPy,
     // and vtracer the first time it runs, and the Host cannot report ready until that
@@ -394,7 +394,53 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
   { name: '@xiaoyuink/dsh-image-vision', version: '2.9.2', spec: 'file:plugins/xiaoyuink-dsh-image-vision-2.9.2.tgz', active: true },
   { name: 'dsh-chem-ui', version: '0.0.1', spec: 'file:plugins/dsh-chem-ui-0.0.1.tgz', active: true },
   { name: 'dsh-ai-courses', version: '0.1.6', spec: 'file:plugins/dsh-ai-courses-0.1.6.tgz', active: true },
+  // The 鲸鱼娘 sticker pack. It used to be added to the seed after the install (the seed patch
+  // named a `github:` spec, which needs the network and breaks the offline promise); shipping the
+  // archive beside the other repository-only plugins makes the same install resolve locally.
+  { name: 'dsh-meme', version: '0.1.56', spec: 'file:plugins/dsh-meme-0.1.56.tgz', active: true },
 ]
+
+/**
+ * Product this build ships, from the name the release driver bakes in.
+ *
+ * `Harness-CN` is the office-oriented product and keeps the full plugin list; `HarScience` is the
+ * science-oriented one and drops the office and messaging plugins, which no science task needs and
+ * which cost the seed their download closure.
+ */
+export const PRODUCT_EDITION = process.env.HARNESS_CN_PRODUCT?.trim() || 'Harness-CN'
+
+/**
+ * Plugins the science product does not ship.
+ *
+ * Every entry is an office or messaging integration — document suites, IM bridges, mail, the
+ * customer-service bot — chosen because the science product's tasks never reach for them. Nothing
+ * else is filtered: the whole scientific, academic, math, and writing set stays in both products.
+ */
+const SCIENCE_EXCLUDED: ReadonlySet<string> = new Set([
+  '@copylee/dsh-office',
+  '@changfenhuang/dsh-genui',
+  '@xmanrui/dsh-im',
+  'dsh-email',
+  'dsh-wechat',
+  '@zaofan/dsh-qqbot',
+  'dsh-workbuddy-connect',
+  'dsh-notify-me',
+  'dsh-chat-import',
+  'dsh-claude-move',
+  'dsh-connect-trae',
+  '@dmh2002/dsh-connect-qoder',
+])
+
+/**
+ * Plugins this edition installs, in declaration order.
+ *
+ * The science filter is applied here rather than in the array above so that the manifest keeps one
+ * readable list of everything the tree knows how to ship, and so a later edition only adds a set.
+ */
+export const BUNDLED_PLUGINS: readonly BundledPlugin[] =
+  PRODUCT_EDITION === 'HarScience'
+    ? ALL_PLUGINS.filter((plugin) => !SCIENCE_EXCLUDED.has(plugin.name))
+    : ALL_PLUGINS
 
 /**
  * Runtime dependency of a bundled plugin that pnpm does not install on its own.

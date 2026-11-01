@@ -40,10 +40,18 @@ const { values } = parseArgs({
 /** The repository root, two directories above this script. */
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
+/**
+ * Product this release ships, from the name the build driver passes in.
+ *
+ * The archive is named after it, so the default asset path has to follow: a branded build splits
+ * `<product>-seed-<version>.tar.zst`, and looking for the office product's name would split nothing.
+ */
+const PRODUCT_NAME = process.env.HARNESS_CN_PRODUCT?.trim() || 'Harness-CN'
+
 const asset = values.asset
   ?? (values.version === undefined
     ? undefined
-    : join(REPO_ROOT, 'apps', 'desktop-shell', 'dist-artifacts', `Harness-CN-seed-${values.version}.tar.zst`))
+    : join(REPO_ROOT, 'apps', 'desktop-shell', 'dist-artifacts', `${PRODUCT_NAME}-seed-${values.version}.tar.zst`))
 if (asset === undefined) throw new Error('usage: split-offline-package.mjs <--version x.y.z | --asset <path>> [--out <dir>] [--part-mib 64]')
 
 const outDir = values.out ?? join(dirname(asset), 'parts')

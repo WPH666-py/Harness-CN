@@ -27,7 +27,10 @@ const REMOVED = [
 
 /** Plugins this release adds, with the spec a later install would use and the package name. */
 const ADDED = [
-  { name: 'dsh-meme', spec: 'github:yyh-001/dsh-meme' },
+  // The archive now ships beside the application, so the seed names the file instead of a
+  // repository: an offline machine has no way to fetch a `github:` spec when a later
+  // transaction re-resolves the dependency.
+  { name: 'dsh-meme', spec: 'file:plugins/dsh-meme-0.1.56.tgz' },
 ]
 
 /**

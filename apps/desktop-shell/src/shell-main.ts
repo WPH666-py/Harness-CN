@@ -22,6 +22,8 @@ import { DesktopLogBuffer, type DesktopLogSnapshot } from '../../desktop/src/log
 import { resolveDesktopLocale, type DesktopMessages } from '../../desktop/src/locale.ts'
 import { resolveDesktopPaths, type DesktopPaths } from '../../desktop/src/paths.ts'
 import { provisionReaBundle } from '../../desktop/src/rea-bundle.ts'
+import { PRODUCT_NAME, productMessages } from '../../desktop/src/product.ts'
+import { provisionRuntimes } from '../../desktop/src/runtimes.ts'
 import { adoptHarnessCnHome, describeHomeMigration, HARNESS_CN_HOME_ENV, migrateLegacyHarnessHome } from '../../desktop/src/product-home.ts'
 import {
   describeDesktopRecovery,
@@ -48,6 +50,14 @@ import { verifyStagedRuntime } from './staged-runtime-check.ts'
 import type { ShellArguments, ShellCommand, ShellHandshake, ShellStatus } from './shell-types.ts'
 import { createReleaseChannel } from './release-channel.ts'
 import { FEEDBACK_MESSAGE_MAX, sendFeedbackMail, type FeedbackSubmission } from './feedback-mail.ts'
+
+/**
+ * Product whose launch provisions the scientific runtime ladder.
+ *
+ * Named once here because two places need to agree: the brand the installer carries and the set of
+ * runtimes a first launch downloads.
+ */
+const SCIENCE_PRODUCT = 'HarScience'
 
 /** Delay after the workspace opens before the launch's automatic update check runs. */
 const AUTOMATIC_UPDATE_CHECK_MS = 10_000
@@ -361,7 +371,9 @@ async function prebuild(argv: readonly string[]): Promise<void> {
 async function main(): Promise<void> {
   const options = parseArguments(process.argv.slice(2))
   const locale = resolveDesktopLocale(options.locale)
-  const messages = locale.messages
+  // A branded build renames the product in the startup page and the splash window; the rest of the
+  // dictionary is the same copy, so the override is applied once here rather than in every reader.
+  const messages = productMessages(locale.messages, locale.id)
   const logs = new DesktopLogBuffer(join(options.logDirectory, 'harness.log'))
   const logShell = (text: string): void => { logs.line('shell', text) }
   const home = adoptHome(logShell, options.resourceDir)
@@ -766,6 +778,12 @@ async function main(): Promise<void> {
       log: logShell,
     })
     logShell(`REA bundle: ${reaState}`)
+    // The science product brings Python, MinGW, and R, and each is hundreds of megabytes: starting
+    // them here keeps the download behind the workspace instead of in front of it, and the launch
+    // only records the decision. The office product ships none of them, so it never reaches this.
+    if (PRODUCT_NAME === SCIENCE_PRODUCT) {
+      for (const state of provisionRuntimes({ home, log: logShell })) logShell(`runtimes: ${state}`)
+    }
     // Starting the Host is the one step with no denominator: dsh reports that it is ready, and
     // nothing in between counts anything, so this shows how long it has been running instead of a
     // percentage that would have to be invented. Silence is what a stuck launch looks like.

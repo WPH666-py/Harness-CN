@@ -16,13 +16,15 @@
  * disables timestamping for offline builds, which shortens the signature's usable lifetime.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_SUBJECT = 'CN=水哥';
+/** Package root of `@deepseek-ai/dsh-desktop-shell`, the directory holding `src-tauri`. */
+const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_TIMESTAMP_URL = 'http://timestamp.digicert.com';
 
 /**
@@ -95,17 +97,57 @@ function resolveCertificate() {
 }
 
 /** Builds the `--config` override enabling Tauri's Windows signing, or no override at all. */
-function signingArgs() {
+function signingWindows() {
   const certificate = resolveCertificate();
   if (!certificate) {
     console.log('[tauri-build] no code-signing certificate; building an unsigned installer');
-    return [];
+    return undefined;
   }
   const timestampUrl = process.env.HARNESS_CN_SIGN_TIMESTAMP_URL ?? DEFAULT_TIMESTAMP_URL;
   const windows = { certificateThumbprint: certificate.thumbprint, digestAlgorithm: 'sha256' };
   if (timestampUrl) windows.timestampUrl = timestampUrl;
   console.log(`[tauri-build] signing with ${certificate.thumbprint} from ${certificate.source}`);
-  return ['--config', JSON.stringify({ bundle: { windows } })];
+  return windows;
+}
+
+/**
+ * Reads the brand overlay named by `HARNESS_CN_BRAND`, e.g. `HARNESS_CN_BRAND=harscience` reads
+ * `src-tauri/tauri.harscience.conf.json`.
+ *
+ * One tree ships several products, and everything that distinguishes them — product name, bundle
+ * identifier, installer icon, description — is a Tauri configuration value, not code. Keeping the
+ * overlay a separate file means the default product's `tauri.conf.json` stays exactly as upstream
+ * wrote it, and a branded build cannot silently alter it.
+ */
+function brandOverlay() {
+  const brand = process.env.HARNESS_CN_BRAND?.trim();
+  if (!brand) return undefined;
+  const file = join(PACKAGE_ROOT, 'src-tauri', `tauri.${brand}.conf.json`);
+  if (!existsSync(file)) throw new Error(`tauri-build: brand overlay ${file} is missing`);
+  const overlay = JSON.parse(readFileSync(file, 'utf8'));
+  console.log(`[tauri-build] brand overlay ${brand}: ${String(overlay.productName)}`);
+  return overlay;
+}
+
+/**
+ * Merges the brand overlay and the signing override into the single `--config` Tauri accepts.
+ *
+ * The signing block belongs under `bundle.windows`, which the overlay may already have populated
+ * with NSIS settings, so the two are merged rather than replaced — a shallow spread would drop the
+ * installer icon and silently produce an unbranded setup program.
+ */
+function configArgs() {
+  const overlay = brandOverlay();
+  const windows = signingWindows();
+  if (!overlay && !windows) return [];
+  const config = { ...(overlay ?? {}) };
+  if (windows) {
+    config.bundle = {
+      ...(overlay?.bundle ?? {}),
+      windows: { ...(overlay?.bundle?.windows ?? {}), ...windows },
+    };
+  }
+  return ['--config', JSON.stringify(config)];
 }
 
 function tauriEntry() {
@@ -117,7 +159,7 @@ function tauriEntry() {
   }
 }
 
-const extra = signingArgs();
+const extra = configArgs();
 const entry = tauriEntry();
 // `tauri build` refreshes `target/release/resources` from `bundle.resources` but never clears a
 // resource the manifest no longer names. A seed staged by an older release therefore survived here

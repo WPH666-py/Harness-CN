@@ -10,7 +10,7 @@
  * THE SEED IS NOT STAGED BY DEFAULT. Package it into the installer and the installer is ~93 MB
  * against Gitee's 100 MB attachment limit — headroom that one release of ordinary growth would
  * spend. Instead the seed becomes its own published attachment
- * (`dist-artifacts/Harness-CN-seed-<version>.tar.gz`, ~87 MB) which the first launch fetches once
+ * (`dist-artifacts/<product>-seed-<version>.tar.gz`, ~87 MB) which the first launch fetches once
  * and keeps. Setting `HARNESS_CN_SEED_IN_INSTALLER=1` stages it as well, producing the larger
  * installer for offline distribution; the application prefers a seed beside the runtime over
  * fetching one, so that build works with no network at all.
@@ -33,6 +33,15 @@ const RESOURCE_ROOT = join(PACKAGE_ROOT, 'src-tauri', 'resources')
 const ARTIFACT_ROOT = join(PACKAGE_ROOT, 'dist-artifacts')
 const SEED_SOURCE = join(BUILD_ROOT, 'seed')
 const SEED_STAGED = join(RESOURCE_ROOT, 'seed')
+
+/**
+ * Product this build ships, from the name the release driver passes in.
+ *
+ * It appears in the archive's file name because one tree publishes two products: the first launch
+ * looks for `<product>-seed-<version>.tar.zst`, so the archive a build produces has to carry the
+ * same product name as the installer that fetches it.
+ */
+const PRODUCT_NAME = process.env.HARNESS_CN_PRODUCT?.trim() || 'Harness-CN'
 
 /**
  * The version the installer will report.
@@ -140,8 +149,8 @@ if (withSeed) {
 // minutes are build-machine time, and the assertion below refuses a package nobody could download.
 mkdirSync(ARTIFACT_ROOT, { recursive: true })
 const level = Number(process.env.HARNESS_CN_ZSTD_LEVEL ?? '22')
-const tarPath = join(ARTIFACT_ROOT, `Harness-CN-seed-${version}.tar`)
-const archive = join(ARTIFACT_ROOT, `Harness-CN-seed-${version}.tar.zst`)
+const tarPath = join(ARTIFACT_ROOT, `${PRODUCT_NAME}-seed-${version}.tar`)
+const archive = join(ARTIFACT_ROOT, `${PRODUCT_NAME}-seed-${version}.tar.zst`)
 rmSync(tarPath, { force: true })
 rmSync(archive, { force: true })
 createTar({

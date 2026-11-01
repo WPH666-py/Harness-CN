@@ -25,10 +25,17 @@ import { pipeline } from 'node:stream/promises'
 import { createGunzip, createZstdDecompress } from 'node:zlib'
 import { extract } from 'tar'
 import { findPublishedAsset, findPublishedAssets, type ReleaseAsset } from './release-sources.ts'
+import { PRODUCT_NAME } from '../../desktop/src/product.ts'
 import { downloadVerified } from './release-channel.ts'
 
-/** Prefix every published seed archive carries. */
-export const SEED_ARCHIVE_PREFIX = 'Harness-CN-seed-'
+/**
+ * Prefix every published seed archive carries.
+ *
+ * The product name is part of the file name because one tree publishes two products: an installer
+ * built as `HarScience` has to find `HarScience-seed-<version>.tar.zst` and never the office
+ * product's archive, which carries a different profile.
+ */
+export const SEED_ARCHIVE_PREFIX = `${PRODUCT_NAME}-seed-`
 
 /**
  * Extensions a published seed archive may carry, best first.
@@ -67,7 +74,10 @@ export function seedArchiveNames(version: string): readonly string[] {
  * published cut into numbered parts. This pattern is the contract between the publisher and this
  * reader: `<archive name>.part<number>`, numbered from one.
  */
-const SEED_PART_PATTERN = /^Harness-CN-seed-(.+)\.tar\.zst\.part(\d+)$/u
+const SEED_PART_PATTERN = new RegExp(
+  `^${SEED_ARCHIVE_PREFIX.replaceAll('.', '\\.')}(.+?)\\.tar\\.zst\\.part(\\d+)$`,
+  'u',
+)
 
 /** One numbered part of a split seed archive, as published. */
 interface SeedPart {
