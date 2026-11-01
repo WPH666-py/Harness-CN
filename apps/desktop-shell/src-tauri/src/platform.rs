@@ -11,6 +11,7 @@ use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 
+use crate::product;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, SetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
@@ -28,11 +29,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MessageBoxW, SetForegroundWindow, ShowWindow, ASFW_ANY, MB_ICONERROR, MB_OK, SW_RESTORE,
 };
 
-/// Name of the mutex that stands for "a Harness-CN shell is running on this desktop".
-const INSTANCE_MUTEX: &str = "Local\\Harness-CN-Shell";
+/// Mutex name standing for "a shell of this product is running on this desktop".
+///
+/// Scoped per product on purpose: two editions of the same shell share one desktop, and the office
+/// edition's window must not make the science edition believe it is already running.
+fn instance_mutex() -> String {
+    format!("Local\\{}-Shell", product::PRODUCT_NAME)
+}
 
-/// Title every Harness-CN top-level window carries, used to find the running instance.
-const WINDOW_TITLE: &str = "Harness-CN";
+/// Title this product's top-level windows carry, used to find a running instance.
+fn window_title() -> String {
+    product::PRODUCT_NAME.to_string()
+}
 
 /// Name of the event a second launch signals to ask the running instance to show its window.
 ///
@@ -218,7 +226,7 @@ fn wide(text: &str) -> Vec<u16> {
 /// exit immediately and leave the user with nothing.
 /// @returns whether this process is the one that owns the slot.
 pub fn claim_single_instance() -> bool {
-    let name = wide(INSTANCE_MUTEX);
+    let name = wide(&instance_mutex());
     // `CreateMutexW` reports "somebody else already owns this name" through the thread's
     // last-error value, and that value is whatever the previous API call in this process left
     // there. Without clearing it, an unrelated stale error reads as "an instance is running",
@@ -344,7 +352,7 @@ pub fn focus_running_instance() {
     if found.handle.is_null() {
         // Fall back to the creation-time title for a window this process did not create: a
         // release older than this one may still be the running instance.
-        let title = wide(WINDOW_TITLE);
+        let title = wide(&window_title());
         let window = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
         if window.is_null() {
             return;

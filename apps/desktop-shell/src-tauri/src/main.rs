@@ -13,6 +13,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod platform;
+mod product;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::windows::process::CommandExt;
@@ -25,16 +26,7 @@ use serde::Deserialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-/// Product name baked into this binary.
-///
-/// The release driver sets `HARNESS_CN_PRODUCT` before cargo compiles, and `option_env!` reads it at
-/// compile time, so a branded build carries its name with no runtime configuration — an installed
-/// application has no environment to inherit one from. Building without the variable keeps the
-/// historical `Harness-CN` identity.
-const PRODUCT_NAME: &str = match option_env!("HARNESS_CN_PRODUCT") {
-    Some(name) => name,
-    None => "Harness-CN",
-};
+use crate::product::PRODUCT_NAME;
 
 /// Builds a window or dialog title naming this product, e.g. `HarScience 启动失败`.
 fn product_title(suffix: &str) -> String {
