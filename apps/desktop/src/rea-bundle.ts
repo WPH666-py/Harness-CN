@@ -14,7 +14,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Where the plugin looks for its provisioned runtime, relative to the bundle root. */
@@ -71,6 +71,9 @@ export function provisionReaBundle(options: ReaBundleOptions): ReaBundleState {
 function launchSetup(options: ReaBundleOptions, setup: string): ChildProcess | undefined {
   let child: ChildProcess
   try {
+    // A spawn whose `cwd` does not exist fails with ENOENT naming the executable, which reads like a
+    // missing Node binary; the plugins directory is created lazily by the bundle itself.
+    mkdirSync(options.plugins, { recursive: true })
     child = spawn(options.node, [setup, '--reuse', '--yes'], {
       cwd: options.plugins,
       env: { ...process.env, DSH_HOME: options.home },

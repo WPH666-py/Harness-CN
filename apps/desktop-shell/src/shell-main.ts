@@ -23,7 +23,7 @@ import { resolveDesktopLocale, type DesktopMessages } from '../../desktop/src/lo
 import { resolveDesktopPaths, type DesktopPaths } from '../../desktop/src/paths.ts'
 import { provisionReaBundle } from '../../desktop/src/rea-bundle.ts'
 import { PRODUCT_NAME, productMessages } from '../../desktop/src/product.ts'
-import { provisionRuntimes } from '../../desktop/src/runtimes.ts'
+import { adoptRuntimePath, provisionPythonExtras, provisionRuntimes } from '../../desktop/src/runtimes.ts'
 import { adoptHarnessCnHome, describeHomeMigration, HARNESS_CN_HOME_ENV, migrateLegacyHarnessHome } from '../../desktop/src/product-home.ts'
 import {
   describeDesktopRecovery,
@@ -785,6 +785,26 @@ async function main(): Promise<void> {
     // only records the decision. The office product ships none of them, so it never reaches this.
     if (PRODUCT_NAME === SCIENCE_PRODUCT) {
       for (const state of provisionRuntimes({ home, log: logShell })) logShell(`runtimes: ${state}`)
+      // Plugins spawn `python` / `python3` / `g++` by bare name, so the provisioned trees have to be
+      // on PATH before a panel opens. A first launch has nothing on disk yet, hence the poll.
+      const adopt = (): number => {
+        const added = adoptRuntimePath(home)
+        if (added.length > 0) logShell(`runtimes: PATH += ${added.join('; ')}`)
+        return added.length
+      }
+      if (adopt() === 0) {
+        const timer = setInterval(() => {
+          if (adopt() > 0) clearInterval(timer)
+        }, 20_000)
+        setTimeout(() => clearInterval(timer), 30 * 60_000).unref()
+      }
+      // The science panels import `chemcore` and `rdkit` from that interpreter; both installs are
+      // idempotent and run beside the workspace.
+      provisionPythonExtras({
+        home,
+        wheelhouse: join(options.resourceDir, 'science', 'wheelhouse'),
+        log: logShell,
+      })
     }
     // Starting the Host is the one step with no denominator: dsh reports that it is ready, and
     // nothing in between counts anything, so this shows how long it has been running instead of a

@@ -28,7 +28,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { createReadStream, createWriteStream, existsSync } from 'node:fs'
+import { copyFileSync, createReadStream, createWriteStream, existsSync } from 'node:fs'
 import { mkdir, open, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
@@ -51,6 +51,16 @@ export interface RuntimeOptions {
   readonly components?: readonly RuntimeComponent[]
   /** Download seam, so tests never reach the network; the global `fetch` when omitted. */
   readonly fetch?: typeof globalThis.fetch
+}
+
+/** Inputs the Python package step needs. */
+export interface PythonExtrasOptions {
+  /** The DSH home; the interpreter is `<home>/runtimes/python/python.exe`. */
+  readonly home: string
+  /** Directory holding the bundled wheels; `pip` reads it with `--find-links`. */
+  readonly wheelhouse: string
+  /** Sink for a human-readable line in the shell log. */
+  readonly log: (text: string) => void
 }
 
 /** Directory under the DSH home that owns every provisioned runtime. */
@@ -219,6 +229,120 @@ export function runtimePlan(
     present: existsSync(join(root, component, MARKERS[component])),
     sources: SPECS[component].sources,
   }))
+}
+
+/**
+ * Install the Python packages the science panels import, into the provisioned interpreter.
+ *
+ * Two of them cannot ship inside the Python archive: `chemcore` is this product's own package (it
+ * travels as a wheel in `resources/science/wheelhouse`, so the install works offline) and `rdkit`
+ * is a 40 MB native wheel that only comes from an index. Both installs are idempotent, so a launch
+ * repeats them cheaply and a machine that already has them pays only an import check.
+ * @param options - home, wheel directory, and log sink.
+ */
+export function provisionPythonExtras(options: PythonExtrasOptions): void {
+  const interpreter = join(options.home, RUNTIMES_DIRECTORY, 'python', 'python.exe')
+  if (!existsSync(interpreter)) return
+  const index = 'https://pypi.tuna.tsinghua.edu.cn/simple'
+  const steps: readonly { label: string; probe: string; args: readonly string[] }[] = [
+    {
+      label: 'chemcore',
+      probe: 'import chemcore',
+      args: ['-m', 'pip', 'install', '--disable-pip-version-check', '--no-index', '--find-links', options.wheelhouse, 'chemcore'],
+    },
+    {
+      label: 'rdkit',
+      probe: 'import rdkit',
+      args: ['-m', 'pip', 'install', '--disable-pip-version-check', '--index-url', index, 'rdkit'],
+    },
+  ]
+  void (async () => {
+    for (const step of steps) {
+      const present = await runPython(interpreter, ['-c', step.probe])
+      if (present === 0) {
+        options.log(`python extras: ${step.label} ready`)
+        continue
+      }
+      const code = await runPython(interpreter, step.args, options.log)
+      options.log(`python extras: ${step.label} ${code === 0 ? 'installed' : `failed (${String(code)})`}`)
+    }
+  })().catch((error: unknown) => {
+    options.log(`python extras: stopped (${reason(error)})`)
+  })
+}
+
+/**
+ * Run the interpreter once without shell quoting, forwarding nothing but the exit code.
+ * @param interpreter - absolute path of the bundled `python.exe`.
+ * @param args - arguments after the executable.
+ * @param log - optional sink for the child's stderr, which carries pip's progress and errors.
+ * @returns the exit code, or `null` when the spawn itself failed.
+ */
+function runPython(interpreter: string, args: readonly string[], log?: (line: string) => void): Promise<number | null> {
+  return new Promise<number | null>((resolve) => {
+    let settled = false
+    const child = spawn(interpreter, [...args], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    })
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data', (chunk: string) => {
+      if (log === undefined) return
+      for (const line of chunk.split(/\r?\n/u)) {
+        const trimmed = line.trim()
+        if (trimmed !== '') log(`python extras: ${trimmed}`)
+      }
+    })
+    child.on('error', () => {
+      if (settled) return
+      settled = true
+      resolve(null)
+    })
+    child.on('close', (code) => {
+      if (settled) return
+      settled = true
+      resolve(code)
+    })
+  })
+}
+
+/**
+ * Put the provisioned runtimes on PATH for plugins that spawn `python` / `python3` / `g++` directly.
+ *
+ * The desktop sidecar is the process every plugin runs in, so extending `process.env.PATH` here is
+ * what makes `spawn('python3')` resolve. Without it those backends die with exit code 9009
+ * ("command not found") even though a complete CPython tree sits under the home.
+ * @param home - the DSH home whose `runtimes` directory was provisioned.
+ * @returns the directories this call added to PATH (empty when the runtime is not there yet).
+ */
+export function adoptRuntimePath(home: string): readonly string[] {
+  const root = join(home, RUNTIMES_DIRECTORY)
+  const interpreter = join(root, 'python', 'python.exe')
+  const present = existsSync(interpreter)
+  // Windows CPython ships only `python.exe`; most plugins spawn `python3`, so mirror the name.
+  if (present) {
+    const alias = join(root, 'python', 'python3.exe')
+    if (!existsSync(alias)) {
+      try {
+        copyFileSync(interpreter, alias)
+      } catch (error) {
+        void error
+      }
+    }
+    process.env['MOL_PYTHON'] = interpreter
+  }
+  const directories = [
+    join(root, 'python'),
+    join(root, 'python', 'Scripts'),
+    join(root, 'mingw', 'bin'),
+    join(root, 'r', 'bin'),
+  ].filter(directory => existsSync(directory))
+  const path = process.env['PATH'] ?? ''
+  const entries = path.split(';').filter(part => part !== '')
+  const added = directories.filter(directory => !entries.includes(directory))
+  if (added.length > 0) process.env['PATH'] = [...added, path].join(';')
+  return added
 }
 
 /**

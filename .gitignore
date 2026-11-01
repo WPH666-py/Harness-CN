@@ -54,11 +54,12 @@ native/system/test/bin/
 # registry, so they are checked in and a clone can rebuild the seed without network access.
 apps/desktop-shell/src-tauri/resources/*
 !apps/desktop-shell/src-tauri/resources/plugins/
-# The two window and installer icons are source: the office product ships icon.ico and the science
-# product ships harscience.ico, and a clone cannot build either brand without them.
-apps/desktop-shell/src-tauri/icons/*
-!apps/desktop-shell/src-tauri/icons/icon.ico
-!apps/desktop-shell/src-tauri/icons/harscience.ico
+# The science edition hands its Python interpreter a wheelhouse built here instead of reaching
+# PyPI at runtime, so the wheels are source too — `chemcore` is published nowhere.
+!apps/desktop-shell/src-tauri/resources/science/
+!apps/desktop-shell/src-tauri/resources/science/wheelhouse/
+!apps/desktop-shell/src-tauri/resources/science/wheelhouse/*.whl
+apps/desktop-shell/src-tauri/icons/
 apps/desktop-shell/src-tauri/target/
 apps/desktop-shell/src-tauri/gen/
 
