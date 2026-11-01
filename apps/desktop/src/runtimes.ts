@@ -396,17 +396,18 @@ async function runInstaller(installer: string, target: string, scratch: string):
   await mkdir(scratch, { recursive: true })
   const switches = `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR="${target}"`
   // `Start-Process -Verb RunAs` is the only way to raise an elevation prompt from a child process;
-  // `-Wait -PassThru` keeps the exit code observable instead of fire-and-forget.
+  // `-Wait -PassThru` keeps the exit code observable instead of fire-and-forget. The shell must stay
+  // interactive: `-NonInteractive` makes the consent prompt fail immediately ("操作已被用户取消"),
+  // which looked like a successful run that installed nothing.
   const elevated = await new Promise<number | null>((resolve, reject) => {
     const child = spawn(
       'powershell.exe',
       [
         '-NoProfile',
-        '-NonInteractive',
         '-ExecutionPolicy',
         'Bypass',
         '-Command',
-        `$p = Start-Process -FilePath '${installer.replaceAll("'", "''")}' -ArgumentList '${switches.replaceAll("'", "''")}' -Verb RunAs -PassThru -Wait; exit $p.ExitCode`,
+        `$p = Start-Process -FilePath '${installer.replaceAll("'", "''")}' -ArgumentList '${switches.replaceAll("'", "''")}' -Verb RunAs -PassThru -Wait; if ($null -eq $p) { exit 97 }; exit $p.ExitCode`,
       ],
       {
         stdio: 'ignore',
