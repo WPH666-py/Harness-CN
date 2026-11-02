@@ -423,12 +423,10 @@ const SCIENCE_EXCLUDED: ReadonlySet<string> = new Set([
   'dsh-email',
   'dsh-wechat',
   '@zaofan/dsh-qqbot',
-  'dsh-workbuddy-connect',
   'dsh-notify-me',
   'dsh-chat-import',
   'dsh-claude-move',
-  'dsh-connect-trae',
-  '@dmh2002/dsh-connect-qoder',
+  // 导入本机 Trae / WorkBuddy / Qoder 账号里的可用模型：科研版也要，用户常装这几个客户端。
 ])
 
 /**
