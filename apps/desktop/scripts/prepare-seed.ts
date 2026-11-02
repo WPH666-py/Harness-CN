@@ -79,7 +79,15 @@ function runPnpm(args: readonly string[]): Promise<void> {
     const config = join(PNPM_BUILD_STATE, 'config')
     const userConfig = join(config, 'npmrc')
     mkdirSync(config, { recursive: true })
-    writeFileSync(userConfig, '')
+    // Numbers have to arrive through the config file, not through `--config.x=…`: the CLI form is
+    // typed as string, and pnpm hands `network-concurrency` straight to PQueue, which then dies with
+    // "Expected `concurrency` to be a number from 1 and up, got `4` (string)".
+    writeFileSync(userConfig, [
+      // The mirror aborts (error 23) when a dozen large tarballs are requested at once.
+      'network-concurrency=4',
+      'fetch-retries=6',
+      '',
+    ].join('\n'))
     const child = spawn(NODE, [
       PNPM,
       '--config.registry=https://registry.npmmirror.com/',
@@ -91,9 +99,6 @@ function runPnpm(args: readonly string[]): Promise<void> {
       // number turns one slow request into an hours-long wait that looks exactly like a deadlock
       // (no CPU, no sockets, no error, no lockfile).
       '--config.prefer-offline=true',
-      // The mirror aborts (error 23) when a dozen large tarballs are requested at once.
-      '--config.network-concurrency=4',
-      '--config.fetch-retries=6',
       `--config.userconfig=${userConfig}`,
       command,
       ...commandArgs,
@@ -247,6 +252,21 @@ function patchInstalledCourseAssistantPanel(root: string): Promise<void> {
     child.once('close', (code, signal) => {
       if (code === 0) resolvePromise()
       else reject(new Error(`desktop seed: course-assistant panel patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
+function patchInstalledReaGuideTheme(root: string): Promise<void> {
+  // The REA setup guide hardcodes a dark card, so on this product's light pages it lands as a black
+  // modal with a saturated blue button. Patching the installed bytes here puts the light palette in
+  // the archived store, so every profile later materialized from this seed carries it. See
+  // scripts/patch-rea-guide-theme.mjs for why this cannot be configuration.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-rea-guide-theme.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: rea guide theme patch exited with ${String(code ?? signal)}`))
     })
   })
 }
@@ -477,6 +497,7 @@ await patchInstalledQqbotConsole(join(SEED_ROOT, 'node_modules'))
 await patchInstalledVoiceModeFocus(installedModules)
     await patchInstalledCourseAssistantDock(installedModules)
     await patchInstalledCourseAssistantPanel(installedModules)
+    await patchInstalledReaGuideTheme(installedModules)
 await applySeedPluginPatches(SEED_ROOT)
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
