@@ -58,19 +58,84 @@ interface LevelProps extends LevelShare {
   readonly depth: number
 }
 
+/** One row's props: the shared share plus the entry it draws. */
+interface RowProps extends LevelShare {
+  /** Absolute path of this entry. */
+  readonly path: string
+  /** The entry's own name, as the listing gave it. */
+  readonly name: string
+  /** Whether this entry lists a directory rather than opening in a tab. */
+  readonly directory: boolean
+  /** How deep under the root this row sits, for indentation only. */
+  readonly depth: number
+}
+
+/**
+ * Draw one row, and the level under it when it is an open directory.
+ *
+ * A row subscribes to its OWN path: a directory's open state is
+ * `state.expanded.includes(path)` for that directory, not for the level that
+ * lists it, and reading the listing level's flag here left every folder shut —
+ * the click recorded the path, nothing re-rendered, and the tree looked
+ * unexpandable.
+ * @param props - the shared share and this entry's path, name, kind and depth.
+ * @returns the row and, for an open directory, the level below it.
+ */
+function Row(props: RowProps): ReactNode {
+  const { path, name, directory, depth, useStore, translate, openDirectory, toggleDirectory, openFile, focusTab } = props
+  const open = useStore(state => state.expanded.includes(path))
+  const active = useStore(state => state.activePath === path)
+  // A tab's path set as one string: a selector must return a stable value, so
+  // the tabs array itself cannot be what the row subscribes to.
+  const openPaths = useStore(state => state.tabs.map(tab => tab.path).join('\n'))
+  return (
+    <li className={css.item}>
+      <button
+        type="button"
+        className={css.row}
+        data-workstation-entry={directory ? 'directory' : 'file'}
+        data-workstation-path={path}
+        aria-expanded={directory ? open : undefined}
+        aria-current={active ? 'true' : undefined}
+        title={name}
+        style={{ paddingLeft: `${8 + depth * 12}px` }}
+        onClick={() => {
+          if (directory) toggleDirectory(path, open)
+          else if (openPaths.split('\n').includes(path)) focusTab(path)
+          else openFile(path)
+        }}
+      >
+        {directory
+          ? open ? <IconFolderOpenMedium /> : <IconFolderCloseMedium />
+          : <FileTypeIcon kind={classifyFileType(name)} size={16} />}
+        <span className={css.name}>{name}</span>
+      </button>
+      {directory && open
+        ? (
+          <Level
+            useStore={useStore}
+            translate={translate}
+            openDirectory={openDirectory}
+            toggleDirectory={toggleDirectory}
+            openFile={openFile}
+            focusTab={focusTab}
+            path={path}
+            depth={depth + 1}
+          />
+        )
+        : null}
+    </li>
+  )
+}
+
 /**
  * Draw one directory level, and its open descendants.
  * @param props - the shared share, this level's path, and its depth.
  * @returns the level's rows, or the state that stands in for them.
  */
 function Level(props: LevelProps): ReactNode {
-  const { path, depth, useStore, translate: t, openDirectory, toggleDirectory, openFile, focusTab } = props
+  const { path, depth, useStore, translate: t, openDirectory } = props
   const level = useStore(state => state.levels[path])
-  const expanded = useStore(state => state.expanded.includes(path))
-  const activePath = useStore(state => state.activePath)
-  // A tab's path set as one string: a selector must return a stable value, so
-  // the tabs array itself cannot be what the row subscribes to.
-  const openPaths = useStore(state => state.tabs.map(tab => tab.path).join('\n'))
 
   // A level that was never asked for is asked for here, once: the store records
   // the request as `loading`, so the effect's dependency changes and stops.
@@ -96,31 +161,20 @@ function Level(props: LevelProps): ReactNode {
     <ul className={css.level} role={depth === 0 ? 'tree' : 'group'}>
       {entries.map((entry) => {
         const child = childPath(path, entry.name)
-        const directory = entry.type === 'directory'
         return (
-          <li key={child} className={css.item}>
-            <button
-              type="button"
-              className={css.row}
-              data-workstation-entry={directory ? 'directory' : 'file'}
-              data-workstation-path={child}
-              aria-expanded={directory ? expanded : undefined}
-              aria-current={activePath === child ? 'true' : undefined}
-              title={entry.name}
-              style={{ paddingLeft: `${8 + depth * 12}px` }}
-              onClick={() => {
-                if (directory) toggleDirectory(child, expanded)
-                else if (openPaths.split('\n').includes(child)) focusTab(child)
-                else openFile(child)
-              }}
-            >
-              {directory
-                ? expanded ? <IconFolderOpenMedium /> : <IconFolderCloseMedium />
-                : <FileTypeIcon kind={classifyFileType(entry.name)} size={16} />}
-              <span className={css.name}>{entry.name}</span>
-            </button>
-            {directory && expanded ? <Level {...props} path={child} depth={depth + 1} /> : null}
-          </li>
+          <Row
+            key={child}
+            useStore={useStore}
+            translate={t}
+            openDirectory={openDirectory}
+            toggleDirectory={props.toggleDirectory}
+            openFile={props.openFile}
+            focusTab={props.focusTab}
+            path={child}
+            name={entry.name}
+            directory={entry.type === 'directory'}
+            depth={depth}
+          />
         )
       })}
       {level.level.truncated

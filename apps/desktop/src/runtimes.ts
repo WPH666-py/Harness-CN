@@ -150,20 +150,25 @@ const MINGW_SOURCES: readonly string[] = [
   `https://github.com/brechtsanders/winlibs_mingw/releases/download/${MINGW_RELEASE}/${MINGW_ARCHIVE}`,
 ]
 
-/** R version CRAN publishes for Windows. */
-const R_VERSION = '4.6.2'
+/**
+ * Portable R release this product ships.
+ *
+ * CRAN publishes only an Inno Setup installer for Windows, which refuses to run unelevated and in a
+ * background sidecar fails with a refused consent prompt (`installer exited with code 97`) — the
+ * science layer then had no R at all. `portable-r` repacks the same CRAN binaries as a relocatable
+ * ZIP with no registry writes, so R now arrives the way Python and MinGW do: one archive, unpacked.
+ */
+const R_RELEASE = '4.3.3'
 
-/** Installer filename CRAN serves under `bin/windows/base`. */
-const R_INSTALLER = `R-${R_VERSION}-win.exe`
+/** Portable R archive name, which also fixes the release it comes from. */
+const R_ARCHIVE = `portable-r-${R_RELEASE}-win-x64.zip`
 
-// TODO: no portable Windows ZIP exists upstream — CRAN publishes only this Inno Setup installer,
-// so the R component has to run it silently instead of unpacking an archive. Replace this source
-// list with a ZIP if CRAN ever ships one.
-/** R sources: the Tsinghua CRAN mirror, the USTC CRAN mirror, then CRAN itself. */
+/** R sources: GitHub proxy mirrors first (GitHub itself is slow or blocked here), then GitHub. */
 const R_SOURCES: readonly string[] = [
-  `https://mirrors.tuna.tsinghua.edu.cn/CRAN/bin/windows/base/${R_INSTALLER}`,
-  `https://mirrors.ustc.edu.cn/CRAN/bin/windows/base/${R_INSTALLER}`,
-  `https://cran.r-project.org/bin/windows/base/${R_INSTALLER}`,
+  `https://ghfast.top/https://github.com/portable-r/portable-r-windows/releases/download/v${R_RELEASE}/${R_ARCHIVE}`,
+  `https://gh-proxy.com/https://github.com/portable-r/portable-r-windows/releases/download/v${R_RELEASE}/${R_ARCHIVE}`,
+  `https://ghproxy.net/https://github.com/portable-r/portable-r-windows/releases/download/v${R_RELEASE}/${R_ARCHIVE}`,
+  `https://github.com/portable-r/portable-r-windows/releases/download/v${R_RELEASE}/${R_ARCHIVE}`,
 ]
 
 /** How a component's payload arrives and what proves it complete. */
@@ -172,8 +177,8 @@ interface ComponentSpec {
   readonly marker: string
   /** Ordered archive sources, China mirrors first. */
   readonly sources: readonly string[]
-  /** Payload format: a ZIP, a gzipped tar, or a vendor installer run in place. */
-  readonly archive: 'zip' | 'tar-gzip' | 'installer'
+  /** Payload format: a ZIP, or a gzipped tar. */
+  readonly archive: 'zip' | 'tar-gzip'
   /** Wheels unpacked into the interpreter's `Lib/site-packages` after the archive. */
   readonly wheels?: readonly WheelSpec[]
 }
@@ -187,7 +192,7 @@ const SPECS: Readonly<Record<RuntimeComponent, ComponentSpec>> = {
     wheels: PYTHON_WHEELS,
   },
   mingw: { marker: MARKERS.mingw, sources: MINGW_SOURCES, archive: 'zip' },
-  r: { marker: MARKERS.r, sources: R_SOURCES, archive: 'installer' },
+  r: { marker: MARKERS.r, sources: R_SOURCES, archive: 'zip' },
 }
 
 /** Queue slots already taken, keyed by home and component, so a second launch cannot duplicate one. */
@@ -468,7 +473,7 @@ async function writeBody(response: Response, destination: string): Promise<void>
 /**
  * Unpack a downloaded component into its partial directory.
  * @param spec - component description.
- * @param archive - downloaded archive or installer.
+ * @param archive - downloaded archive.
  * @param partial - directory that becomes the component root.
  * @param options - log sink and download seam.
  * @param component - component being unpacked, for log lines.
@@ -480,11 +485,6 @@ async function unpack(
   options: RuntimeOptions,
   component: RuntimeComponent,
 ): Promise<void> {
-  if (spec.archive === 'installer') {
-    // The installer's own scratch space, beside the partial tree rather than in `%TEMP%`.
-    await runInstaller(archive, partial, join(dirname(partial), '.installer-temp'))
-    return
-  }
   if (spec.archive === 'tar-gzip') {
     await extractTarGzip(archive, partial)
   } else {
@@ -502,56 +502,6 @@ async function unpack(
       await remove(file, options)
     }
   }
-}
-
-/**
- * Run a vendor installer unattended into the partial directory.
- *
- * R's package is an Inno Setup installer that refuses to run unelevated, and its bootstrap folder
- * lives in `%TEMP%`, which some machines have locked down: a first attempt failed with
- * "cannot create folder …\Temp\is-XXXX.tmp, error 5". So the child gets a temp directory this
- * product owns, and the install itself is launched elevated — Windows shows one UAC prompt, and a
- * refused prompt surfaces as a non-zero exit that the caller logs and retries next launch.
- * @param installer - downloaded installer executable.
- * @param target - directory the installer must write its tree into.
- * @param scratch - directory the installer may use as its own temp space.
- */
-async function runInstaller(installer: string, target: string, scratch: string): Promise<void> {
-  await mkdir(scratch, { recursive: true })
-  const switches = `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR="${target}"`
-  // `Start-Process -Verb RunAs` is the only way to raise an elevation prompt from a child process;
-  // `-Wait -PassThru` keeps the exit code observable instead of fire-and-forget. The shell must stay
-  // interactive: `-NonInteractive` makes the consent prompt fail immediately ("操作已被用户取消"),
-  // which looked like a successful run that installed nothing.
-  const elevated = await new Promise<number | null>((resolve, reject) => {
-    const child = spawn(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        `$p = Start-Process -FilePath '${installer.replaceAll("'", "''")}' -ArgumentList '${switches.replaceAll("'", "''")}' -Verb RunAs -PassThru -Wait; if ($null -eq $p) { exit 97 }; exit $p.ExitCode`,
-      ],
-      {
-        stdio: 'ignore',
-        windowsHide: true,
-        env: { ...process.env, TEMP: scratch, TMP: scratch },
-      },
-    )
-    child.on('error', reject)
-    child.on('exit', (code) => { resolve(code) })
-  })
-  if (elevated === 0) return
-  rejectInstaller(`installer exited with code ${String(elevated ?? 'null')}`)
-}
-
-/**
- * Raise the retryable installer failure.
- * @param message - what went wrong, for the log.
- */
-function rejectInstaller(message: string): never {
-  throw new ProvisionError(message)
 }
 
 /**

@@ -164,8 +164,15 @@ describe('runtimePlan', () => {
     expect(python?.sources.at(-1)).toContain('github.com')
     expect(mingw?.sources[0]).toContain('mirror.nju.edu.cn')
     expect(mingw?.sources.at(-1)).toContain('github.com')
-    expect(r?.sources[0]).toContain('tuna.tsinghua.edu.cn')
-    expect(r?.sources.at(-1)).toContain('cran.r-project.org')
+    expect(r?.sources[0]).toContain('ghfast.top')
+    expect(r?.sources.at(-1)).toContain('github.com')
+  })
+
+  it('ships R as an archive rather than an installer', () => {
+    const [, , r] = runtimePlan(temporaryHome())
+    // An installer needs an elevation prompt a background sidecar can never answer, so R must
+    // arrive as a ZIP the provisioner unpacks itself.
+    expect(r?.sources.every(source => source.endsWith('.zip'))).toBe(true)
   })
 
   it('reports a component present once its marker exists', () => {

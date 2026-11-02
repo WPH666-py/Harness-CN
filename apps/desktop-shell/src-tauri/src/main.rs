@@ -57,6 +57,8 @@ const MAIN: &str = "main";
 const API_KEY: &str = "api-key";
 /// Window label of the installed-plugin manager.
 const PLUGINS: &str = "plugins";
+/// The default product (the full edition), which is the one that ships the IM console.
+const OFFICE_PRODUCT: &str = "Harness-CN";
 /// Menu id and window label of the QQ group console, which lives in the workspace page.
 const QQ_CONSOLE: &str = "qq-console";
 /// Menu id of the server manager window.
@@ -465,10 +467,16 @@ fn install_menu(app: &AppHandle) {
         let menu = MenuBuilder::new(app)
             .item(&MenuItemBuilder::with_id("restart", "重启").build(app)?)
             .item(&MenuItemBuilder::with_id("lan", "移动访问").build(app)?)
-        .item(&MenuItemBuilder::with_id("logs", "运行日志").build(app)?)
-
-      .item(&MenuItemBuilder::with_id("plugins", "插件管理").build(app)?)
-            .item(&MenuItemBuilder::with_id("qq-console", "QQ 群管理").build(app)?)
+            .item(&MenuItemBuilder::with_id("logs", "运行日志").build(app)?)
+            .item(&MenuItemBuilder::with_id("plugins", "插件管理").build(app)?);
+        // The QQ console is an office-edition entry: the science edition ships no IM plugin, so the
+        // item would open a window whose page has nothing behind it.
+        let menu = if PRODUCT_NAME == OFFICE_PRODUCT {
+            menu.item(&MenuItemBuilder::with_id(QQ_CONSOLE, "QQ 群管理").build(app)?)
+        } else {
+            menu
+        };
+        let menu = menu
             .item(&MenuItemBuilder::with_id("updates", "检查更新").build(app)?)
             .item(&MenuItemBuilder::with_id("api-key", "API 密钥").build(app)?)
             .item(&MenuItemBuilder::with_id("author", "作者信息").build(app)?)
