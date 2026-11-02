@@ -59,6 +59,12 @@ apps/desktop-shell/src-tauri/resources/*
 !apps/desktop-shell/src-tauri/resources/science/
 !apps/desktop-shell/src-tauri/resources/science/wheelhouse/
 !apps/desktop-shell/src-tauri/resources/science/wheelhouse/*.whl
+# The chemistry workbench embeds Ketcher in an iframe and reads the molecule back out of it, so the
+# editor build has to be served from our own origin. Ketcher publishes no npm package for the
+# standalone build and its fetch script is broken, so the slim build (index.html + the entry bundle:
+# 30 MB) is checked in and shipped as a resource.
+!apps/desktop-shell/src-tauri/resources/ketcher/
+!apps/desktop-shell/src-tauri/resources/ketcher/**
 apps/desktop-shell/src-tauri/icons/
 apps/desktop-shell/src-tauri/target/
 apps/desktop-shell/src-tauri/gen/

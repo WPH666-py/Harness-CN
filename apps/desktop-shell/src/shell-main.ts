@@ -385,6 +385,12 @@ async function main(): Promise<void> {
   // the panel actually spawns, by which time the provisioning below has finished.
   if (PRODUCT_NAME === SCIENCE_PRODUCT) adoptRuntimePath(home)
 
+  // The chemistry panel hosts Ketcher in an iframe and reads the structure back out of it, which
+  // same-origin rules only allow when the editor is served by us. An offline install has no other
+  // copy: `dsh-chem-ui`'s own fetch script is broken, so the shipped slim build is the only one.
+  const ketcherDir = join(options.resourceDir, 'ketcher')
+  if (existsSync(join(ketcherDir, 'index.html'))) process.env.CHEM_KETCHER_DIR = ketcherDir
+
   // Node's own on-disk compile cache is what makes the backend's second start cheaper than its
   // first: every module it loads is compiled once and the bytecode is reused afterwards. It must
   // live outside the profile, which a release upgrade replaces wholesale, and it must exist before

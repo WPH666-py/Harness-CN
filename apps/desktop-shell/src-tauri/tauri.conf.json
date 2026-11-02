@@ -29,7 +29,8 @@
       "resources/runtime",
       "resources/shell",
       "resources/sidecar",
-      "resources/science"
+      "resources/science",
+      "resources/ketcher"
     ],
     "windows": {
       "webviewInstallMode": {
