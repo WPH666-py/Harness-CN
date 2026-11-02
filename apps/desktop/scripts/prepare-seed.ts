@@ -40,7 +40,10 @@ const APP_ROOT = resolve(import.meta.dirname, '..')
 const BUILD_PATHS = resolveDesktopTargetBuildPaths()
 const SEED_OUTPUT_ROOT = BUILD_PATHS.seed
 const SEED_ROOT = mkdtempSync(join(tmpdir(), 'dsh-desktop-seed-'))
-const STORE_ROOT = join(SEED_ROOT, 'store')
+// A persistent store lets a retry reuse every tarball the previous attempt already fetched: the
+// mirror drops a few large files under a burst of parallel requests, and re-downloading the whole
+// seed each time never converges.
+const STORE_ROOT = process.env.DSH_SEED_STORE ?? join(SEED_ROOT, 'store')
 const RUNTIME_ROOT = BUILD_PATHS.runtime
 const PNPM_BUILD_STATE = BUILD_PATHS.seedPnpm
 const PACKAGE_SET_ROOT = BUILD_PATHS.packageSet
@@ -88,6 +91,9 @@ function runPnpm(args: readonly string[]): Promise<void> {
       // number turns one slow request into an hours-long wait that looks exactly like a deadlock
       // (no CPU, no sockets, no error, no lockfile).
       '--config.prefer-offline=true',
+      // The mirror aborts (error 23) when a dozen large tarballs are requested at once.
+      '--config.network-concurrency=4',
+      '--config.fetch-retries=6',
       `--config.userconfig=${userConfig}`,
       command,
       ...commandArgs,
