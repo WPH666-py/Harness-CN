@@ -392,7 +392,7 @@ const ALL_PLUGINS: readonly BundledPlugin[] = [
   { name: 'dsh-scholar-suite', version: '0.1.0', spec: 'file:plugins/dsh-scholar-suite-0.1.0.tgz', active: true },
   { name: '@openmaic/dsh-openmaic', version: '0.4.0', spec: 'file:plugins/openmaic-dsh-openmaic-0.4.0.tgz', active: true },
   { name: '@xiaoyuink/dsh-image-vision', version: '2.9.2', spec: 'file:plugins/xiaoyuink-dsh-image-vision-2.9.2.tgz', active: true },
-  { name: 'dsh-chem-ui', version: '0.0.1', spec: 'file:plugins/dsh-chem-ui-0.0.1.tgz', active: true },
+  { name: 'dsh-chem-ui', version: '0.0.2', spec: 'file:plugins/dsh-chem-ui-0.0.2.tgz', active: true },
   { name: 'dsh-ai-courses', version: '0.1.6', spec: 'file:plugins/dsh-ai-courses-0.1.6.tgz', active: true },
   // The 鲸鱼娘 sticker pack. It used to be added to the seed after the install (the seed patch
   // named a `github:` spec, which needs the network and breaks the offline promise); shipping the
