@@ -11,10 +11,10 @@
  *   - the script throws while the seed is being built (loud enough: the build stops), or
  *   - the script finds no anchor and skips (quiet: the build succeeds, the feature is gone).
  *
- * This script runs the quiet case as a visible one. It asks every `patch-*.mjs` in this directory
- * for its state against a real installed tree, checks the class names our injected stylesheet
- * selects on, and exits non-zero when a patch can no longer be applied. Run it after every runtime
- * install and before every release:
+ * This script runs the quiet case as a visible one. It asks every patch script in this directory,
+ * plus the profile's compatibility grant, for its state against a real installed tree, checks the
+ * class names our injected stylesheet selects on, and exits non-zero when a patch can no longer be
+ * applied. Run it after every runtime install and before every release:
  *
  *   node apps/desktop/scripts/verify-overlay.mjs [--tree <profile>] [--seed <seed dir>]
  *
@@ -37,6 +37,11 @@ const TREE_PATCHES = [
   { script: 'patch-wechat-identity.mjs', target: 'node_modules' },
   { script: 'patch-wechat-sessions.mjs', target: 'node_modules' },
   { script: 'patch-remote-ssh-empty-state.mjs', target: 'node_modules' },
+  { script: 'patch-remote-ssh-workspace-tree.mjs', target: 'node_modules' },
+  { script: 'patch-remote-ssh-data-lock.mjs', target: 'node_modules' },
+  // Not a byte patch: the grant that keeps a verified plugin mounted is profile metadata, and its
+  // absence is just as silent as a vanished anchor.
+  { script: 'write-compatibility-exemptions.mjs', target: 'profile' },
   { script: 'patch-rule-engine.mjs', target: 'node_modules' },
 ]
 

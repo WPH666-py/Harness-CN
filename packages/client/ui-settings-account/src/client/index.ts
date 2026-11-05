@@ -221,7 +221,7 @@ export function apply(ctx: Context): void {
       },
     },
     async start() {
-      publish({ ...snapshot, loginVisible: true, loginFailed: false })
+      publish({ ...snapshot, loginVisible: true, loginFailed: false, loginBlocked: false })
       const transport = (globalThis as typeof globalThis & {
         __DSH_TRANSPORT__?: { streamBaseUrl?: string }
       }).__DSH_TRANSPORT__
@@ -235,8 +235,9 @@ export function apply(ctx: Context): void {
       try {
         if (desktop) await request()
         else await browser.start(request, () => snapshot.view)
+        publish({ ...snapshot, loginBlocked: browser.tabBlocked })
       } catch (error) {
-        publish({ ...snapshot, loginFailed: true })
+        publish({ ...snapshot, loginFailed: true, loginBlocked: browser.tabBlocked })
         throw error
       }
     },

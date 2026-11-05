@@ -842,19 +842,21 @@ async function main(): Promise<void> {
     }
     publishStatus({ phase: 'ready', progress: 1, version: options.version })
 
-    let needsApiKey = false
+    // A missing key no longer gates the first window. The workspace signs in to the DeepSeek
+    // account (Settings → Account, or the model step's sign-in dialog) and that sign-in provisions
+    // the key, so the shell reports the credential state in the log and opens straight into the
+    // application instead of stacking a separate 「绑定 DeepSeek 密钥」 window over it.
     try {
       const keyStatus = await describeApiKey(host)
-      needsApiKey = !keyStatus.configured
       logShell(keyStatus.configured
         ? `DeepSeek API key is configured${keyStatus.source === undefined ? '' : ` from ${keyStatus.source}`}`
-        : 'DeepSeek API key is not configured; offering the binding window')
+        : 'DeepSeek API key is not configured; sign-in is offered inside the workspace')
     } catch (error) {
       // A credential service this shell cannot reach must not decide whether the application
       // opens: the user keeps a working shell and can bind the key from the menu.
       logShell(`credential check failed; skipping the binding gate: ${errorOf(error, 'credential check failed').message}`)
     }
-    handshake({ type: 'ready', port: running.port, shellPort: running.shellPort, needsApiKey })
+    handshake({ type: 'ready', port: running.port, shellPort: running.shellPort, needsApiKey: false })
     }
 
     /**

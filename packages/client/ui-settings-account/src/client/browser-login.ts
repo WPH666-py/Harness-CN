@@ -5,10 +5,14 @@ import type { AccountView, SignInAttemptId } from '@deepseek-ai/dsh-deepseek-acc
 export class BrowserLogin {
   private popup: Window | null = null
   private navigated = false
+  private blocked = false
   private attempt: SignInAttemptId | undefined
 
   /** @param destination - maps the Host authorization URL to the page the tab opens, read when the tab navigates. */
   constructor(private readonly destination: (authorizeUrl: string) => string) {}
+
+  /** Whether the browser refused the tab opened during the click, so only the copied link can carry the attempt. */
+  get tabBlocked(): boolean { return this.blocked }
 
   /**
    * Preopen a tab and bind it to the attempt returned by the Host.
@@ -27,11 +31,20 @@ export class BrowserLogin {
     }
   }
 
-  /** Preopen a tab during the user's click; blocked popups need the copy-link route. */
+  /**
+   * Preopen a tab during the user's click.
+   *
+   * A desktop shell can refuse the blank tab outright, and the refusal is a normal outcome rather
+   * than a failure: the attempt keeps running, and when the authorization page arrives
+   * {@link update} asks for it directly so the shell opens its external browser instead.
+   */
   begin(): void {
     this.dispose()
-    this.popup = window.open('about:blank', '_blank')
-    if (this.popup) this.popup.opener = null
+    this.blocked = false
+    const popup = window.open('about:blank', '_blank')
+    this.blocked = popup === null
+    this.popup = popup
+    if (popup) popup.opener = null
   }
 
   /**
@@ -63,7 +76,15 @@ export class BrowserLogin {
     }
     if (!attempt?.authorizeUrl || this.navigated) return
     this.navigated = true
-    if (this.popup && !this.popup.closed) this.popup.location.replace(this.destination(attempt.authorizeUrl))
+    const destination = this.destination(attempt.authorizeUrl)
+    if (this.popup && !this.popup.closed) {
+      this.popup.location.replace(destination)
+      return
+    }
+    // No tab survived the click. Asking for the page itself lets a desktop shell hand it to the
+    // external browser; a browser that blocks this too leaves the dialog's copy-link route.
+    const opened = window.open(destination, '_blank')
+    if (opened) opened.opener = null
   }
 
   /** Close the owned authorization tab and stop following its attempt. */
@@ -72,5 +93,6 @@ export class BrowserLogin {
     this.popup = null
     this.attempt = undefined
     this.navigated = false
+    this.blocked = false
   }
 }

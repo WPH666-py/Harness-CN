@@ -197,6 +197,53 @@ function patchInstalledRemoteSshEmptyState(root: string): Promise<void> {
     })
   })
 }
+function patchInstalledRemoteSshWorkspaceTree(root: string): Promise<void> {
+  // The explorer draws nothing for a folder that is loading, failed, or empty, so an expanded row
+  // looks dead and a failed listing has no retry. Patching the installed source and regenerating the
+  // bundle it serves puts the workstation tree's level states in the archived store, and every
+  // profile materialized from this seed carries them. See
+  // scripts/patch-remote-ssh-workspace-tree.mjs.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-remote-ssh-workspace-tree.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: remote-ssh workspace tree patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
+function patchInstalledRemoteSshDataLock(root: string): Promise<void> {
+  // The plugin treats a recorded PID in `.controller.lock` as a live owner. A crashed Host's number
+  // can belong to an unrelated process by the next start, which then throws DATA_DIR_IN_USE on every
+  // launch until a user deletes the file. Patching the installed bytes here puts an operating-system
+  // lease in the archived store, so every profile materialized from this seed recovers by itself.
+  // See scripts/patch-remote-ssh-data-lock.mjs.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-remote-ssh-data-lock.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: remote-ssh data-directory lock patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
+function writeCompatibilityExemptions(profileDir: string): Promise<void> {
+  // `dsh-app-boot` skips a bundle whose peers name an older DSH line, silently from the product's
+  // side: the Host boots and the plugin's routes do not exist. The runtime accepts an exact-version
+  // exemption from the profile's own compatibility.json, so the seed has to carry that file or every
+  // fresh install repeats the failure. See scripts/write-compatibility-exemptions.mjs.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'write-compatibility-exemptions.mjs'), profileDir], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: compatibility exemptions exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
 function patchInstalledQqbotConsole(root: string): Promise<void> {
   // The shell's QQ console window hides everything but the plugin's dock panel and then calls
   // `window.__qqbotOpenConsole()`; the shipped bundle has no such entry point, so an unpatched seed
@@ -451,6 +498,23 @@ function copyPluginArchives(seedRoot: string): void {
     copyFileSync(from, join(target, name))
   }
 }
+/**
+ * Apply this release's plugin add/remove decisions to the seed before it is archived.
+ *
+ * The profile a user runs is materialized from the seed, so a plugin installed or removed only in a
+ * live profile is undone by the next runtime install. See scripts/patch-seed-plugins.mjs for why the
+ * change is made with the package manager and not by editing manifests.
+ */
+async function applySeedPluginPatches(seedRoot: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-seed-plugins.mjs')
+  const module = await import(pathToFileURL(script).href) as { patchSeedPlugins?: (root: string) => { removed: string[]; added: string[] } }
+  if (typeof module.patchSeedPlugins !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export patchSeedPlugins`)
+  }
+  const result = module.patchSeedPlugins(seedRoot)
+  console.log(`desktop seed: plugins removed [${result.removed.join(', ')}], added [${result.added.join(', ')}]`)
+}
+
 async function main(): Promise<void> {
   rmSync(SEED_OUTPUT_ROOT, { recursive: true, force: true })
   rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
@@ -472,33 +536,26 @@ async function main(): Promise<void> {
     // helper, and an install that skipped them would ship a profile those packages cannot
     // load from.
     await runPnpm(['install', '--prod', '--frozen-lockfile', '--trust-lockfile', '--config.strict-dep-builds=false'])
-    /**
- * Apply this release's plugin add/remove decisions to the seed before it is archived.
- *
- * The profile a user runs is materialized from the seed, so a plugin installed or removed only in a
- * live profile is undone by the next runtime install. See scripts/patch-seed-plugins.mjs for why the
- * change is made with the package manager and not by editing manifests.
- */
-async function applySeedPluginPatches(seedRoot: string): Promise<void> {
-  const script = join(APP_ROOT, 'scripts', 'patch-seed-plugins.mjs')
-  const module = await import(pathToFileURL(script).href) as { patchSeedPlugins?: (root: string) => { removed: string[]; added: string[] } }
-  if (typeof module.patchSeedPlugins !== 'function') {
-    throw new Error(`desktop seed: ${script} does not export patchSeedPlugins`)
-  }
-  const result = module.patchSeedPlugins(seedRoot)
-  console.log(`desktop seed: plugins removed [${result.removed.join(', ')}], added [${result.added.join(', ')}]`)
-}
-await patchInstalledRuleEngine(join(SEED_ROOT, 'node_modules'))
-    await patchInstalledWeChatSessions(join(SEED_ROOT, 'node_modules'))
-    await patchInstalledWeChatIdentity(join(SEED_ROOT, 'node_modules'))
-  await patchInstalledWorkBuddyModelNull(join(SEED_ROOT, 'node_modules'))
-await patchInstalledRemoteSshEmptyState(join(SEED_ROOT, 'node_modules'))
-await patchInstalledQqbotConsole(join(SEED_ROOT, 'node_modules'))
-await patchInstalledVoiceModeFocus(installedModules)
+    await patchInstalledRuleEngine(installedModules)
+    await patchInstalledWeChatSessions(installedModules)
+    await patchInstalledWeChatIdentity(installedModules)
+    await patchInstalledWorkBuddyModelNull(installedModules)
+    // Regenerates `client.js` from the patched explorer source, so it runs before the empty-state
+    // patch: that one edits the source and the generated bundle by text, and would be overwritten
+    // by a later regeneration.
+    await patchInstalledRemoteSshWorkspaceTree(installedModules)
+    await patchInstalledRemoteSshEmptyState(installedModules)
+    await patchInstalledRemoteSshDataLock(installedModules)
+    await patchInstalledQqbotConsole(installedModules)
+    await patchInstalledVoiceModeFocus(installedModules)
     await patchInstalledCourseAssistantDock(installedModules)
     await patchInstalledCourseAssistantPanel(installedModules)
     await patchInstalledReaGuideTheme(installedModules)
-await applySeedPluginPatches(SEED_ROOT)
+    await applySeedPluginPatches(SEED_ROOT)
+    // A verified plugin whose peer range names an older DSH line is skipped by the compatibility
+    // gate unless the profile grants it an exact-version exemption, and a skipped bundle takes its
+    // routes and panels with it. Writing the grant here is what makes a fresh install mount it.
+    await writeCompatibilityExemptions(SEED_ROOT)
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
     let signedMachOFiles: number | undefined

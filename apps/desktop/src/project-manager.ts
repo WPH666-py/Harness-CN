@@ -82,6 +82,15 @@ interface DesktopStoreSeedRecord {
   readonly archives: string
 }
 
+/**
+ * Profile file `dsh-app-boot` reads exact-version plugin exemptions from.
+ *
+ * The name is the runtime's (`PROFILE_COMPATIBILITY_FILENAME`); the seed builds the file and the
+ * profile transaction has to carry it into every profile, or a verified bundle whose peers name an
+ * older DSH line is skipped and the product boots without that plugin's routes.
+ */
+const PROFILE_COMPATIBILITY_FILE = 'compatibility.json'
+
 /** Files the package transaction copies between active and staging projects. */
 const DESKTOP_PROJECT_FILES = [
   'package.json',
@@ -90,6 +99,7 @@ const DESKTOP_PROJECT_FILES = [
   'desktop-release.json',
   DESKTOP_SEED_IDENTITY_FILE,
   DESKTOP_PACKAGE_SET_FILE,
+  PROFILE_COMPATIBILITY_FILE,
 ] as const
 
 /** Manifest that marks a directory as a desktop project; the move-aside takes it with the tree. */

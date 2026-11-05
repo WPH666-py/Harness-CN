@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** Browser handoff tracks the initiating attempt and cleans up unused tabs. */
+/** Browser handoff tracks the initiating attempt, cleans up unused tabs, and survives a refused tab. */
 import { afterEach, expect, it, vi } from 'vitest'
 import type { AccountView, SignInAttemptId } from '@deepseek-ai/dsh-deepseek-account/types'
 import { BrowserLogin } from '../src/client/browser-login.ts'
@@ -9,13 +9,14 @@ function view(phase: NonNullable<AccountView['attempt']>['phase'], authorizeUrl?
   return { status: 'signed-out', links: { usageUrl: '', topUpUrl: '' },
     attempt: { id: 'attempt' as SignInAttemptId, phase, ...(authorizeUrl ? { authorizeUrl } : {}) } }
 }
-function setup() {
+/** A stand-in for the preopened tab, recording what the login code does to it. */
+function tab() {
   const close = vi.fn()
   const replace = vi.fn()
   const popup: { closed: boolean; opener: unknown; close: typeof close; location: { replace: typeof replace } } = {
     closed: false, opener: window, close, location: { replace },
   }
-  vi.spyOn(window, 'open').mockReturnValue(new Proxy(window, {
+  const handle = new Proxy(window, {
     get(target, property, receiver): unknown {
       if (property === 'closed') return popup.closed
       if (property === 'opener') return popup.opener
@@ -27,10 +28,15 @@ function setup() {
       if (property === 'opener') { popup.opener = value; return true }
       return Reflect.set(target, property, value, receiver)
     },
-  }))
+  })
+  return { handle, popup, close, replace }
+}
+function setup() {
+  const opened = tab()
+  const open = vi.spyOn(window, 'open').mockReturnValue(opened.handle)
   const browser = new BrowserLogin(url => url)
   browser.begin()
-  return { browser, popup, close, replace }
+  return { browser, open, ...opened }
 }
 it('navigates once when waiting-browser arrives after the initial RPC response', () => {
   const { browser, popup, replace, close } = setup()
@@ -50,11 +56,34 @@ it('closes the blank tab on request failure without later navigating it', () => 
   expect(close).toHaveBeenCalledOnce()
   expect(replace).not.toHaveBeenCalled()
 })
-it('retains the manual link route when popup opening is blocked', () => {
+it('retains the manual link route when every tab is blocked', () => {
   vi.spyOn(window, 'open').mockReturnValue(null)
   const browser = new BrowserLogin(url => url)
   browser.begin()
+  expect(browser.tabBlocked).toBe(true)
   expect(() => { browser.follow(view('waiting-browser', 'https://platform.deepseek.com/dsh/authorize')) }).not.toThrow()
+})
+
+it('asks for the authorization page directly when the blank tab was refused', () => {
+  const opened = tab()
+  const open = vi.spyOn(window, 'open').mockReturnValueOnce(null).mockReturnValue(opened.handle)
+  const browser = new BrowserLogin(url => url)
+  browser.begin()
+  expect(browser.tabBlocked).toBe(true)
+  browser.follow(view('waiting-browser', 'https://platform.deepseek.com/dsh/authorize'))
+  expect(open).toHaveBeenLastCalledWith('https://platform.deepseek.com/dsh/authorize', '_blank')
+  expect(opened.popup.opener).toBeNull()
+  expect(opened.replace).not.toHaveBeenCalled()
+  browser.dispose()
+  // The fallback tab belongs to the shell's external browser, not to the dialog, so login never closes it.
+  expect(opened.close).not.toHaveBeenCalled()
+})
+
+it('opens the authorization page again when the preopened tab was closed', () => {
+  const { browser, popup, open } = setup()
+  popup.closed = true
+  browser.follow(view('waiting-browser', 'https://platform.deepseek.com/dsh/authorize'))
+  expect(open).toHaveBeenLastCalledWith('https://platform.deepseek.com/dsh/authorize', '_blank')
 })
 
 it('closes the pending tab when the authenticated start request rejects', async () => {

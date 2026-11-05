@@ -312,6 +312,17 @@ function desktopPatches(projectDir: string, allowLinkedPackages: boolean): {
 } {
   const dshRoot = dirname(packageManifestPath(projectDir, '@deepseek-ai/dsh'))
   const profile = loadProfileDirectory('dsh desktop', projectDir, join(dshRoot, 'package.json'))
+  // A bundle the compatibility gate rejects never reaches the Loader, so every route, tool and
+  // panel it would have registered is simply absent — which is indistinguishable from a bug in the
+  // plugin. Loading is silent by contract (the CLI reports for itself), so this launcher has to:
+  // one stderr line per skipped bundle, which the shell mirrors into the run log as `host-err`.
+  for (const { packageName, reason } of profile.skippedBundles) {
+    console.error(`profile bundle skipped: ${packageName} (${reason})`)
+  }
+  console.log(
+    `[dsh desktop] profile: ${String(profile.layers.length + profile.skippedBundles.length)} bundles, `
+    + `${String(profile.skippedBundles.length)} skipped`,
+  )
   for (const layer of profile.layers) {
     if (!allowLinkedPackages && !isProjectPath(projectDir, layer.packageDir)) {
       throw new Error(`dsh desktop: profile bundle ${JSON.stringify(layer.packageName)} resolved outside the desktop profile`)

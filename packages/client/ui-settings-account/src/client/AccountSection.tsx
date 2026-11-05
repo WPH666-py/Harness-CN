@@ -30,6 +30,8 @@ export interface AccountSnapshot {
   loginVisible?: boolean
   /** Latest explicit start request failed before a Host state was available. */
   loginFailed?: boolean
+  /** The browser or shell refused the tab opened for sign in, so only the copied link can continue. */
+  loginBlocked?: boolean
   /** Model credential onboarding owns the login dialog and delays bonus notices while mounted. */
   onboarding?: boolean
   /** Desktop introduction covers the workspace during loading, saving, and exit animation.
