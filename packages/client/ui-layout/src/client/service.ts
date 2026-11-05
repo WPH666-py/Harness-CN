@@ -13,6 +13,9 @@ import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { createLayoutStore } from './stores.ts'
 
 /** Identity shared by a sidebar panel entry and its main-slot occupant. */
+/** The three ways the frame can present its columns. */
+export type PresentationStage = 'conversation' | 'workstation' | 'ide'
+
 export type MainPanelId = Branded<'MainPanelId'>
 
 /** Root-scoped navigation state exposed to panel-aware components. */
@@ -95,6 +98,14 @@ export interface ILayout {
    * layout, then the IDE stage, and back to the conversation.
    */
   cyclePresentation(): void
+  /**
+   * Put the frame into one named stage whatever it is showing now.
+   *
+   * Optional: it is a convenience over the setters, and a controller assembled by
+   * an older caller still satisfies this face.
+   * @param stage - the stage to show.
+   */
+  setStage?(stage: PresentationStage): void
   /**
    * Saved workstation seat width in px, or null while the ratio default applies.
    *
@@ -194,6 +205,20 @@ export class LayoutController implements ILayout {
       return
     }
     this.panels.setIde?.(true)
+  }
+
+  /**
+   * Show one named stage.
+   *
+   * The seat layout is opened first because the IDE stage lives inside it: the
+   * store refuses the full-screen flag while the seat is off, so asking for both
+   * in the other order would silently land on the conversation layout.
+   * @param stage - the stage to show.
+   */
+  setStage(stage: PresentationStage): void {
+    const seat = stage !== 'conversation'
+    if (this.workstation.getSnapshot() !== seat) this.panels.setWorkstation?.(seat)
+    this.panels.setIde?.(stage === 'ide')
   }
 
   /** Save the workstation seat's drag width. */

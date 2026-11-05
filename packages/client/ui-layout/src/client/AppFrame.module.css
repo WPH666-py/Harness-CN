@@ -121,6 +121,14 @@
   display: none;
 }
 
+/* The overlay layer floats companions (the pet, notice cards) over whatever is
+   underneath. With the Conversation folded away there is no reading surface for
+   them to sit beside, so they step aside with the rest of the chrome; their
+   state survives because this hides them rather than unmounting them. */
+.frame[data-workstation-ide] .overlayLayer {
+  display: none;
+}
+
 .centerCol {
   min-width: 0;
   display: flex;

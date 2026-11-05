@@ -106,13 +106,41 @@ describe('LayoutController', () => {
     service.dispose()
   })
 
-  it('reports the saved seat width and forwards drag widths to its actions', () => {
-    const panels = fakePanels()
+  it('reports the saved seat width and forwards drag widths to its actions', () => {    const panels = fakePanels()
     const width = createSnapshotStore<number | null>(null)
     const service = new LayoutController(panels, () => true, createSnapshotStore({ activePanelId: null }), undefined, width)
     expect(service.workstationWidth.getSnapshot()).toBeNull()
     service.setWorkstationWidth(640)
     expect(panels.setWorkstationWidth).toHaveBeenCalledWith(640)
+  })
+
+  it('puts the frame into a named stage and opens the seat before the full-screen flag', () => {
+    const panels = fakePanels()
+    const wide = createSnapshotStore(false)
+    const full = createSnapshotStore(false)
+    const service = new LayoutController(panels, () => true, createSnapshotStore({ activePanelId: null }), wide, undefined, full)
+    service.setStage?.('ide')
+    // Order matters: the store refuses the IDE flag while the seat layout is off.
+    expect(vi.mocked(panels.setWorkstation!).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(panels.setIde!).mock.invocationCallOrder[0] ?? Infinity)
+    expect(panels.setWorkstation).toHaveBeenCalledWith(true)
+    expect(panels.setIde).toHaveBeenCalledWith(true)
+  })
+
+  it('leaves the seat layout alone when the stage already lives inside it', () => {
+    const panels = fakePanels()
+    const service = new LayoutController(panels, () => true, createSnapshotStore({ activePanelId: null }), createSnapshotStore(true), undefined, createSnapshotStore(false))
+    service.setStage?.('ide')
+    expect(panels.setWorkstation).not.toHaveBeenCalled()
+    expect(panels.setIde).toHaveBeenCalledWith(true)
+  })
+
+  it('closes the seat layout on the way back to the conversation', () => {
+    const panels = fakePanels()
+    const service = new LayoutController(panels, () => true, createSnapshotStore({ activePanelId: null }), createSnapshotStore(true), undefined, createSnapshotStore(true))
+    service.setStage?.('conversation')
+    expect(panels.setWorkstation).toHaveBeenCalledWith(false)
+    expect(panels.setIde).toHaveBeenCalledWith(false)
   })
 
   it('reports an unsaved width for a frame whose actions predate the seat', () => {

@@ -82,6 +82,21 @@ export function apply(ctx: ClientContext): void {
   const hosts = startRemoteHosts()
   ctx.effect(() => () => { hosts.dispose() }, 'ui-workstation: remote host polling')
 
+  // Pressing 使用 in the server manager makes a host current; the tree then shows
+  // that machine, but the frame is still wherever the click came from. Following
+  // the switch here is what makes the surface match the host within one poll, and
+  // the seat's 回到对话 pill is the way back. Only a *change* of host moves the
+  // frame, so someone who returns to the conversation is not dragged out again by
+  // a host that merely stays current.
+  ctx.effect(() => {
+    let previous = hosts.getSnapshot().currentHostId
+    return hosts.subscribe(() => {
+      const current = hosts.getSnapshot().currentHostId
+      if (current !== null && current !== previous) ctx.layout.setStage?.('ide')
+      previous = current
+    })
+  }, 'ui-workstation: follow the current host')
+
   const face = workstationFace({
     remote: ctx.remote,
     remoteFiles: REMOTE_FILES,
