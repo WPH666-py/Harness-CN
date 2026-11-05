@@ -22,6 +22,7 @@ describe('createLayoutStore', () => {
         rightbarFullscreen: false,
         rightbarInstant: false,
         workstation: false,
+        ide: false,
         workstationWidth: null,
       },
     })
@@ -243,6 +244,23 @@ describe('workstation seat', () => {
     actions.setWorkstation(true)
     actions.setWorkstation(false)
     expect(store.getSnapshot().layoutInfo).toMatchObject({ workstation: false, workstationWidth: 701 })
+  })
+
+  it('refuses the full-screen stage while the seat layout is off', () => {
+    const { store, actions } = createLayoutStore().create()
+    actions.setIde(true)
+    expect(store.getSnapshot().layoutInfo.ide).toBe(false)
+  })
+
+  it('keeps the stage inside the seat layout and drops it on the way out', () => {
+    const { store, actions } = createLayoutStore().create()
+    actions.setWorkstation(true)
+    actions.setIde(true)
+    expect(store.getSnapshot().layoutInfo).toMatchObject({ workstation: true, ide: true })
+    // Closing the seat leaves the stage too: a stage that outlived the layout
+    // would keep the Conversation folded away in a layout that shows it.
+    actions.setWorkstation(false)
+    expect(store.getSnapshot().layoutInfo).toMatchObject({ workstation: false, ide: false })
   })
 })
 

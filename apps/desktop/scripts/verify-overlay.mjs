@@ -38,6 +38,7 @@ const TREE_PATCHES = [
   { script: 'patch-wechat-sessions.mjs', target: 'node_modules' },
   { script: 'patch-remote-ssh-empty-state.mjs', target: 'node_modules' },
   { script: 'patch-remote-ssh-workspace-tree.mjs', target: 'node_modules' },
+  { script: 'patch-remote-ssh-search.mjs', target: 'node_modules' },
   { script: 'patch-remote-ssh-data-lock.mjs', target: 'node_modules' },
   // Not a byte patch: the grant that keeps a verified plugin mounted is profile metadata, and its
   // absence is just as silent as a vanished anchor.

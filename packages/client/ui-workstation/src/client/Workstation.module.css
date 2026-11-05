@@ -5,6 +5,8 @@
   height: 100%;
   min-width: 0;
   overflow: hidden;
+  /* Positioning context for the full-screen stage's floating way back. */
+  position: relative;
 }
 
 .status {
@@ -30,4 +32,30 @@
 .resizer:hover,
 .resizer[data-dragging] {
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* The full-screen stage is the whole window, so the way back floats above the
+   editor's top-right corner rather than claiming a row of its own. It sits on
+   a translucent chip so it stays legible over both the light and the dark
+   editor background. */
+.leaveStage {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 2;
+  padding: 3px 10px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-elevated);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+.leaveStage:hover {
+  opacity: 1;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
 }

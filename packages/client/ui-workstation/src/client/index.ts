@@ -24,6 +24,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { workstationFace } from './face.ts'
 import type { WorkstationInject } from './face.ts'
 import { en, zh } from './locales.ts'
+import { REMOTE_FILES, startRemoteHosts } from './remote.ts'
 import { createWorkstationStore } from './store.ts'
 import { Workstation } from './Workstation.tsx'
 import { WorkstationToggle, type WorkstationToggleInjected } from './WorkstationToggle.tsx'
@@ -70,9 +71,22 @@ export function apply(ctx: ClientContext): void {
     getSnapshot: () => current.getSnapshot().key as SessionId | undefined,
     subscribe: listener => current.subscribe(() => { listener() }),
   }
+
+  // ## which server the seat is looking at
+  //
+  // The server manager owns that answer, so the seat polls it instead of keeping
+  // a second copy of the choice: a window that switches hosts or clears the
+  // current one moves the tree on the next poll. The poller lives exactly as long
+  // as this plugin, and the face reads the same snapshot the seat renders from, so
+  // a listing is never attributed to a host other than the one it was asked for.
+  const hosts = startRemoteHosts()
+  ctx.effect(() => () => { hosts.dispose() }, 'ui-workstation: remote host polling')
+
   const face = workstationFace({
     remote: ctx.remote,
+    remoteFiles: REMOTE_FILES,
     sessionId: () => current.getSnapshot().key as SessionId | undefined,
+    remoteHostId: () => hosts.getSnapshot().currentHostId,
     signal: controller.signal,
   })
 
@@ -82,17 +96,24 @@ export function apply(ctx: ClientContext): void {
       name: 'shell.workstation',
       locale: NS,
       store,
-      inject: (actions): WorkstationInject => ({ hooks: { sessionId }, ...face(actions) }),
+      inject: (actions): WorkstationInject => ({
+        hooks: { sessionId, remoteHosts: hosts },
+        // The full-screen stage folds the Conversation — and with it the
+        // header that carries the stage control — away, so the seat owns the
+        // way back and lands on the conversation layout in one click.
+        leaveIde: () => { ctx.layout.setWorkstation(false) },
+        ...face(actions),
+      }),
     },
     Workstation,
   )), 'ui-workstation: workstation seat')
 
   // The toggle sits beside the folder control, in the row the Conversation
-  // header owns, and flips the frame's presentation in one click.
+  // header owns, and walks the frame through conversation → workstation → IDE.
   ctx.effect(() => ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
     name: 'conversation.session.header.utilities',
     id: 'workstation',
     locale: NS,
-    inject: (): WorkstationToggleInjected => ({ toggleWorkstation: () => { ctx.layout.toggleWorkstation() } }),
+    inject: (): WorkstationToggleInjected => ({ cyclePresentation: () => { ctx.layout.cyclePresentation() } }),
   }, WorkstationToggle)), 'ui-workstation: header toggle')
 }

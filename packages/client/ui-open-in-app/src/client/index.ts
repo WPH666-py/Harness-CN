@@ -95,8 +95,15 @@ export function apply(ctx: ClientContext): void {
   function SessionOpenInAppAction(
     props: PropsRuntime<'conversation.session.header.utilities'> & Omit<OpenInAppActionProps, 'absolutePath'>,
   ) {
-    const { sessionId, useSessions } = props
+    const { sessionId, useSessions, useWorkstation } = props
     const cwd = useSessions(state => state.byId[sessionId]?.cwd)
+    // The workstation and IDE presentations are the code workspace: the frame
+    // already shows the tree and the editor there and hides the navigation the
+    // folder action belongs to, so keeping it would offer a second way to do
+    // what the open tree is already doing. A host without the seat reports a
+    // constant false and keeps the action.
+    const presenting = useWorkstation === undefined ? false : useWorkstation(state => state)
+    if (presenting) return null
     return cwd ? createElement(OpenInAppAction, { ...props, absolutePath: cwd }) : null
   }
   ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({

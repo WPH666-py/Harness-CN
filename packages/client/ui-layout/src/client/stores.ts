@@ -57,6 +57,14 @@ type LayoutInfo = {
    */
   workstation: boolean
   /**
+   * Whether the frame presents the full-screen IDE stage: the seat keeps its
+   * tree and editor and the centre column steps aside, so what is left is the
+   * code workspace alone. Implies {@link workstation} — the IDE stage is that
+   * layout with the Conversation folded away, never a third layout of its own,
+   * so the seat, its width preference and its hooks stay shared.
+   */
+  ide: boolean
+  /**
    * Saved workstation seat width in px, or null while the ratio default
    * applies. The seat is the frame's first column in that layout; a drag
    * replaces the default and the preference survives leaving the layout.
@@ -78,6 +86,7 @@ type LayoutActions = {
   openRightbar: (draft: LayoutState, track: boolean, fullscreen: boolean) => void
   closeRightbar: (draft: LayoutState) => void
   setWorkstation: (draft: LayoutState, on: boolean) => void
+  setIde: (draft: LayoutState, on: boolean) => void
   setWorkstationWidth: (draft: LayoutState, px: number) => void
 }
 
@@ -104,6 +113,7 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         rightbarFullscreen: false,
         rightbarInstant: false,
         workstation: false,
+        ide: false,
         workstationWidth: null,
       },
     }),
@@ -162,8 +172,21 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
       // No panel or Session field is touched, which is what lets a conversation
       // survive the toggle with its draft and scroll position.
       setWorkstation: (d, on: boolean) => {
-        if (d.layoutInfo.workstation === on) return
+        if (d.layoutInfo.workstation === on && !(on === false && d.layoutInfo.ide)) return
         d.layoutInfo.workstation = on
+        // The IDE stage lives inside the workstation layout, so leaving that
+        // layout leaves the stage as well; a seat that kept `ide` while the
+        // conversation layout laid out would hide the Conversation forever.
+        if (!on) d.layoutInfo.ide = false
+      },
+      // The full-screen stage. It implies the workstation layout rather than
+      // replacing it, so one switch still owns the sidebar and right column —
+      // and it refuses while that layout is off, because a stage without its
+      // seat would leave the frame with nothing but the folded-away centre.
+      setIde: (d, on: boolean) => {
+        const next = on && d.layoutInfo.workstation
+        if (d.layoutInfo.ide === next) return
+        d.layoutInfo.ide = next
       },
       // The seat's own drag width. Its neighbouring tracks are not laid out in
       // this presentation, so the centre's protected minimum is the only

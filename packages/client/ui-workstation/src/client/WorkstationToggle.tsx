@@ -1,9 +1,12 @@
 /**
- * The Conversation-header control that swaps the frame into the workstation
- * layout and back.
+ * The Conversation-header control that walks the frame through its three
+ * presentations: the conversation layout, the workstation layout (tree, editor
+ * and the Conversation side by side), and the full-screen IDE stage (the tree
+ * and the editor alone).
  *
- * One click toggles: the button shows the mode's name, carries the pressed
- * state, and names the change the click performs.
+ * One click advances one stage and the button says where the click goes: the
+ * label names the stage it leads to, and the pressed state reports whether the
+ * frame has left the conversation at all.
  */
 import type { ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -12,8 +15,8 @@ import css from './WorkstationToggle.module.css'
 
 /** The one gesture the header control performs. */
 export interface WorkstationToggleInjected {
-  /** Swap the frame into the workstation layout, or back out of it. */
-  readonly toggleWorkstation: () => void
+  /** Advance the frame one presentation stage. */
+  readonly cyclePresentation: () => void
 }
 
 /** The control's composed props: the header seat's share, the copy, and the gesture. */
@@ -27,14 +30,19 @@ const useHiddenWorkstation: UseWorkstation = selector => selector(false)
 
 /**
  * Draw the toggle.
- * @param props - the copy, the gesture, and the frame's workstation hook.
+ * @param props - the copy, the gesture, and the frame's presentation hooks.
  * @returns the header button.
  */
 export function WorkstationToggle(props: WorkstationToggleProps): ReactNode {
-  const { t, toggleWorkstation, useWorkstation } = props
+  const { t, cyclePresentation, useWorkstation, useIde } = props
   const useMode = useWorkstation ?? useHiddenWorkstation
+  const useStage = useIde ?? useHiddenWorkstation
   const active = useMode(state => state)
-  const action = active ? t('toggle.disable') : t('toggle.enable')
+  const fullscreen = useStage(state => state)
+  // The label names the stage the click reaches, so the button never asks the
+  // reader to infer what comes next from a mode they cannot see yet.
+  const label = fullscreen ? t('toggle.exit') : active ? t('toggle.fullscreen') : t('toggle.mode')
+  const action = fullscreen ? t('toggle.disable') : active ? t('toggle.stage') : t('toggle.enable')
   return (
     <button
       type="button"
@@ -44,9 +52,10 @@ export function WorkstationToggle(props: WorkstationToggleProps): ReactNode {
       aria-pressed={active}
       data-workstation-toggle
       data-active={active || undefined}
-      onClick={() => { toggleWorkstation() }}
+      data-stage={fullscreen ? 'ide' : active ? 'workstation' : 'conversation'}
+      onClick={() => { cyclePresentation() }}
     >
-      {t('toggle.mode')}
+      {label}
     </button>
   )
 }

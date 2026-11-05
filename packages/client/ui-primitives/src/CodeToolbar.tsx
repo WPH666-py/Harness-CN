@@ -16,12 +16,24 @@ export interface CodeToolbarLabels {
   unwrapLabel: string
 }
 
+/**
+ * Chrome for a card owner that supplies none. A plugin built outside this
+ * repository can mount a card without the owning render site's locale, and a
+ * missing dictionary has to degrade to readable chrome instead of throwing
+ * while React renders the message the card lives in.
+ */
+export const FALLBACK_CODE_TOOLBAR_LABELS: CodeToolbarLabels = {
+  codeLabel: 'Code',
+  wrapLabel: 'Wrap lines',
+  unwrapLabel: 'Do not wrap lines',
+}
+
 /** Display state and callbacks for a code card's toolbar. */
 interface CodeToolbarProps {
   lang?: string | undefined
   title?: string | undefined
   status?: string | undefined
-  labels: CodeToolbarLabels
+  labels?: CodeToolbarLabels | undefined
   copyLabel: string
   copiedLabel: string
   copied: boolean
@@ -35,7 +47,7 @@ interface CodeToolbarProps {
  * @param props - Localized labels, current state, and card-owned actions.
  * @returns The shared code-card header.
  */
-export function CodeToolbar({ lang, title, status, labels, copyLabel, copiedLabel, copied, wrapped, onCopy, onWrap }: CodeToolbarProps) {
+export function CodeToolbar({ lang, title, status, labels = FALLBACK_CODE_TOOLBAR_LABELS, copyLabel, copiedLabel, copied, wrapped, onCopy, onWrap }: CodeToolbarProps) {
   const wrapLabel = wrapped ? labels.unwrapLabel : labels.wrapLabel
   const clipboardLabel = copied ? copiedLabel : copyLabel
   return (

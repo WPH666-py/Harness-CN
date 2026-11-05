@@ -158,6 +158,32 @@ const EDITS = [
 `,
   },
   {
+    file: WORKSPACE,
+    from: `    const renderDiff = (change) => DiffBlock
+      ? h(DiffBlock, {
+        className: 'remoteWorkspace__nativeDiff',
+`,
+    to: `    // The shared card draws its toolbar from the owning site's chrome. This host mounts it
+    // directly, so it has to supply the dictionary itself: reading it off an absent object threw
+    // while React rendered the change list, taking the whole workbench down with it.
+    const diffLabels = {
+      codeLabel: '代码',
+      wrapLabel: '自动换行',
+      unwrapLabel: '不换行',
+      copy: '复制',
+      copied: '已复制',
+      collapseAria: '收起改动',
+      collapse: '收起',
+      expandAria: (hidden) => '展开其余 ' + hidden + ' 行',
+      expand: (hidden) => '展开其余 ' + hidden + ' 行',
+    }
+    const renderDiff = (change) => DiffBlock
+      ? h(DiffBlock, {
+        className: 'remoteWorkspace__nativeDiff',
+        labels: diffLabels,
+`,
+  },
+  {
     file: STYLES,
     from: '  .remoteWorkspace__treeMessage { color: var(--ro-dim); font-size: 12px; padding: 8px; }\n',
     to: '  .remoteWorkspace__treeMessage { color: var(--ro-dim); font-size: 12px; padding: 8px; }\n'

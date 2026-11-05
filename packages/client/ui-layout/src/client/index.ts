@@ -57,6 +57,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * the seat; a component that reads it must fall back to a constant.
      */
     useWorkstation?: UseWorkstation
+    /**
+     * Subscribe to the frame's full-screen IDE stage. Optional for the same
+     * reason as {@link useWorkstation}: a host that predates the stage reports
+     * nothing, and a reader falls back to a constant.
+     */
+    useIde?: UseWorkstation
   }
 
   interface SlotMap {
@@ -200,9 +206,13 @@ export function apply(ctx: ClientContext): void {
       getSnapshot: () => instance.getSnapshot().layoutInfo.workstationWidth,
       subscribe: listener => instance.subscribe(listener),
     }
+    const ide: HostObservable<boolean> = {
+      getSnapshot: () => instance.getSnapshot().layoutInfo.ide,
+      subscribe: listener => instance.subscribe(listener),
+    }
     const layout = new LayoutController(instance.actions, id =>
-      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo, workstation, workstationWidth)
-    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: layout.panelInfo, workstation: layout.workstation } })
+      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo, workstation, workstationWidth, ide)
+    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: layout.panelInfo, workstation: layout.workstation, ide: layout.ide } })
     const disposeService = ctx.reflect.provide('layout', layout)
     const disposeRegistration = ctx.slots.register({
       name: 'root',

@@ -97,6 +97,30 @@
   display: block;
 }
 
+/* The IDE stage: the seat takes the frame and the editor is the whole surface.
+   The centre column stays mounted so a conversation keeps its draft, scroll
+   position and in-flight run; it is simply not laid out. The seat's width is
+   no longer pinned either, so dragging is what the splitter between tree and
+   editor still does — the seat's own resize handle goes with the centre. */
+.frame[data-workstation-ide] .centerCol {
+  display: none;
+}
+
+.frame[data-workstation-ide] .handle {
+  display: none;
+}
+
+.frame[data-workstation-ide] .workstationCol {
+  border-right: none;
+}
+
+/* The status strip belongs to the application chrome, not to the code. In the
+   full-screen stage the surface is the workspace alone, so the strip steps
+   aside with the navigation and the Conversation. */
+.frame[data-workstation-ide] .bottomRow {
+  display: none;
+}
+
 .centerCol {
   min-width: 0;
   display: flex;

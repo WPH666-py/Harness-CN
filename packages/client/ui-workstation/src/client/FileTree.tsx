@@ -1,28 +1,37 @@
 /**
- * The workstation's tree half: the Session's workspace, listed one level at a
- * time, with directories that expand in place and files that open in the
- * editor's tabs.
+ * The workstation's tree half: one machine's files, listed one level at a time,
+ * with directories that expand in place and files that open in the editor's
+ * tabs.
  *
- * The tree starts at the Session's working directory and appends child names
- * onto it, so every key below the root is an absolute path the listing endpoint
- * already accepts. One level draws from the store and one request goes through
- * the injected face per level opened; the component itself only decides what a
- * click means.
+ * The tree starts at the Session's working directory — or, while the server
+ * manager has a host current, at that host's filesystem root — and appends child
+ * names onto it, so every key below the root is an absolute path the listing
+ * endpoint already accepts. One level draws from the store and one request goes
+ * through the injected face per level opened; the component itself only decides
+ * what a click means.
+ *
+ * A current host also brings the search box: the tree header asks the host to
+ * find files by name and draws the answer as a flat list, because the rows are
+ * matches scattered across the filesystem rather than one directory's children.
  */
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   FileTypeIcon,
   IconFolderCloseMedium,
   IconFolderOpenMedium,
+  IconSearchOutlineRegular,
   IconWorkspaceTreeOutlineMedium,
   classifyFileType,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { WorkstationFace } from './face.ts'
 import { childPath, orderEntries } from './paths.ts'
-import type { WorkstationState } from './store.ts'
+import type { WorkstationActions, WorkstationState } from './store.ts'
 import css from './FileTree.module.css'
+
+/** How long a search waits for the typing to stop. */
+const SEARCH_DEBOUNCE_MS = 250
 
 /** What one tree level needs: the store, the copy, and the three gestures. */
 export interface FileTreeProps {
@@ -30,6 +39,8 @@ export interface FileTreeProps {
   readonly useStore: <S>(selector: (state: WorkstationState) => S) => S
   /** This package's copy, already bound to the `workstation` namespace. */
   readonly translate: TranslateNS<'workstation'>
+  /** The store's declared write set, for the search box's own text. */
+  readonly actions: WorkstationActions
   /** List one directory that was never asked for. */
   readonly openDirectory: WorkstationFace['openDirectory']
   /** Open or close one directory's level. */
@@ -38,9 +49,11 @@ export interface FileTreeProps {
   readonly openFile: WorkstationFace['openFile']
   /** Focus the tab of a file that is already open. */
   readonly focusTab: WorkstationFace['focusTab']
+  /** Search the current host for files whose name contains the query. */
+  readonly searchFiles: WorkstationFace['searchFiles']
   /**
-   * The Session's working directory, which the tree lists first; `undefined`
-   * while the Session summary that carries it has not arrived.
+   * The directory the tree lists first: the Session's working directory, or the
+   * current host's root; `undefined` while neither is known.
    */
   readonly root: string | undefined
   /** Drawn column width in px, owned by the seat's splitter; the viewer takes the rest. */
@@ -48,7 +61,7 @@ export interface FileTreeProps {
 }
 
 /** The share every level draws from, apart from its own path and indentation. */
-type LevelShare = Omit<FileTreeProps, 'root' | 'width'>
+type LevelShare = Omit<FileTreeProps, 'root' | 'width' | 'actions' | 'searchFiles'>
 
 /** One level's props: the shared share plus its own path and indentation. */
 interface LevelProps extends LevelShare {
@@ -130,12 +143,17 @@ function Row(props: RowProps): ReactNode {
 
 /**
  * Draw one directory level, and its open descendants.
+ *
+ * The level reads whichever map the seat is showing: a host's listing lives in
+ * `remoteLevels` so switching hosts cannot serve a stale local level for the
+ * same path.
  * @param props - the shared share, this level's path, and its depth.
  * @returns the level's rows, or the state that stands in for them.
  */
 function Level(props: LevelProps): ReactNode {
   const { path, depth, useStore, translate: t, openDirectory } = props
-  const level = useStore(state => state.levels[path])
+  const remote = useStore(state => state.remoteHostId !== null)
+  const level = useStore(state => remote ? state.remoteLevels[path] : state.levels[path])
 
   // A level that was never asked for is asked for here, once: the store records
   // the request as `loading`, so the effect's dependency changes and stops.
@@ -185,23 +203,141 @@ function Level(props: LevelProps): ReactNode {
 }
 
 /**
- * Draw the tree's header and its root level.
- * @param props - the shared share and the Session's working directory.
+ * Draw the search answer: one flat list of files that matched, wherever they are.
+ *
+ * A result opens in the viewer the same way a tree row does, because the click
+ * means "show me this file" in both places.
+ * @param props - the store's selector hook, the copy and the two open gestures.
+ * @returns the result list, or the state that stands in for it.
+ */
+function SearchResults(props: {
+  readonly useStore: FileTreeProps['useStore']
+  readonly translate: TranslateNS<'workstation'>
+  readonly openFile: WorkstationFace['openFile']
+  readonly focusTab: WorkstationFace['focusTab']
+}): ReactNode {
+  const { useStore, translate: t, openFile, focusTab } = props
+  const status = useStore(state => state.searchStatus)
+  const hits = useStore(state => state.searchHits)
+  const truncated = useStore(state => state.searchTruncated)
+  const failure = useStore(state => state.searchFailure)
+  const openPaths = useStore(state => state.tabs.map(tab => tab.path).join('\n'))
+
+  if (status === 'loading') {
+    return <div className={css.status} data-workstation-search="loading">{t('tree.searching')}</div>
+  }
+  if (status === 'failed') {
+    return (
+      <div className={css.status} role="alert" data-workstation-search="failed">
+        {t('tree.searchFailed', { message: failure ?? '' })}
+      </div>
+    )
+  }
+  if (hits.length === 0) {
+    return <div className={css.status} data-workstation-search="empty">{t('tree.searchEmpty')}</div>
+  }
+  return (
+    <ul className={css.results} role="list" aria-label={t('tree.search')}>
+      {hits.map((hit) => (
+        <li key={hit.path} className={css.item}>
+          <button
+            type="button"
+            className={css.row}
+            data-workstation-search-result={hit.path}
+            data-workstation-path={hit.path}
+            title={hit.path}
+            onClick={() => {
+              if (openPaths.split('\n').includes(hit.path)) focusTab(hit.path)
+              else openFile(hit.path)
+            }}
+          >
+            <FileTypeIcon kind={classifyFileType(hit.name)} size={16} />
+            <span className={css.name}>{hit.name}</span>
+            <span className={css.resultPath}>{hit.path.slice(0, hit.path.length - hit.name.length)}</span>
+          </button>
+        </li>
+      ))}
+      {truncated
+        ? <li className={css.status} role="note" data-workstation-search="truncated">{t('tree.searchTruncated')}</li>
+        : null}
+    </ul>
+  )
+}
+
+/**
+ * Draw the tree's header, its search box, and its root level.
+ * @param props - the shared share, the store's write set, and the root to list.
  * @returns the tree column.
  */
 export function FileTree(props: FileTreeProps): ReactNode {
   const t = props.translate
-  const { root, width, ...share } = props
+  // `useStore` travels with the rest of the share so a nested level can read it,
+  // and is read here for the header's own selectors.
+  const { root, width, actions, searchFiles, ...share } = props
+  const { useStore } = share
+  const remote = useStore(state => state.remoteHostId !== null)
+  const hostName = useStore(state => state.remoteHostName)
+  const query = useStore(state => state.searchQuery)
+  const [searching, setSearching] = useState(false)
+
+  // The box owns the text; the host sees one search per pause, not per key.
+  useEffect(() => {
+    if (!remote || !searching) return
+    const text = query.trim()
+    if (text === '' || root === undefined) return
+    const timer = setTimeout(() => { searchFiles(text, root) }, SEARCH_DEBOUNCE_MS)
+    return () => { clearTimeout(timer) }
+  }, [remote, searching, query, root, searchFiles])
+
+  const closeSearch = (): void => {
+    actions.searchCleared()
+    setSearching(false)
+  }
+
   return (
     <section className={css.tree} style={{ width: `${width}px` }} aria-label={t('tree.root')} data-workstation-tree>
       <header className={css.head}>
         <IconWorkspaceTreeOutlineMedium />
-        <span className={css.title}>{t('tree.root')}</span>
+        <span className={css.title}>{remote ? hostName ?? t('tree.server') : t('tree.root')}</span>
+        {remote
+          ? (
+            <button
+              type="button"
+              className={css.searchButton}
+              aria-label={t('tree.search')}
+              title={searching ? t('tree.searchClose') : t('tree.search')}
+              aria-pressed={searching}
+              data-workstation-search-toggle
+              onClick={() => { if (searching) closeSearch(); else setSearching(true) }}
+            >
+              <IconSearchOutlineRegular size={14} />
+            </button>
+          )
+          : null}
       </header>
+      {searching && remote
+        ? (
+          <div className={css.searchBar}>
+            <input
+              className={css.searchInput}
+              type="search"
+              value={query}
+              placeholder={t('tree.search')}
+              aria-label={t('tree.search')}
+              data-workstation-search-input
+              autoFocus
+              onChange={(event) => { actions.searchEdited(event.target.value) }}
+              onKeyDown={(event) => { if (event.key === 'Escape') closeSearch() }}
+            />
+          </div>
+        )
+        : null}
       <nav className={css.body}>
-        {root === undefined
-          ? <div className={css.status} data-workstation-level="pending">{t('tree.loading')}</div>
-          : <Level {...share} path={root} depth={0} />}
+        {searching && remote
+          ? <SearchResults useStore={useStore} translate={t} openFile={share.openFile} focusTab={share.focusTab} />
+          : root === undefined
+            ? <div className={css.status} data-workstation-level="pending">{t('tree.loading')}</div>
+            : <Level {...share} path={root} depth={0} />}
       </nav>
     </section>
   )

@@ -30,9 +30,10 @@ export type PanelActions = BoundActions<ReturnType<typeof createLayoutStore>>
  * in a spec — still constructs a controller; every other transition it exposes
  * is required.
  */
-export type LayoutPanelActions = Omit<PanelActions, 'setWorkstation' | 'setWorkstationWidth'> & {
+export type LayoutPanelActions = Omit<PanelActions, 'setWorkstation' | 'setWorkstationWidth' | 'setIde'> & {
   setWorkstation?: (on: boolean) => void
   setWorkstationWidth?: (px: number) => void
+  setIde?: (on: boolean) => void
 }
 
 /** The presentation source a controller reports when its host has none. */
@@ -85,6 +86,16 @@ export interface ILayout {
   /** Toggle the workstation layout. */
   toggleWorkstation(): void
   /**
+   * Whether the frame is in the full-screen IDE stage: the seat keeps its tree
+   * and editor while the centre column steps aside.
+   */
+  readonly ide: HostObservable<boolean>
+  /**
+   * Advance the frame one stage: the conversation layout, then the workstation
+   * layout, then the IDE stage, and back to the conversation.
+   */
+  cyclePresentation(): void
+  /**
    * Saved workstation seat width in px, or null while the ratio default applies.
    *
    * Optional like the seat's writer, so a controller built before the seat became
@@ -117,6 +128,7 @@ export class LayoutController implements ILayout {
     readonly panelInfo: HostObservable<PanelInfo>,
     readonly workstation: HostObservable<boolean> = HIDDEN_WORKSTATION,
     readonly workstationWidth: HostObservable<number | null> = UNSAVED_WORKSTATION_WIDTH,
+    readonly ide: HostObservable<boolean> = HIDDEN_WORKSTATION,
   ) {}
 
   /** Select a global panel or return to the Conversation. */
@@ -163,6 +175,25 @@ export class LayoutController implements ILayout {
   /** Toggle the workstation layout against its current presentation. */
   toggleWorkstation(): void {
     this.panels.setWorkstation?.(!this.workstation.getSnapshot())
+  }
+
+  /**
+   * Advance one stage: conversation → workstation → IDE → conversation.
+   *
+   * The IDE stage is entered from the workstation layout and left by closing
+   * that layout, so the sequence never jumps from the conversation straight
+   * into a seat the user has not seen yet.
+   */
+  cyclePresentation(): void {
+    if (!this.workstation.getSnapshot()) {
+      this.panels.setWorkstation?.(true)
+      return
+    }
+    if (this.ide.getSnapshot()) {
+      this.panels.setWorkstation?.(false)
+      return
+    }
+    this.panels.setIde?.(true)
   }
 
   /** Save the workstation seat's drag width. */

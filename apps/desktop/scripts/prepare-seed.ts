@@ -215,6 +215,21 @@ function patchInstalledRemoteSshWorkspaceTree(root: string): Promise<void> {
   })
 }
 
+function patchInstalledRemoteSshSearch(root: string): Promise<void> {
+  // The plugin can list a directory on a remote host but cannot answer which files on it match a
+  // name; the workstation tree's search box needs that answered where the filesystem is. Patching the
+  // installed Host source here puts the route in the archived store, and every profile materialized
+  // from this seed carries it. See scripts/patch-remote-ssh-search.mjs.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-remote-ssh-search.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: remote-ssh search patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
 function patchInstalledRemoteSshDataLock(root: string): Promise<void> {
   // The plugin treats a recorded PID in `.controller.lock` as a live owner. A crashed Host's number
   // can belong to an unrelated process by the next start, which then throws DATA_DIR_IN_USE on every
@@ -546,6 +561,7 @@ async function main(): Promise<void> {
     // patch: that one edits the source and the generated bundle by text, and would be overwritten
     // by a later regeneration.
     await patchInstalledRemoteSshWorkspaceTree(installedModules)
+    await patchInstalledRemoteSshSearch(installedModules)
     await patchInstalledRemoteSshEmptyState(installedModules)
     await patchInstalledRemoteSshDataLock(installedModules)
     await patchInstalledQqbotConsole(installedModules)

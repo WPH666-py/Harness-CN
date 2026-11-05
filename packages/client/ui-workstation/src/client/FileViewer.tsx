@@ -227,7 +227,7 @@ export function FileViewer(props: FileViewerProps): ReactNode {
                   aria-label={closeLabel}
                   title={closeLabel}
                   data-workstation-tab-close={tab.path}
-                  onClick={() => { closeTab(tab.path, tab.text, tab.dirty) }}
+                  onClick={() => { closeTab(tab.path, tab.text, tab.dirty, tab.version) }}
                 >
                   {'×'}
                 </button>
@@ -251,7 +251,7 @@ export function FileViewer(props: FileViewerProps): ReactNode {
               <button
                 type="button"
                 className={css.save}
-                onClick={() => { saveTab(active.path, active.text) }}
+                onClick={() => { saveTab(active.path, active.text, active.version) }}
               >
                 {t('tab.save')}
               </button>
@@ -266,7 +266,9 @@ export function FileViewer(props: FileViewerProps): ReactNode {
           <p className={css.status} role="alert" data-workstation-tab-status>
             {active.failedOn === 'save'
               ? t('tab.saveFailed', { message: active.failure })
-              : t('viewer.failed', { message: active.failure })}
+              : active.remote
+                ? t('viewer.remoteFailed', { message: active.failure })
+                : t('viewer.failed', { message: active.failure })}
           </p>
         )}
         {active === null || !active.loading ? null : <p className={css.status}>{t('viewer.loading')}</p>}
@@ -287,7 +289,7 @@ export function FileViewer(props: FileViewerProps): ReactNode {
             readOnly={displayOnly !== null}
             label={t('editor.label', { name: baseName(active.path) })}
             edit={(next) => { editTab(active.path, next) }}
-            save={() => { saveTab(active.path, active.text) }}
+            save={() => { saveTab(active.path, active.text, active.version) }}
           />
         )}
       </div>

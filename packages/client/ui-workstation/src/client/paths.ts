@@ -12,12 +12,16 @@ import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-fil
 
 /**
  * Join one entry name onto an absolute directory path.
+ *
+ * A remote host's root is `/`, so joining must not produce `//name`: the
+ * doubled separator is a different key than the one the listing answers with.
  * @param parent - directory path to join onto.
  * @param name - the entry's basename.
  * @returns the entry's path.
  */
 export function childPath(parent: string, name: string): string {
-  return parent === '' ? name : `${parent}/${name}`
+  if (parent === '') return name
+  return parent.endsWith('/') ? `${parent}${name}` : `${parent}/${name}`
 }
 
 /**

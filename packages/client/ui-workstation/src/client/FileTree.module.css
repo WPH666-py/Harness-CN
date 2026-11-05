@@ -87,3 +87,72 @@
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* The host name owns the header's free space, so the search button keeps to the
+   right edge whether the name is short or truncated. */
+.title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.searchButton {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.searchButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.searchBar {
+  flex: 0 0 auto;
+  padding: 0 12px 8px;
+}
+
+.searchInput {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.searchInput::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.results {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Results are scattered across the filesystem, so the row carries its parent
+   directory: the basename alone would not say which match this is. */
+.resultPath {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}

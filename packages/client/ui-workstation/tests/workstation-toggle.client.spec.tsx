@@ -1,10 +1,11 @@
 /**
- * The workstation toggle: what it says, whether it reports the mode, and that
- * one click is one gesture.
+ * The workstation toggle: what it says at each of the three stages, whether it
+ * reports them, and that one click is one gesture.
  *
- * The component reads the mode through the frame's standard `useWorkstation`
- * hook, so the spec supplies that hook as a plain selector over a fixed value —
- * the same shape the renderer's provideRoot contribution has.
+ * The component reads the presentation through the frame's standard
+ * `useWorkstation` and `useIde` hooks, so the spec supplies them as plain
+ * selectors over fixed values — the same shape the renderer's provideRoot
+ * contribution has.
  */
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,45 +15,56 @@ import { zh } from '../src/client/locales.ts'
 import { WorkstationToggle } from '../src/client/WorkstationToggle.tsx'
 import type { WorkstationToggleProps } from '../src/client/WorkstationToggle.tsx'
 
-/** Mount the toggle with the mode it should report and the gesture it should call. */
-function mount(mode: boolean): { clicked: ReturnType<typeof vi.fn>; button: HTMLElement } {
-  const clicked = vi.fn()
+/** The three presentations the button walks through. */
+type Stage = 'conversation' | 'workstation' | 'ide'
+
+/** Mount the toggle with the stage it should report and the gesture it should call. */
+function mount(stage: Stage): { cycled: ReturnType<typeof vi.fn>; button: HTMLElement } {
+  const cycled = vi.fn()
   const props = {
     t: makeTranslate(zh),
-    toggleWorkstation: clicked,
-    useWorkstation: <S,>(select: (state: boolean) => S): S => select(mode),
+    cyclePresentation: cycled,
+    useWorkstation: <S,>(select: (state: boolean) => S): S => select(stage !== 'conversation'),
+    useIde: <S,>(select: (state: boolean) => S): S => select(stage === 'ide'),
   } as unknown as WorkstationToggleProps
   const { getByRole } = render(<WorkstationToggle {...props} />)
-  return { clicked, button: getByRole('button', { name: mode ? zh['toggle.disable'] : zh['toggle.enable'] }) }
+  const action = stage === 'ide' ? zh['toggle.disable'] : stage === 'workstation' ? zh['toggle.stage'] : zh['toggle.enable']
+  return { cycled, button: getByRole('button', { name: action }) }
 }
 
 afterEach(cleanup)
 
 describe('WorkstationToggle', () => {
-  it('shows the mode name as its visible label in both dictionaries', () => {
-    const { button } = mount(false)
+  it('leads with the seat layout name from the conversation and names the stage it reaches', () => {
+    const { button } = mount('conversation')
     expect(button.textContent).toBe(zh['toggle.mode'])
     expect(zh['toggle.mode']).toBe('IDE/工作站')
-  })
-
-  it('is named by the action the click performs and not pressed while the frame is not in workstation mode', () => {
-    const { button } = mount(false)
     expect(button.getAttribute('aria-label')).toBe(zh['toggle.enable'])
     expect(button.getAttribute('aria-pressed')).toBe('false')
-    expect(button.getAttribute('title')).toBe(zh['toggle.enable'])
+    expect(button.getAttribute('data-stage')).toBe('conversation')
   })
 
-  it('reports the pressed state and offers the way back while workstation mode is on', () => {
-    const { button } = mount(true)
+  it('offers the full-screen stage once the seat is laid out', () => {
+    const { button } = mount('workstation')
+    expect(button.textContent).toBe(zh['toggle.fullscreen'])
+    expect(button.getAttribute('aria-label')).toBe(zh['toggle.stage'])
+    expect(button.getAttribute('title')).toBe(zh['toggle.stage'])
     expect(button.getAttribute('aria-pressed')).toBe('true')
-    expect(button.getAttribute('aria-label')).toBe(zh['toggle.disable'])
-    expect(button.getAttribute('title')).toBe(zh['toggle.disable'])
     expect(button.hasAttribute('data-active')).toBe(true)
+    expect(button.getAttribute('data-stage')).toBe('workstation')
   })
 
-  it('calls the toggle once per click', () => {
-    const { clicked, button } = mount(false)
+  it('offers the way back to the conversation from the full-screen stage', () => {
+    const { button } = mount('ide')
+    expect(button.textContent).toBe(zh['toggle.exit'])
+    expect(button.getAttribute('aria-label')).toBe(zh['toggle.disable'])
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+    expect(button.getAttribute('data-stage')).toBe('ide')
+  })
+
+  it('advances one stage per click', () => {
+    const { cycled, button } = mount('conversation')
     fireEvent.click(button)
-    expect(clicked).toHaveBeenCalledTimes(1)
+    expect(cycled).toHaveBeenCalledTimes(1)
   })
 })

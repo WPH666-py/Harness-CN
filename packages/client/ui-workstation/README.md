@@ -22,9 +22,10 @@ both directions.
 
 Opening a file from the tree adds a tab (or focuses the tab already open for
 that path). Each tab is named for the file's basename and carries a close
-button; the tree keeps the Session's working directory as its root, and at most
-eight tabs stay open — when a ninth arrives, the oldest clean tab is closed
-first, while a tab with unsaved edits is never evicted.
+button; the tree keeps the Session's working directory as its root — or, while a
+remote server is current, that server's `/` — and at most eight tabs stay open —
+when a ninth arrives, the oldest clean tab is closed first, while a tab with
+unsaved edits is never evicted.
 
 The active tab is a plain `<textarea>` under a line-number gutter: monospace, two
 spaces per Tab insertion, no autoformatting and no syntax highlighting. Lines
@@ -55,6 +56,37 @@ Tabs, buffers, and the active tab live in the in-memory store beside the tree
 levels: a reload starts from an empty strip. Nothing is written except through
 the explicit save gestures above.
 
+## A remote server
+
+The seat follows the server manager instead of keeping its own idea of the
+target. `remote.ts` polls `GET /remote-ssh-ops/v1/hosts` every two seconds while
+the seat is mounted and publishes `{ currentHostId, hosts }`; a failed poll is
+dropped, never shown, because the server manager is where an unreachable host is
+dealt with.
+
+While a host is current — the 使用 button in the 「服务器管理」 window makes it
+current — both panes switch to it. The tree hangs from `/`, levels come from
+`GET /hosts/:id/files?path=`, the viewer reads `GET /hosts/:id/file?path=`, and a
+save is `PUT /hosts/:id/file` carrying the version the read reported as
+`expected_version`, so a file someone else changed is refused instead of
+overwritten. The local workspace is not shown beside it. Clearing the current
+host in that window brings the workspace back on the next poll; with no Session
+open either, the seat asks for a Session again.
+
+The tree header grows a magnifier while a server is current. It opens an input,
+waits 250 ms after the last keystroke, and asks
+`GET /hosts/:id/search?q=&root=` for files whose *name* contains the query. The
+answer is a flat list of absolute paths, each row showing its directory, and a
+click opens the file in the viewer. Escape — or the button again — clears the
+search and restores the tree. Local workspaces get no search control: the
+`workspace-files` verb set has no search operation in this build.
+
+These calls are plain same-origin `fetch` against the plugin's routes. Importing
+the plugin's client module would make this package depend on another feature
+plugin's values, which the client package rules forbid. Every failure — a host
+that stopped answering, a route that refused, a body this package cannot read —
+lands in the pane that asked for it, in the copy the locale owns.
+
 ## Persistence
 
 The mode is **in-memory**: it lives in `layoutInfo.workstation`, part of the
@@ -76,6 +108,9 @@ belongs in it unchanged.
 - Bytes: `remote.workspaceFiles.readBytes(sessionId, path, {}, signal)`, for an
   image or for a text read the text verb refused as not UTF-8.
 - Saves: `remote.workspaceFiles.write(sessionId, path, text, signal)`.
+- With a server current: `GET /remote-ssh-ops/v1/hosts/:id/files`,
+  `GET …/file`, `PUT …/file`, and `GET …/search` on the same origin, through
+  `remote.ts`.
 
 Paths are workspace-relative (`''` is the workspace root), which is how the
 Remote API addresses them, so the seat never needs the Session's absolute

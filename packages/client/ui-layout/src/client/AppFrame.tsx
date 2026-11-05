@@ -269,6 +269,10 @@ export function AppFrame({
   // columns step aside, and the centre keeps the Conversation it already had —
   // that is what preserves its draft and scroll position across the toggle.
   const workstation = layoutInfo.workstation
+  // The IDE stage is the same layout with the Conversation folded away: the
+  // seat gives up its fixed width and takes the whole frame instead, so the
+  // tree and the editor are what the surface is made of.
+  const ide = layoutInfo.ide && workstation
   const workstationSeat = useMemo(() => renderSlot('shell.workstation', {}), [renderSlot])
 
   return (
@@ -278,12 +282,15 @@ export function AppFrame({
       style={{
         ...(document.documentElement.hasAttribute('data-windows-titlebar')
           ? { '--dsh-windows-sidebar-width': `${cols.sidebar}px` } : {}),
-        gridTemplateColumns: workstation
-          ? `${workstationWidth}px minmax(${CENTER_MIN}px, 1fr) 0px`
-          : `${cols.sidebar}px minmax(${cols.rightbar === 0 ? 0 : CENTER_MIN}px, 1fr) minmax(0px, ${rightbarMax}px)`,
+        gridTemplateColumns: ide
+          ? '1fr 0px 0px'
+          : workstation
+            ? `${workstationWidth}px minmax(${CENTER_MIN}px, 1fr) 0px`
+            : `${cols.sidebar}px minmax(${cols.rightbar === 0 ? 0 : CENTER_MIN}px, 1fr) minmax(0px, ${rightbarMax}px)`,
       }}
       data-sidebar-collapsed={sidebarCollapsed || undefined}
       data-workstation={workstation || undefined}
+      data-workstation-ide={ide || undefined}
       data-rightbar-collapsed={cols.rightbar === 0 || undefined}
       data-rightbar-fullscreen={layoutInfo.rightbarFullscreen || undefined}
       data-rightbar-instant={layoutInfo.rightbarInstant || undefined}

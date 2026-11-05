@@ -20,6 +20,8 @@ import type { RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
 import type { WorkspaceDirectoryEntry, WorkspaceFileMutation } from '@deepseek-ai/dsh-api-workspace-files/types'
 import { workstationFace } from '../src/client/face.ts'
 import type { WorkspaceFileWrite, WorkspaceFilesHostRemote } from '../src/client/face.ts'
+import { REMOTE_HOSTS_EMPTY } from '../src/client/remote.ts'
+import type { RemoteDirectory, RemoteFiles, RemoteHostsView } from '../src/client/remote.ts'
 import { zh } from '../src/client/locales.ts'
 import { createWorkstationStore } from '../src/client/store.ts'
 import { Workstation } from '../src/client/Workstation.tsx'
@@ -160,22 +162,78 @@ function scripted(): Scripted {
   }
 }
 
+/** The host every remote case browses. */
+const HOST = 'host-1'
+
+/** That host's display name, which the tree header shows instead of 工作区. */
+const HOST_NAME = 'builder'
+
+/** The one file the server tree offers, whose name a search also matches. */
+const SERVER_FILE = '/etc/nginx.conf'
+
+/** The Remote calls the seat makes against a host, scripted over one small server tree. */
+interface RemoteScripted {
+  readonly files: RemoteFiles
+  readonly list: ReturnType<typeof vi.fn>
+  readonly read: ReturnType<typeof vi.fn>
+  readonly write: ReturnType<typeof vi.fn>
+  readonly search: ReturnType<typeof vi.fn>
+}
+
+/**
+ * A host reachable through the plugin's routes: a root with one directory, one
+ * text file, and a search that finds it.
+ * @returns the calls, and the `RemoteFiles` bundle the face receives.
+ */
+function remoteScripted(): RemoteScripted {
+  const levels: Record<string, RemoteDirectory['entries']> = {
+    '/': [{ name: 'etc', path: '/etc', type: 'directory', size: 4096 }],
+    '/etc': [{ name: 'nginx.conf', path: SERVER_FILE, type: 'file', size: 12 }],
+  }
+  const list = vi.fn(async (_hostId: string, path: string) => ({
+    ok: true as const,
+    value: { path, entries: levels[path] ?? [], truncated: false },
+  }))
+  const read = vi.fn(async (_hostId: string, path: string) => ({
+    ok: true as const,
+    value: { path, text: 'worker_processes 1;', version: 'v1', size: 19 },
+  }))
+  const write = vi.fn(async (_hostId: string, _path: string) => ({
+    ok: true as const,
+    value: { version: 'v2' },
+  }))
+  const search = vi.fn(async (_hostId: string, _query: string, _root: string) => ({
+    ok: true as const,
+    value: { results: [{ path: SERVER_FILE, name: 'nginx.conf' }], truncated: false },
+  }))
+  return { files: { list, read, write, search }, list, read, write, search }
+}
+
 /** Mount the seat over a fresh store instance and the scripted Remote. */
-function mountSeat(cwd: string | null = ROOT) {
+function mountSeat(cwd: string | null = ROOT, options: { readonly hosts?: RemoteHostsView } = {}) {
   const directory = cwd ?? undefined
   const instance = createWorkstationStore().create()
   const controller = new AbortController()
   const { remote, list, read, readBytes, write } = scripted()
-  const face = workstationFace({ remote, sessionId: () => (directory === undefined ? undefined : SESSION), signal: controller.signal })(instance.actions)
+  const remoteFiles = remoteScripted()
+  const hosts = options.hosts ?? REMOTE_HOSTS_EMPTY
+  const face = workstationFace({
+    remote,
+    remoteFiles: remoteFiles.files,
+    sessionId: () => (directory === undefined ? undefined : SESSION),
+    remoteHostId: () => hosts.currentHostId,
+    signal: controller.signal,
+  })(instance.actions)
   const props = {
     useStore: hookOf(instance),
     actions: instance.actions,
     useSessions: hookOf(sessionsOf(directory)),
     useSessionId: hookOf({ getSnapshot: () => (directory === undefined ? undefined : SESSION), subscribe: () => () => {} }),
+    useRemoteHosts: hookOf({ getSnapshot: () => hosts, subscribe: () => () => {} }),
     t: translate,
     ...face,
   } as unknown as WorkstationProps
-  return { ...render(<Workstation {...props} />), instance, list, read, readBytes, write }
+  return { ...render(<Workstation {...props} />), instance, list, read, readBytes, write, remote: remoteFiles }
 }
 
 /** Dispatch one pointer event; jsdom types no pointer capture, stubbed below. */
@@ -626,5 +684,87 @@ describe('Workstation', () => {
     fireEvent.click(closeOf(container, PIXEL))
     await waitFor(() => { expect(tabsOf(container)).toHaveLength(0) })
     await waitFor(() => { expect(objectUrls.revoke).toHaveBeenCalledWith('blob:workstation') })
+  })
+
+  it('browses the current server instead of the workspace, even with no Session', async () => {
+    const handle = mountSeat(null, { hosts: { currentHostId: HOST, hosts: [{ hostId: HOST, displayName: HOST_NAME }] } })
+    const { container, remote, list } = handle
+
+    const row = await waitFor(() => {
+      const node = container.querySelector('[data-workstation-path="/etc"]')
+      expect(node).toBeTruthy()
+      return node as Element
+    })
+    expect(row.textContent).toContain('etc')
+    expect(remote.list).toHaveBeenCalledWith(HOST, '/')
+    expect(list).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-workstation-state="no-session"]')).toBeNull()
+    expect(treeColumn(container).textContent).toContain(HOST_NAME)
+  })
+
+  it('searches the server from the tree header and clears back to the tree', async () => {
+    const handle = mountSeat(null, { hosts: { currentHostId: HOST, hosts: [{ hostId: HOST, displayName: HOST_NAME }] } })
+    const { container, remote } = handle
+
+    const toggle = await waitFor(() => {
+      const node = container.querySelector<HTMLElement>('[data-workstation-search-toggle]')
+      expect(node).toBeTruthy()
+      return node as HTMLElement
+    })
+    fireEvent.click(toggle)
+    const input = container.querySelector<HTMLInputElement>('[data-workstation-search-input]')
+    expect(input).toBeTruthy()
+    fireEvent.change(input as HTMLInputElement, { target: { value: 'nginx' } })
+
+    await waitFor(() => { expect(remote.search).toHaveBeenCalledWith(HOST, 'nginx', '/') }, { timeout: 2_000 })
+    const hit = await waitFor(() => {
+      const node = container.querySelector('[data-workstation-search-result="/etc/nginx.conf"]')
+      expect(node).toBeTruthy()
+      return node as HTMLElement
+    })
+    fireEvent.click(hit)
+    await waitFor(() => { expect(tabsOf(container)[0]?.getAttribute('data-workstation-tab')).toBe(SERVER_FILE) })
+
+    fireEvent.keyDown(input as HTMLInputElement, { key: 'Escape' })
+    await waitFor(() => { expect(container.querySelector('[data-workstation-search-result]')).toBeNull() })
+    expect(container.querySelector('[data-workstation-path="/etc"]')).toBeTruthy()
+    expect(container.querySelector('[data-workstation-search-input]')).toBeNull()
+  })
+
+  it('names the server when a file cannot be read from it', async () => {
+    const handle = mountSeat(null, { hosts: { currentHostId: HOST, hosts: [{ hostId: HOST, displayName: HOST_NAME }] } })
+    const { container, remote } = handle
+    remote.read.mockResolvedValueOnce({ ok: false, failure: { code: 'SSH_SFTP_FAILED', message: 'permission denied' } })
+
+    const directory = await waitFor(() => {
+      const node = container.querySelector<HTMLElement>('[data-workstation-path="/etc"]')
+      expect(node).toBeTruthy()
+      return node as HTMLElement
+    })
+    fireEvent.click(directory)
+    fireEvent.click(await waitFor(() => handle.getByTitle('nginx.conf')))
+
+    await waitFor(() => { expect(handle.getByRole('alert').textContent).toBe(translate('viewer.remoteFailed', { message: 'permission denied' })) })
+    expect(container.querySelector('[data-workstation-editor]')).toBeNull()
+  })
+
+  it('saves a server file with the version the read reported', async () => {
+    const handle = mountSeat(null, { hosts: { currentHostId: HOST, hosts: [{ hostId: HOST, displayName: HOST_NAME }] } })
+    const { container, remote } = handle
+
+    const directory = await waitFor(() => {
+      const node = container.querySelector<HTMLElement>('[data-workstation-path="/etc"]')
+      expect(node).toBeTruthy()
+      return node as HTMLElement
+    })
+    fireEvent.click(directory)
+    fireEvent.click(await waitFor(() => handle.getByTitle('nginx.conf')))
+    const area = await waitFor(() => editorOf(container))
+    fireEvent.change(area, { target: { value: 'worker_processes 2;' } })
+    fireEvent.keyDown(area, { key: 's', ctrlKey: true })
+
+    await waitFor(() => { expect(remote.write).toHaveBeenCalledWith(HOST, SERVER_FILE, 'worker_processes 2;', 'v1') })
+    await waitFor(() => { expect(handle.instance.getSnapshot().tabs[0]?.version).toBe('v2') })
+    expect(handle.instance.getSnapshot().tabs[0]?.dirty).toBe(false)
   })
 })

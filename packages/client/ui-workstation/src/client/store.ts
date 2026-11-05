@@ -13,10 +13,10 @@
  * performs a Remote call and settles into these actions.
  */
 import { defineStore, type BoundActions, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
-import type { RemoteFailure } from '@deepseek-ai/dsh-api-remotes/client'
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
 import type { FileEncoding } from './encoding.ts'
 import { imageMediaType } from './paths.ts'
+import type { RemoteSearchHit } from './remote.ts'
 
 /**
  * One directory's contents, as one level of the tree draws them.
@@ -32,11 +32,23 @@ export interface DirectoryLevel {
   readonly truncated: boolean
 }
 
+/**
+ * What a failed listing reports.
+ *
+ * A local workspace listing answers a protocol failure and a remote host
+ * answers one of its own route failures; the tree draws the message either way,
+ * so the store keeps the one field both carry.
+ */
+export interface LevelFailure {
+  /** Why the directory could not be listed. */
+  readonly message: string
+}
+
 /** What one directory level is doing right now. */
 export type LevelState =
   | { readonly kind: 'loading' }
   | { readonly kind: 'ready'; readonly level: DirectoryLevel }
-  | { readonly kind: 'failed'; readonly failure: RemoteFailure }
+  | { readonly kind: 'failed'; readonly failure: LevelFailure }
 
 /** Which operation a tab's failure line reports. */
 export type TabFailureKind = 'read' | 'save'
@@ -81,6 +93,10 @@ export interface TabState {
   encoding: FileEncoding | null
   /** Size in bytes of a binary file; `null` until the byte read reports one. */
   size: number | null
+  /** The tab holds a file on the current remote host, so it reads and saves there. */
+  remote: boolean
+  /** The host's content version at the last read or write; remote tabs only. */
+  version: string | null
 }
 
 /** Tree column width before any user drag. */
@@ -91,6 +107,9 @@ const TREE_WIDTH_MIN = 180
 const TREE_WIDTH_MAX = 520
 /** Open tabs beyond this close the oldest clean one. */
 const TAB_LIMIT = 8
+
+/** Where one server search stands. */
+export type SearchStatus = 'idle' | 'loading' | 'ready' | 'failed'
 
 /** Everything the workstation draws, in one store instance. */
 export interface WorkstationState {
@@ -104,6 +123,30 @@ export interface WorkstationState {
   activePath: string | null
   /** Drawn width of the tree column in px; the viewer takes the rest of the seat. */
   treeWidth: number
+  /** The host the tree follows, `null` while the seat browses the local workspace. */
+  remoteHostId: string | null
+  /** The followed host's display name, as the server manager shows it. */
+  remoteHostName: string | null
+  /** The followed host's tree root; `/` because a server has no Session cwd. */
+  remoteRoot: string
+  /**
+   * Remote level state by absolute host path.
+   *
+   * Kept apart from `levels` because the same string names a different
+   * directory in the two trees, and switching hosts must never draw the
+   * previous host's listing.
+   */
+  remoteLevels: Record<string, LevelState>
+  /** The search box's text. */
+  searchQuery: string
+  /** Where the current search stands. */
+  searchStatus: SearchStatus
+  /** Files the current search matched, in the host's order. */
+  searchHits: RemoteSearchHit[]
+  /** The search hit the route's result cap, so more files match. */
+  searchTruncated: boolean
+  /** Why the current search failed, `null` while none has. */
+  searchFailure: string | null
 }
 
 /** The workstation store's write set. */
@@ -115,19 +158,25 @@ export type WorkstationActionMap = {
   /** Record one directory's contents. */
   loaded: (draft: WorkstationState, path: string, level: DirectoryLevel) => void
   /** Record why one directory could not be listed. */
-  failed: (draft: WorkstationState, path: string, failure: RemoteFailure) => void
+  failed: (draft: WorkstationState, path: string, failure: LevelFailure) => void
   /** Open one directory's level in the tree. */
   expanded: (draft: WorkstationState, path: string) => void
   /** Close one directory's level in the tree. */
   collapsed: (draft: WorkstationState, path: string) => void
   /** Add one file's tab, or focus it when it is already open. */
-  tabOpened: (draft: WorkstationState, path: string) => void
+  tabOpened: (draft: WorkstationState, path: string, remote?: boolean) => void
   /** Focus an already open tab. */
   tabFocused: (draft: WorkstationState, path: string) => void
   /** Replace one tab's buffer from the editor. */
   tabEdited: (draft: WorkstationState, path: string, text: string) => void
   /** Record the text the endpoint read for one tab, and the encoding that decoded it. */
-  tabLoaded: (draft: WorkstationState, path: string, text: string, encoding: FileEncoding) => void
+  tabLoaded: (
+    draft: WorkstationState,
+    path: string,
+    text: string,
+    encoding: FileEncoding,
+    version?: string | null,
+  ) => void
   /** Record the bytes the endpoint read for one image tab. */
   tabImageLoaded: (draft: WorkstationState, path: string, image: TabImage) => void
   /** Record one tab as a file the decode chain could not read as text. */
@@ -135,11 +184,45 @@ export type WorkstationActionMap = {
   /** Record why one tab's last read or save failed. */
   tabFailed: (draft: WorkstationState, path: string, message: string, failedOn: TabFailureKind) => void
   /** Record one tab's buffer as saved on the Host. */
-  tabSaved: (draft: WorkstationState, path: string, text: string) => void
+  tabSaved: (draft: WorkstationState, path: string, text: string, version?: string | null) => void
   /** Remove one tab, focusing its neighbour when it was the active one. */
   tabClosed: (draft: WorkstationState, path: string) => void
   /** Save the tree column's drag width, clamped into its contract range. */
   setTreeWidth: (draft: WorkstationState, px: number) => void
+  /**
+   * Follow a remote host, or return to the local workspace.
+   *
+   * Every cached listing and every tab belongs to the host that answered it,
+   * so switching clears them; the alternative is opening a path that happens to
+   * exist on both hosts with the wrong host's bytes behind it.
+   */
+  remoteHost: (
+    draft: WorkstationState,
+    hostId: string | null,
+    displayName: string | null,
+    root: string,
+  ) => void
+  /** Mark one remote directory as being listed. */
+  remoteLoading: (draft: WorkstationState, path: string) => void
+  /** Record one remote directory's contents. */
+  remoteLoaded: (draft: WorkstationState, path: string, level: DirectoryLevel) => void
+  /** Record why one remote directory could not be listed. */
+  remoteFailed: (draft: WorkstationState, path: string, message: string) => void
+  /** Record the search box's text, dropping results the text no longer explains. */
+  searchEdited: (draft: WorkstationState, query: string) => void
+  /** Mark one query as being searched. */
+  searchStarted: (draft: WorkstationState, query: string) => void
+  /** Record one query's matches. */
+  searchLoaded: (
+    draft: WorkstationState,
+    query: string,
+    hits: readonly RemoteSearchHit[],
+    truncated: boolean,
+  ) => void
+  /** Record why one query failed. */
+  searchFailed: (draft: WorkstationState, query: string, message: string) => void
+  /** Empty the search box and go back to the tree. */
+  searchCleared: (draft: WorkstationState) => void
 }
 
 /** The handle a registration declares and a component reads. */
@@ -182,6 +265,15 @@ export function createWorkstationStore(): WorkstationStoreHandle {
       tabs: [],
       activePath: null,
       treeWidth: TREE_WIDTH_DEFAULT,
+      remoteHostId: null,
+      remoteHostName: null,
+      remoteRoot: '/',
+      remoteLevels: {},
+      searchQuery: '',
+      searchStatus: 'idle',
+      searchHits: [],
+      searchTruncated: false,
+      searchFailure: null,
     }),
     actions: {
       /**
@@ -220,7 +312,7 @@ export function createWorkstationStore(): WorkstationStoreHandle {
        * @param path - absolute directory path.
        * @param failure - the settled Remote failure.
        */
-      failed: (d, path: string, failure: RemoteFailure) => {
+      failed: (d, path: string, failure: LevelFailure) => {
         d.levels[path] = { kind: 'failed', failure }
       },
       /**
@@ -251,7 +343,7 @@ export function createWorkstationStore(): WorkstationStoreHandle {
        * @param d - draft state.
        * @param path - absolute file path.
        */
-      tabOpened: (d, path: string) => {
+      tabOpened: (d, path: string, remote = false) => {
         if (tabOf(d, path) !== undefined) {
           d.activePath = path
           return
@@ -268,6 +360,8 @@ export function createWorkstationStore(): WorkstationStoreHandle {
           image: null,
           encoding: null,
           size: null,
+          remote,
+          version: null,
         })
         d.activePath = path
         if (d.tabs.length <= TAB_LIMIT) return
@@ -308,7 +402,7 @@ export function createWorkstationStore(): WorkstationStoreHandle {
        * @param text - the complete file text.
        * @param encoding - the encoding that decoded the file's bytes.
        */
-      tabLoaded: (d, path: string, text: string, encoding: FileEncoding) => {
+      tabLoaded: (d, path: string, text: string, encoding: FileEncoding, version: string | null = null) => {
         const tab = tabOf(d, path)
         if (tab === undefined) return
         tab.text = text
@@ -318,6 +412,7 @@ export function createWorkstationStore(): WorkstationStoreHandle {
         tab.failure = null
         tab.failedOn = null
         tab.encoding = encoding
+        tab.version = version ?? tab.version
       },
       /**
        * Record the bytes the endpoint read for one image tab.
@@ -377,14 +472,18 @@ export function createWorkstationStore(): WorkstationStoreHandle {
        * @param d - draft state.
        * @param path - absolute file path.
        * @param text - the text the Host accepted.
+       * @param version - the version the Host reports after the write, when it has one.
        */
-      tabSaved: (d, path: string, text: string) => {
+      tabSaved: (d, path: string, text: string, version?: string | null) => {
         const tab = tabOf(d, path)
         if (tab === undefined) return
         tab.saved = text
         tab.dirty = tab.text !== text
         tab.failure = null
         tab.failedOn = null
+        // A host answers with the version it just wrote, so the next save has a
+        // current guard instead of the version this tab was opened at.
+        if (version != null) tab.version = version
       },
       /**
        * Remove one tab.
@@ -412,6 +511,130 @@ export function createWorkstationStore(): WorkstationStoreHandle {
        */
       setTreeWidth: (d, px: number) => {
         d.treeWidth = Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, Math.round(px)))
+      },
+      /**
+       * Follow a remote host, or return to the local workspace.
+       *
+       * Every cached listing and every tab belongs to the host that answered it,
+       * so a switch clears them: the same path names a different file on another
+       * machine, and drawing the previous host's bytes under the new host's name
+       * is worse than asking again.
+       * @param d - draft state.
+       * @param hostId - the host to follow, `null` for the local workspace.
+       * @param displayName - the host's display name, `null` for the local workspace.
+       * @param root - the host tree's root path.
+       */
+      remoteHost: (d, hostId: string | null, displayName: string | null, root: string) => {
+        if (d.remoteHostId === hostId) {
+          d.remoteHostName = displayName
+          return
+        }
+        d.remoteHostId = hostId
+        d.remoteHostName = displayName
+        d.remoteRoot = root
+        d.remoteLevels = {}
+        d.expanded = []
+        d.tabs = []
+        d.activePath = null
+        d.searchQuery = ''
+        d.searchStatus = 'idle'
+        d.searchHits = []
+        d.searchTruncated = false
+        d.searchFailure = null
+      },
+      /**
+       * Mark one remote directory as being listed.
+       * @param d - draft state.
+       * @param path - absolute host path.
+       */
+      remoteLoading: (d, path: string) => {
+        d.remoteLevels[path] = { kind: 'loading' }
+      },
+      /**
+       * Record one remote directory's contents.
+       * @param d - draft state.
+       * @param path - absolute host path.
+       * @param level - the listing to draw under it.
+       */
+      remoteLoaded: (d, path: string, level: DirectoryLevel) => {
+        d.remoteLevels[path] = { kind: 'ready', level }
+      },
+      /**
+       * Record why one remote directory could not be listed.
+       * @param d - draft state.
+       * @param path - absolute host path.
+       * @param message - the route's message.
+       */
+      remoteFailed: (d, path: string, message: string) => {
+        d.remoteLevels[path] = { kind: 'failed', failure: { message } }
+      },
+      /**
+       * Record the search box's text.
+       *
+       * Results stay attached to the query that produced them, so editing the
+       * text retires the old list at once instead of showing rows the next
+       * search will not return.
+       * @param d - draft state.
+       * @param query - the box's text.
+       */
+      searchEdited: (d, query: string) => {
+        if (d.searchQuery === query) return
+        d.searchQuery = query
+        d.searchHits = []
+        d.searchTruncated = false
+        d.searchFailure = null
+        d.searchStatus = 'idle'
+      },
+      /**
+       * Mark one query as being searched.
+       * @param d - draft state.
+       * @param query - the query the host is walking for.
+       */
+      searchStarted: (d, query: string) => {
+        if (d.searchQuery !== query) return
+        d.searchStatus = 'loading'
+        d.searchFailure = null
+      },
+      /**
+       * Record one query's matches.
+       *
+       * A settlement for a query the box no longer holds is dropped: the answer
+       * raced a later keystroke, and the list must describe the text on screen.
+       * @param d - draft state.
+       * @param query - the query this answer belongs to.
+       * @param hits - matching files, as the host reported them.
+       * @param truncated - the walk stopped at its result cap.
+       */
+      searchLoaded: (d, query: string, hits: readonly RemoteSearchHit[], truncated: boolean) => {
+        if (d.searchQuery !== query) return
+        d.searchStatus = 'ready'
+        d.searchHits = [...hits]
+        d.searchTruncated = truncated
+        d.searchFailure = null
+      },
+      /**
+       * Record why one query failed.
+       * @param d - draft state.
+       * @param query - the query this answer belongs to.
+       * @param message - the route's message.
+       */
+      searchFailed: (d, query: string, message: string) => {
+        if (d.searchQuery !== query) return
+        d.searchStatus = 'failed'
+        d.searchHits = []
+        d.searchTruncated = false
+        d.searchFailure = message
+      },
+      /**
+       * Empty the search box and go back to the tree.
+       * @param d - draft state.
+       */
+      searchCleared: (d) => {
+        d.searchQuery = ''
+        d.searchStatus = 'idle'
+        d.searchHits = []
+        d.searchTruncated = false
+        d.searchFailure = null
       },
     },
   })

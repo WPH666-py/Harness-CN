@@ -229,3 +229,14 @@ describe('DiffBlock copy', () => {
     expect(writeText).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('DiffBlock without the owner dictionary', () => {
+  it('renders with fallback chrome instead of throwing', () => {
+    // A host outside this repository mounts the card straight from the package, and a missing
+    // dictionary used to throw while React rendered the surrounding message.
+    render(<LocalizedDiffBlock diffs={[{ path: 'a.ts', oldText: 'a', newText: 'b' }]} />)
+    expect(screen.getByText('a.ts')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Wrap lines' })).toBeTruthy()
+  })
+})

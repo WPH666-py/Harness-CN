@@ -2,6 +2,10 @@ CLAUDE.local.md
 .env
 node_modules/
 lib/
+# The seed patch scripts import their shared helpers from scripts/lib. That directory is source
+# here even though `lib/` is build output everywhere else.
+!apps/desktop/scripts/lib/
+!apps/desktop/scripts/lib/**
 *.tsbuildinfo
 pnpm-debug.log
 .pnpm-store/

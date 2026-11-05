@@ -3,7 +3,7 @@ import clsx from 'clsx'
 import { structuredPatch } from 'diff'
 import { FoldToggle } from './FoldToggle.tsx'
 import { writeClipboard } from './clipboard.ts'
-import { CodeToolbar, type CodeToolbarLabels } from './CodeToolbar.tsx'
+import { CodeToolbar, FALLBACK_CODE_TOOLBAR_LABELS, type CodeToolbarLabels } from './CodeToolbar.tsx'
 import { languageForPath } from './code-highlighting.ts'
 import cardCss from './CodeCard.module.css'
 import css from './DiffBlock.module.css'
@@ -27,8 +27,8 @@ export interface DiffHunk {
 export interface DiffBlockProps {
   /** One entry per applied hunk, in file order; empty renders nothing. */
   diffs: DiffHunk[]
-  /** Localized chrome supplied by the owning render site. */
-  labels: DiffBlockLabels
+  /** Localized chrome supplied by the owning render site (a missing one falls back). */
+  labels?: DiffBlockLabels | undefined
   /** Height cap in body lines before the middle collapses (default {@link DEFAULT_DIFF_MAX_LINES}). */
   maxLines?: number | undefined
   /** Extra class merged onto the wrapper (callers position; this component draws). */
@@ -43,6 +43,22 @@ export interface DiffBlockLabels extends CodeToolbarLabels {
   expandAria: (hidden: number) => string
   collapse: string
   expand: (hidden: number) => string
+}
+
+/**
+ * Chrome for a host that mounts a diff without the owning render site's locale.
+ * A third-party plugin can reach this component directly, and a missing
+ * dictionary used to throw while React rendered the surrounding message —
+ * taking the whole conversation surface down with it.
+ */
+export const FALLBACK_DIFF_LABELS: DiffBlockLabels = {
+  ...FALLBACK_CODE_TOOLBAR_LABELS,
+  copy: 'Copy',
+  copied: 'Copied',
+  collapseAria: 'Collapse the diff',
+  expandAria: (hidden: number) => `Expand ${hidden} more lines`,
+  collapse: 'Collapse',
+  expand: (hidden: number) => `Expand ${hidden} more lines`,
 }
 
 /** A single rendered body line and its role, so the height cap slices a flat list. */
@@ -165,7 +181,7 @@ function copyText(rows: DiffRow[]): string {
  * @param props - see {@link DiffBlockProps}.
  * @returns the diff block element.
  */
-export function DiffBlock({ diffs, labels, maxLines = DEFAULT_DIFF_MAX_LINES, className }: DiffBlockProps) {
+export function DiffBlock({ diffs, labels = FALLBACK_DIFF_LABELS, maxLines = DEFAULT_DIFF_MAX_LINES, className }: DiffBlockProps) {
   const rows = useMemo(() => buildRows(diffs), [diffs])
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
