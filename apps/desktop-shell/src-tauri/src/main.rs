@@ -276,6 +276,15 @@ fn open_window(
         .visible(true)
         .on_navigation(|target| target.host_str() == Some("127.0.0.1"))
         .on_new_window(|target, _features| {
+            // The account UI pre-opens a blank tab during the user's click — the only way a page may
+            // later navigate a window it opened without the browser treating it as a blocked popup —
+            // and the Host fills that tab in once it has an authorization URL. Handing `about:blank`
+            // to the platform's browser cannot work, and reporting it as a failed link is the modal
+            // error every sign-in ended with, so this one address gets a window of its own; every
+            // other address is still the user's browser.
+            if target.as_str() == "about:blank" {
+                return tauri::webview::NewWindowResponse::Allow;
+            }
             open_in_browser(&target);
             // The page keeps rendering in the window it was loaded in; the address was either
             // handed to the browser or reported, and neither outcome leaves a window to show.
