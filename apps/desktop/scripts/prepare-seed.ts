@@ -84,8 +84,10 @@ function runPnpm(args: readonly string[]): Promise<void> {
     // "Expected `concurrency` to be a number from 1 and up, got `4` (string)".
     writeFileSync(userConfig, [
       // The mirror aborts (error 23) when a dozen large tarballs are requested at once.
-      'network-concurrency=4',
-      'fetch-retries=6',
+      // The mirror aborts (error 23) on a burst of the largest tarballs, and a single aborted
+      // request fails the whole seed, so two at a time trades a few minutes for a green build.
+      'network-concurrency=2',
+      'fetch-retries=10',
       '',
     ].join('\n'))
     const child = spawn(NODE, [
