@@ -232,6 +232,16 @@ const DESKTOP_PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-
 const BUNDLED_PLUGIN_NAMES = new Set(bundledPluginPackageNames())
 
 /**
+ * Versions pinned because the transitive range resolves to a version that cannot be installed.
+ *
+ * `@openmaic/generation@0.3.29` asks for `@openmaic/dsl@^0.13.0`, which was never published (0.12.0
+ * is the newest release), so a fresh seed install fails with `ERR_PNPM_NO_MATCHING_VERSION` even
+ * though the plugin itself is fine. The pin holds the version this release was tested with; drop it
+ * once upstream publishes 0.13 or republishes generation against 0.12.
+ */
+const TRANSITIVE_PINS: Readonly<Record<string, string>> = { '@openmaic/generation': '0.3.28' }
+
+/**
  * Refuse a mutation aimed at a plugin this release ships.
  *
  * A bundled plugin's version is pinned by three things that must agree — the
@@ -1555,7 +1565,7 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
   writeJson(join(seedDir, 'package.json'), manifest)
   writeFileSync(
     join(seedDir, 'pnpm-workspace.yaml'),
-    workspaceFile(desktopCorePackageOverrides(packageSet)),
+    workspaceFile({ ...desktopCorePackageOverrides(packageSet), ...TRANSITIVE_PINS }),
     { mode: 0o600 },
   )
   writeJson(join(seedDir, 'desktop-release.json'), release)
