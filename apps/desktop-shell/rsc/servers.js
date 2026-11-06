@@ -134,7 +134,12 @@ function renderHosts(hosts, currentHostId) {
       if (current) return
       use.disabled = true
       post(`/hosts/${encodeURIComponent(host.host_id)}/use`, {})
-        .then(() => say(`已切换到「${label}」`, 'ok'))
+        .then(() => {
+          say(`已切换到「${label}」`, 'ok')
+          // Repaint from the server's answer rather than from this click: the switch also moves the
+          // window, and this list has to agree with where the window now is.
+          return refresh()
+        })
         .catch((error) => say(`切换失败：${error.message}`, 'error'))
         .finally(() => { use.disabled = false })
     }, { disabled: current, className: current ? 'current' : '' })
