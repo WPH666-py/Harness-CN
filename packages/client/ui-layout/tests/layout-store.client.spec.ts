@@ -23,6 +23,7 @@ describe('createLayoutStore', () => {
         rightbarInstant: false,
         workstation: false,
         ide: false,
+        serverMode: false,
         workstationWidth: null,
       },
     })

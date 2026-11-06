@@ -25,6 +25,12 @@ export const REMOTE_TIMEOUT_MS = 4_000
 /** The remote tree hangs from the filesystem root; a server has no Session cwd. */
 export const REMOTE_ROOT = '/'
 
+/**
+ * Announced on `window` by the remote panel when it activates a host from its own list — the
+ * same gesture as 「使用」 in the host manager, and the frame opens the server page for it.
+ */
+export const HOST_USED_EVENT = 'dsh-remote-host-used'
+
 /** Directory listings stop here, the route's own ceiling. */
 const REMOTE_LIST_LIMIT = 1000
 
@@ -377,6 +383,22 @@ export const REMOTE_FILES: RemoteFiles = {
   read: readRemoteFile,
   write: writeRemoteFile,
   search: searchRemoteFiles,
+}
+
+/** Where the plugin keeps the current host: leaving it is one POST. */
+const LEAVE_ROUTE = '/remote-ssh-ops/v1/hosts/current/leave'
+
+/**
+ * Make this machine current again.
+ *
+ * The server manager owns the choice, so leaving is a request to it rather than
+ * a local flag: once it answers, the next poll reports no current host and the
+ * seat goes back to this machine's workspace.
+ * @returns the failure to show, or null when the seat is back on this machine.
+ */
+export async function leaveRemoteHost(): Promise<RemoteFailure | null> {
+  const outcome = await request(LEAVE_ROUTE, { method: 'POST' })
+  return outcome.ok ? null : outcome.failure
 }
 
 /** A snapshot source over {@link RemoteHostsView}: a hook source and a handle. */

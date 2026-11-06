@@ -67,4 +67,16 @@ describe('WorkstationToggle', () => {
     fireEvent.click(button)
     expect(cycled).toHaveBeenCalledTimes(1)
   })
+
+  it('steps aside entirely on a server page, where the stages do not apply', () => {
+    const props = {
+      t: makeTranslate(zh),
+      cyclePresentation: vi.fn(),
+      useWorkstation: <S,>(select: (state: boolean) => S): S => select(true),
+      useIde: <S,>(select: (state: boolean) => S): S => select(false),
+      useServerMode: <S,>(select: (state: boolean) => S): S => select(true),
+    } as unknown as WorkstationToggleProps
+    const { container } = render(<WorkstationToggle {...props} />)
+    expect(container.querySelector('[data-workstation-toggle]')).toBeNull()
+  })
 })

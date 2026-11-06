@@ -53,6 +53,8 @@ async function bench(collapsed = false, track?: TrackProductEvent) {
     setWorkstation: vi.fn(),
     toggleWorkstation: vi.fn(),
     cyclePresentation: vi.fn(),
+    serverMode: createSnapshotStore(false),
+    setServerMode: vi.fn(),
   } satisfies ILayout
   await runtime.mount({
     inject: ['slots'],

@@ -33,10 +33,11 @@ export type PanelActions = BoundActions<ReturnType<typeof createLayoutStore>>
  * in a spec — still constructs a controller; every other transition it exposes
  * is required.
  */
-export type LayoutPanelActions = Omit<PanelActions, 'setWorkstation' | 'setWorkstationWidth' | 'setIde'> & {
+export type LayoutPanelActions = Omit<PanelActions, 'setWorkstation' | 'setWorkstationWidth' | 'setIde' | 'setServerMode'> & {
   setWorkstation?: (on: boolean) => void
   setWorkstationWidth?: (px: number) => void
   setIde?: (on: boolean) => void
+  setServerMode?: (on: boolean) => void
 }
 
 /** The presentation source a controller reports when its host has none. */
@@ -99,6 +100,18 @@ export interface ILayout {
    */
   cyclePresentation(): void
   /**
+   * Whether the seat is showing a remote server instead of this machine. The
+   * workstation plugin publishes the answer; every other surface reads it to
+   * tell the two modes apart.
+   */
+  readonly serverMode: HostObservable<boolean>
+  /**
+   * Publish which machine the seat is showing.
+   * @param on - true once a remote host is current, false when the seat is back
+   *   on this machine.
+   */
+  setServerMode(on: boolean): void
+  /**
    * Put the frame into one named stage whatever it is showing now.
    *
    * Optional: it is a convenience over the setters, and a controller assembled by
@@ -140,6 +153,7 @@ export class LayoutController implements ILayout {
     readonly workstation: HostObservable<boolean> = HIDDEN_WORKSTATION,
     readonly workstationWidth: HostObservable<number | null> = UNSAVED_WORKSTATION_WIDTH,
     readonly ide: HostObservable<boolean> = HIDDEN_WORKSTATION,
+    readonly serverMode: HostObservable<boolean> = HIDDEN_WORKSTATION,
   ) {}
 
   /** Select a global panel or return to the Conversation. */
@@ -205,6 +219,11 @@ export class LayoutController implements ILayout {
       return
     }
     this.panels.setIde?.(true)
+  }
+
+  /** Publish which machine the seat is showing. */
+  setServerMode(on: boolean): void {
+    this.panels.setServerMode?.(on)
   }
 
   /**

@@ -63,6 +63,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * nothing, and a reader falls back to a constant.
      */
     useIde?: UseWorkstation
+    /**
+     * Subscribe to whether the seat is showing a remote server. Optional for the
+     * same reason as {@link useWorkstation}: a surface that cannot tell reads
+     * the local desktop, which is the mode every host has.
+     */
+    useServerMode?: UseWorkstation
   }
 
   interface SlotMap {
@@ -210,9 +216,13 @@ export function apply(ctx: ClientContext): void {
       getSnapshot: () => instance.getSnapshot().layoutInfo.ide,
       subscribe: listener => instance.subscribe(listener),
     }
+    const serverMode: HostObservable<boolean> = {
+      getSnapshot: () => instance.getSnapshot().layoutInfo.serverMode,
+      subscribe: listener => instance.subscribe(listener),
+    }
     const layout = new LayoutController(instance.actions, id =>
-      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo, workstation, workstationWidth, ide)
-    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: layout.panelInfo, workstation: layout.workstation, ide: layout.ide } })
+      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo, workstation, workstationWidth, ide, serverMode)
+    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: layout.panelInfo, workstation: layout.workstation, ide: layout.ide, serverMode: layout.serverMode } })
     const disposeService = ctx.reflect.provide('layout', layout)
     const disposeRegistration = ctx.slots.register({
       name: 'root',

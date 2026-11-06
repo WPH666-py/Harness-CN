@@ -184,6 +184,43 @@ const EDITS = [
 `,
   },
   {
+    file: WORKSPACE,
+    from: `      setMenuOpen(false)
+      setError(null)
+    }
+`,
+    to: `      setMenuOpen(false)
+      setError(null)
+      // Picking a host here must mean the same thing as 「使用」 in the host manager: the
+      // shell's frame follows the current host, so without this the list only moved this
+      // panel while the rest of the window stayed on whatever was current before.
+      void fetch('/remote-ssh-ops/v1/hosts/' + encodeURIComponent(nextHostId) + '/use', { method: 'POST' })
+        .then((response) => {
+          if (!response.ok) throw new Error('切换服务器失败（' + response.status + '）')
+          window.dispatchEvent(new CustomEvent('dsh-remote-host-used', { detail: { hostId: nextHostId } }))
+        })
+        .catch((err) => setError(err.message))
+    }
+`,
+  },
+  {
+    file: WORKSPACE,
+    from: `      button({ className: 'remoteWorkspace__launcherButton', title: '选择服务器并打开远程开发工作台', 'aria-label': '选择服务器并打开远程开发工作台', 'aria-expanded': menuOpen, onClick: () => setMenuOpen((current) => !current) }, '服务器'),
+`,
+    to: `      button({ className: 'remoteWorkspace__launcherButton', title: '选择服务器并打开远程开发工作台', 'aria-label': '选择服务器并打开远程开发工作台', 'aria-expanded': menuOpen, onClick: () => setMenuOpen((current) => !current) }, currentHost === null ? '服务器' : (currentHost.display_name || currentHost.host_id)),
+`,
+  },
+  {
+    file: WORKSPACE,
+    from: `    const selectHost = (nextHostId) => {
+`,
+    to: `    // The host this window is working on, as the Host reports it: the button names it so the
+    // header says which machine the workbench is showing without opening the menu.
+    const currentHost = hosts.find((item) => item.current === true) || null
+    const selectHost = (nextHostId) => {
+`,
+  },
+  {
     file: STYLES,
     from: '  .remoteWorkspace__treeMessage { color: var(--ro-dim); font-size: 12px; padding: 8px; }\n',
     to: '  .remoteWorkspace__treeMessage { color: var(--ro-dim); font-size: 12px; padding: 8px; }\n'
@@ -212,13 +249,16 @@ function readSource(file) {
 export function patchRemoteSshWorkspaceTree(nodeModules) {
   const workspace = join(nodeModules, WORKSPACE)
   if (!existsSync(workspace)) return []
-  if (readFileSync(workspace, 'utf8').includes(MARKER)) return []
   const sources = new Map()
   const changed = []
   for (const edit of EDITS) {
     const file = join(nodeModules, edit.file)
     if (!sources.has(file)) sources.set(file, readSource(file))
     const source = sources.get(file)
+    // A tree patched by an earlier release already carries some of these edits, and the list
+    // grows over time; treating "replacement already present" as done lets a profile pick up the
+    // edits added since without demanding a fresh seed.
+    if (source.text.includes(edit.to)) continue
     const occurrences = source.text.split(edit.from).length - 1
     if (occurrences !== 1) {
       throw new Error(`${file}: expected exactly one anchor for the workspace tree patch, found ${String(occurrences)}`)
@@ -226,6 +266,7 @@ export function patchRemoteSshWorkspaceTree(nodeModules) {
     source.text = source.text.replace(edit.from, edit.to)
     if (!changed.includes(file)) changed.push(file)
   }
+  if (changed.length === 0) return []
   for (const [file, source] of sources) {
     writeFileSync(file, source.crlf ? source.text.replaceAll('\n', '\r\n') : source.text, 'utf8')
   }

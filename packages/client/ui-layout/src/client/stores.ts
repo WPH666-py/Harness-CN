@@ -65,6 +65,14 @@ type LayoutInfo = {
    */
   ide: boolean
   /**
+   * Whether the seat is showing a remote server rather than this machine. The
+   * workstation plugin owns the poll that answers it and publishes the answer
+   * here so every other surface can tell the two modes apart: on a server the
+   * frame controls that only make sense for the local desktop step aside, and
+   * the header keeps nothing but the way back.
+   */
+  serverMode: boolean
+  /**
    * Saved workstation seat width in px, or null while the ratio default
    * applies. The seat is the frame's first column in that layout; a drag
    * replaces the default and the preference survives leaving the layout.
@@ -87,6 +95,7 @@ type LayoutActions = {
   closeRightbar: (draft: LayoutState) => void
   setWorkstation: (draft: LayoutState, on: boolean) => void
   setIde: (draft: LayoutState, on: boolean) => void
+  setServerMode: (draft: LayoutState, on: boolean) => void
   setWorkstationWidth: (draft: LayoutState, px: number) => void
 }
 
@@ -114,6 +123,7 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         rightbarInstant: false,
         workstation: false,
         ide: false,
+        serverMode: false,
         workstationWidth: null,
       },
     }),
@@ -187,6 +197,12 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         const next = on && d.layoutInfo.workstation
         if (d.layoutInfo.ide === next) return
         d.layoutInfo.ide = next
+      },
+      // Which machine the seat is showing. It is a fact about the remote poll,
+      // not a preference: nothing restores it, and no track changes with it.
+      setServerMode: (d, on: boolean) => {
+        if (d.layoutInfo.serverMode === on) return
+        d.layoutInfo.serverMode = on
       },
       // The seat's own drag width. Its neighbouring tracks are not laid out in
       // this presentation, so the centre's protected minimum is the only

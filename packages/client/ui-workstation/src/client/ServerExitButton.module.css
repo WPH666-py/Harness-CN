@@ -1,0 +1,27 @@
+/* The server page's only control: a quiet outlined chip, so it reads as a way
+   out rather than as an action on the files beside it. */
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 2px 10px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 5px;
+  background: var(--dsw-alias-bg-elevated);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.trigger:hover {
+  border-color: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.trigger:focus-visible {
+  outline: 2px solid var(--dsw-alias-focus-ring, var(--dsw-alias-label-secondary));
+  outline-offset: 1px;
+}

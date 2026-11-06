@@ -230,6 +230,21 @@ function patchInstalledRemoteSshSearch(root: string): Promise<void> {
   })
 }
 
+function patchInstalledRemoteSshLeave(root: string): Promise<void> {
+  // The plugin can make a host current but cannot unset it, so the server page would have no way back
+  // to this machine short of removing the connection. Patching the installed Host source here puts the
+  // route in the archived store, and every profile materialized from this seed carries it. See
+  // scripts/patch-remote-ssh-leave.mjs.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-remote-ssh-leave.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: remote-ssh leave patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
 function patchInstalledRemoteSshDataLock(root: string): Promise<void> {
   // The plugin treats a recorded PID in `.controller.lock` as a live owner. A crashed Host's number
   // can belong to an unrelated process by the next start, which then throws DATA_DIR_IN_USE on every
@@ -562,6 +577,7 @@ async function main(): Promise<void> {
     // by a later regeneration.
     await patchInstalledRemoteSshWorkspaceTree(installedModules)
     await patchInstalledRemoteSshSearch(installedModules)
+    await patchInstalledRemoteSshLeave(installedModules)
     await patchInstalledRemoteSshEmptyState(installedModules)
     await patchInstalledRemoteSshDataLock(installedModules)
     await patchInstalledQqbotConsole(installedModules)

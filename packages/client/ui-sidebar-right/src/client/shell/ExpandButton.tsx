@@ -30,12 +30,16 @@ export type ExpandButtonProps =
   & InjectFace<{ hooks: { shortcuts: HostObservable<readonly ShortcutCatalogEntry[]> } }>
 
 /** The expand control while the panel is collapsed; nothing while it is shown. */
-export function ExpandButton({ sessionId, useStore, actions, t, useShortcuts }: ExpandButtonProps): ReactNode {
+export function ExpandButton({ sessionId, useStore, actions, t, useShortcuts, useServerMode }: ExpandButtonProps): ReactNode {
   // A session with no surface yet is collapsed: the panel seat materializes the
   // surface on its own mount, and until then there is nothing expanded.
   const shortcut = useShortcuts(entries => entries.find(entry => entry.id === 'sidebar.right.toggle'))
   const expanded = useStore(state => state.bySession[sessionId]?.layout.expanded ?? false)
-  if (expanded) return null
+  // The right column belongs to this machine's workspace. On a server page the
+  // header keeps only the way back, so this control steps aside.
+  const useServer = useServerMode ?? (selector => selector(false))
+  const onServer = useServer(state => state)
+  if (expanded || onServer) return null
   return (
     <Tooltip label={t('chrome.expand')} shortcutKeys={shortcut?.keys} side="bottom" delayMs={500}>
       <Button

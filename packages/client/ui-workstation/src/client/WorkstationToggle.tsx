@@ -34,11 +34,16 @@ const useHiddenWorkstation: UseWorkstation = selector => selector(false)
  * @returns the header button.
  */
 export function WorkstationToggle(props: WorkstationToggleProps): ReactNode {
-  const { t, cyclePresentation, useWorkstation, useIde } = props
+  const { t, cyclePresentation, useWorkstation, useIde, useServerMode } = props
   const useMode = useWorkstation ?? useHiddenWorkstation
   const useStage = useIde ?? useHiddenWorkstation
+  const useServer = useServerMode ?? useHiddenWorkstation
   const active = useMode(state => state)
   const fullscreen = useStage(state => state)
+  const onServer = useServer(state => state)
+  // The three stages describe this machine's desktop: on a server the frame is
+  // the server's IDE page, and nothing here would mean anything there.
+  if (onServer) return null
   // The label names the stage the click reaches, so the button never asks the
   // reader to infer what comes next from a mode they cannot see yet.
   const label = fullscreen ? t('toggle.exit') : active ? t('toggle.fullscreen') : t('toggle.mode')

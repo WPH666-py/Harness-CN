@@ -41,7 +41,12 @@ export interface FilesToggleInjected {
  * @param props - runtime slot currency, the toggle, and the namespace translator.
  * @returns the icon button.
  */
-export function FilesToggleAction({ toggleWorkspaceFiles, t }: FilesToggleActionProps): ReactNode {
+export function FilesToggleAction({ toggleWorkspaceFiles, t, useServerMode }: FilesToggleActionProps): ReactNode {
+  // The right column's tree is this machine's workspace; a server page keeps its
+  // files in the seat, so the header offers no second tree there.
+  const useServer = useServerMode ?? (selector => selector(false))
+  const onServer = useServer(state => state)
+  if (onServer) return null
   const label = t('toggle.label')
   return (
     <button
