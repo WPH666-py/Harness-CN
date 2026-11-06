@@ -91,6 +91,16 @@ interface DesktopStoreSeedRecord {
  */
 const PROFILE_COMPATIBILITY_FILE = 'compatibility.json'
 
+/**
+ * The profile's own patch layer, `dsh-app-boot`'s `PROFILE_PATCH_FILENAME`.
+ *
+ * The seed ships it holding the preview-notice acknowledgement, because a client reads that
+ * acknowledgement out of the profile's settings and a fresh profile would otherwise open the notice
+ * on its first launch. Every later settings write appends to this same file, so the transaction has
+ * to carry the user's copy forward instead of recreating the seeded one.
+ */
+const PROFILE_PATCH_FILE = 'cordis.patch.yml'
+
 /** Files the package transaction copies between active and staging projects. */
 const DESKTOP_PROJECT_FILES = [
   'package.json',
@@ -100,6 +110,7 @@ const DESKTOP_PROJECT_FILES = [
   DESKTOP_SEED_IDENTITY_FILE,
   DESKTOP_PACKAGE_SET_FILE,
   PROFILE_COMPATIBILITY_FILE,
+  PROFILE_PATCH_FILE,
 ] as const
 
 /** Manifest that marks a directory as a desktop project; the move-aside takes it with the tree. */

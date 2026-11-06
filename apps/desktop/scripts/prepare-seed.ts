@@ -185,6 +185,22 @@ function patchInstalledWorkBuddyModelNull(root: string): Promise<void> {
   })
 }
 
+function patchInstalledWorkBuddyUpdateNotice(root: string): Promise<void> {
+  // The WorkBuddy client checks its own releases inside its mount effect, so every launch paints a
+  // 「发现新版本」 card over the workspace. Patching the installed bytes here moves that check behind
+  // the plugin card's own button and puts the result in the archived store, so every profile later
+  // materialized from this seed carries it. See scripts/patch-workbuddy-update-notice.mjs for why
+  // this cannot be a setting: the shipped Config schema has no update field.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-workbuddy-update-notice.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: workbuddy update-notice patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
 function patchInstalledRemoteSshEmptyState(root: string): Promise<void> {
   // The remote-SSH picker renders an empty host list with the text `正在加载服务器…`, so a machine with
   // no server looks like one that is still connecting. Patching the installed bytes here puts the
@@ -211,6 +227,21 @@ function patchInstalledRemoteSshWorkspaceTree(root: string): Promise<void> {
     child.once('close', (code, signal) => {
       if (code === 0) resolvePromise()
       else reject(new Error(`desktop seed: remote-ssh workspace tree patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
+function patchInstalledRemoteSshAutoOpen(root: string): Promise<void> {
+  // Picking a server from the session header's server menu opens the workspace dialog itself, which
+  // covers the conversation until the user closes it. Patching the installed source and regenerating
+  // the bundle it serves keeps that dialog closed, and every profile materialized from this seed
+  // carries it. See scripts/patch-remote-ssh-auto-open.mjs.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-remote-ssh-auto-open.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: remote-ssh auto-open patch exited with ${String(code ?? signal)}`))
     })
   })
 }
@@ -385,6 +416,15 @@ async function verifyRemoteSshEmptyState(root: string): Promise<void> {
   }
   module.verifyRemoteSshEmptyState(root)
 }
+/** Require the closed workspace panel in a tree the seed produced. */
+async function verifyRemoteSshAutoOpen(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-remote-ssh-auto-open.mjs')
+  const module = await import(pathToFileURL(script).href) as { verifyRemoteSshAutoOpen?: (tree: string) => string[] }
+  if (typeof module.verifyRemoteSshAutoOpen !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyRemoteSshAutoOpen`)
+  }
+  module.verifyRemoteSshAutoOpen(root)
+}
 /** Read the engine's classification table back out of a tree the seed produced. */
 /** Require the WorkBuddy model-selection guard in a tree the seed produced. */
 async function verifyWorkBuddyModelNull(root: string): Promise<void> {
@@ -394,6 +434,16 @@ async function verifyWorkBuddyModelNull(root: string): Promise<void> {
     throw new Error(`desktop seed: ${script} does not export verifyWorkBuddyModelNull`)
   }
   module.verifyWorkBuddyModelNull(root)
+}
+
+/** Require the WorkBuddy update-notice suppression in a tree the seed produced. */
+async function verifyWorkBuddyUpdateNotice(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-workbuddy-update-notice.mjs')
+  const module = await import(pathToFileURL(script).href) as { verifyWorkBuddyUpdateNotice?: (tree: string) => void }
+  if (typeof module.verifyWorkBuddyUpdateNotice !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyWorkBuddyUpdateNotice`)
+  }
+  module.verifyWorkBuddyUpdateNotice(root)
 }
 
 /** Require the voice-mode focus patch in a tree the seed produced. */
@@ -498,7 +548,9 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     if (installedIn(materialized, 'dsh-wechat')) await verifyWeChatIdentityPatch(materialized)
     // A store archive that missed the guard would crash the conversation input on first render.
     if (installedIn(materialized, 'dsh-workbuddy-connect')) await verifyWorkBuddyModelNull(materialized)
+    if (installedIn(materialized, 'dsh-workbuddy-connect')) await verifyWorkBuddyUpdateNotice(materialized)
     if (installedIn(materialized, 'dsh-remote-ssh-ops')) await verifyRemoteSshEmptyState(materialized)
+    if (installedIn(materialized, 'dsh-remote-ssh-ops')) await verifyRemoteSshAutoOpen(materialized)
     // A store archive that missed it would log a rejected focus claim on every start.
     if (installedIn(materialized, 'dsh-voice-mode')) await verifyVoiceModeFocus(materialized)
     // A store archive that missed this one would show the dock as two broken fragments.
@@ -547,6 +599,32 @@ async function applySeedPluginPatches(seedRoot: string): Promise<void> {
   console.log(`desktop seed: plugins removed [${result.removed.join(', ')}], added [${result.added.join(', ')}]`)
 }
 
+/**
+ * Acknowledge the preview notice in the seed's profile patch layer.
+ *
+ * A fresh profile has no patch layer, so the client's welcome step reads no acknowledged version
+ * and opens 「预览版说明」 on the first launch of every install. The seed now ships that layer, and
+ * `copyMetadata` copies it into each materialized profile.
+ */
+async function seedWelcomeAcknowledgement(seedRoot: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'seed-welcome-ack.mjs')
+  const module = await import(pathToFileURL(script).href) as { seedWelcomeAcknowledgement?: (root: string) => string }
+  if (typeof module.seedWelcomeAcknowledgement !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export seedWelcomeAcknowledgement`)
+  }
+  console.log(`desktop seed: ${module.seedWelcomeAcknowledgement(seedRoot)}`)
+}
+
+/** Require the preview-notice acknowledgement in a seed tree the build produced. */
+async function verifyWelcomeAcknowledgement(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'seed-welcome-ack.mjs')
+  const module = await import(pathToFileURL(script).href) as { verifyWelcomeAcknowledgement?: (tree: string) => void }
+  if (typeof module.verifyWelcomeAcknowledgement !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyWelcomeAcknowledgement`)
+  }
+  module.verifyWelcomeAcknowledgement(root)
+}
+
 async function main(): Promise<void> {
   rmSync(SEED_OUTPUT_ROOT, { recursive: true, force: true })
   rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
@@ -572,10 +650,14 @@ async function main(): Promise<void> {
     await patchInstalledWeChatSessions(installedModules)
     await patchInstalledWeChatIdentity(installedModules)
     await patchInstalledWorkBuddyModelNull(installedModules)
+    await patchInstalledWorkBuddyUpdateNotice(installedModules)
     // Regenerates `client.js` from the patched explorer source, so it runs before the empty-state
     // patch: that one edits the source and the generated bundle by text, and would be overwritten
     // by a later regeneration.
     await patchInstalledRemoteSshWorkspaceTree(installedModules)
+    // Regenerates the same bundle again: this patch also rewrites the source, and the text-editing
+    // patches below have to see the final generated file.
+    await patchInstalledRemoteSshAutoOpen(installedModules)
     await patchInstalledRemoteSshSearch(installedModules)
     await patchInstalledRemoteSshLeave(installedModules)
     await patchInstalledRemoteSshEmptyState(installedModules)
@@ -586,6 +668,7 @@ async function main(): Promise<void> {
     await patchInstalledCourseAssistantPanel(installedModules)
     await patchInstalledReaGuideTheme(installedModules)
     await applySeedPluginPatches(SEED_ROOT)
+    await seedWelcomeAcknowledgement(SEED_ROOT)
     // A verified plugin whose peer range names an older DSH line is skipped by the compatibility
     // gate unless the profile grants it an exact-version exemption, and a skipped bundle takes its
     // routes and panels with it. Writing the grant here is what makes a fresh install mount it.
@@ -635,6 +718,7 @@ async function main(): Promise<void> {
     const records = inventory(SEED_ROOT).filter(entry => entry.path !== 'integrity.json')
     writeFileSync(join(SEED_ROOT, 'integrity.json'), `${JSON.stringify({ schemaVersion: 2, files: records }, undefined, 2)}\n`)
     cpSync(SEED_ROOT, SEED_OUTPUT_ROOT, { recursive: true })
+    await verifyWelcomeAcknowledgement(SEED_OUTPUT_ROOT)
   } finally {
     rmSync(SEED_ROOT, { recursive: true, force: true })
   }

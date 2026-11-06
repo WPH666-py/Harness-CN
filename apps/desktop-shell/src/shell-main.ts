@@ -25,6 +25,7 @@ import { provisionReaBundle } from '../../desktop/src/rea-bundle.ts'
 import { PRODUCT_NAME, productMessages } from '../../desktop/src/product.ts'
 import { adoptRuntimePath, provisionPythonExtras, provisionRuntimes } from '../../desktop/src/runtimes.ts'
 import { adoptHarnessCnHome, describeHomeMigration, HARNESS_CN_HOME_ENV, migrateLegacyHarnessHome } from '../../desktop/src/product-home.ts'
+import { recordFirstLaunch } from '../../desktop/src/first-launch.ts'
 import {
   describeDesktopRecovery,
   DesktopProjectManager,
@@ -378,6 +379,7 @@ async function main(): Promise<void> {
   const logShell = (text: string): void => { logs.line('shell', text) }
   const home = adoptHome(logShell, options.resourceDir)
   const paths = resolveDesktopPaths(home)
+  const firstLaunch = recordFirstLaunch(paths.root, options.version, logShell)
 
   // Adopt the provisioned interpreter before any Host process exists: plugins inherit the
   // environment of the Host that loads them, and `dsh-chem-ui` shells out to `python3` by name.
@@ -887,14 +889,19 @@ async function main(): Promise<void> {
     if (process.env.HARNESS_CN_MONO === '1') await bootMono()
     else await bootDsh()
 
-    const timer = setTimeout(() => { void updates.check(false) }, AUTOMATIC_UPDATE_CHECK_MS)
-    timer.unref()
-    // A window that stays open for days outlives the release channel it checked at launch, so the
-    // check repeats. A skipped version stays skipped here as it does on the first check; only the
-    // menu's own check overrides that, because only that one is the user asking.
-    const recheckPeriod = setInterval(() => { void updates.check(false) }, UPDATE_RECHECK_MS)
-    recheckPeriod.unref()
-    recheck = recheckPeriod
+    // A first launch has no installation to update yet and every window it opens is the one the
+    // person just asked for, so it never runs the automatic path; the menu's own check below is
+    // the only thing that reaches the release channel. Later launches keep both timers.
+    if (!firstLaunch) {
+      const timer = setTimeout(() => { void updates.check(false) }, AUTOMATIC_UPDATE_CHECK_MS)
+      timer.unref()
+      // A window that stays open for days outlives the release channel it checked at launch, so the
+      // check repeats. A skipped version stays skipped here as it does on the first check; only the
+      // menu's own check overrides that, because only that one is the user asking.
+      const recheckPeriod = setInterval(() => { void updates.check(false) }, UPDATE_RECHECK_MS)
+      recheckPeriod.unref()
+      recheck = recheckPeriod
+    }
 
     // The Rust shell's menu bar has no other way to reach an operation that only this process
     // can perform, so the commands it raises arrive here, where the release channel lives. A
