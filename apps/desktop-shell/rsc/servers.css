@@ -195,6 +195,13 @@ button:disabled {
   color: #b91c1c;
 }
 
+/* The row the window is showing: its switch is the one action that would do nothing. */
+.rowActions button.current {
+  border-color: #bfdbfe;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
 .rowActions button.danger:hover {
   background: #fbe3e3;
   border-color: #e5a3a3;

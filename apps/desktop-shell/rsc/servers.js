@@ -39,35 +39,87 @@ function say(text, tone) {
   status.dataset.tone = tone ?? ''
 }
 
-/** Render the paired hosts, one row each with refresh, use and delete side by side. */
-function renderHosts(hosts) {
+/**
+ * Build one row of the list.
+ *
+ * @param label - the name shown on the left.
+ * @param meta - the status line under it.
+ * @param buttons - the controls on the right, in the order they should read.
+ * @returns the list item.
+ */
+function buildRow(label, meta, buttons) {
+  const item = document.createElement('li')
+
+  const name = document.createElement('span')
+  name.className = 'name'
+  name.textContent = label
+
+  const state = document.createElement('span')
+  state.className = 'meta'
+  state.textContent = meta
+
+  const spacer = document.createElement('span')
+  spacer.className = 'spacer'
+
+  const row = document.createElement('div')
+  row.className = 'rowActions'
+  row.append(...buttons)
+
+  item.append(name, state, spacer, row)
+  return item
+}
+
+/** A plain button with its label and click handler. */
+function actionButton(text, onClick, extra) {
+  const control = document.createElement('button')
+  control.type = 'button'
+  control.textContent = text
+  if (extra !== undefined) Object.assign(control, extra)
+  control.addEventListener('click', onClick)
+  return control
+}
+
+/**
+ * Render the local target and the paired hosts, one row each.
+ *
+ * The local desk is a row of its own rather than the absence of a host: it is where the
+ * conversation, the three presentation stages, and this machine's files live, and switching back to
+ * it is an action, not a side effect of deleting something.
+ *
+ * @param hosts - the paired hosts, as the list route returned them.
+ * @param currentHostId - the host the window is showing, or null while it shows this machine.
+ */
+function renderHosts(hosts, currentHostId) {
   const list = el('hosts')
   list.textContent = ''
+  const onLocal = currentHostId === null
+
+  const refreshLocal = actionButton('刷新', () => {
+    say('本机 127.0.0.1：可工作', 'ok')
+    void refresh()
+  })
+  const switchLocal = actionButton(onLocal ? '正在使用' : '切换', () => {
+    if (onLocal) return
+    switchLocal.disabled = true
+    post('/hosts/current/leave', {})
+      .then(() => {
+        say('已切换到「本机 127.0.0.1」', 'ok')
+        return refresh()
+      })
+      .catch((error) => say(`切换失败：${error.message}`, 'error'))
+      .finally(() => { switchLocal.disabled = false })
+  }, { disabled: onLocal, className: onLocal ? 'current' : '' })
+  list.appendChild(buildRow('本机 127.0.0.1', onLocal ? '正在使用 · 本地工作区' : '本地工作区', [refreshLocal, switchLocal]))
+
   for (const host of hosts) {
     const label = host.display_name || host.host_id
-    const item = document.createElement('li')
-
-    const name = document.createElement('span')
-    name.className = 'name'
-    name.textContent = label
-
-    const meta = document.createElement('span')
-    meta.className = 'meta'
     const latency = Number(host.latency_ms)
     const parts = [host.status || (host.online ? 'online' : 'offline')]
     if (host.latency_ms != null && Number.isFinite(latency)) parts.push(`${Math.round(latency)} ms`)
-    meta.textContent = parts.join(' · ')
+    const current = host.host_id === currentHostId
+    if (current) parts.push('正在使用')
 
-    const spacer = document.createElement('span')
-    spacer.className = 'spacer'
-
-    const row = document.createElement('div')
-    row.className = 'rowActions'
-
-    const probe = document.createElement('button')
-    probe.type = 'button'
-    probe.textContent = '刷新'
-    probe.addEventListener('click', () => {
+    const probe = actionButton('刷新', () => {
       probe.disabled = true
       get(`/hosts/${encodeURIComponent(host.host_id)}/health`)
         .then((health) => {
@@ -78,16 +130,14 @@ function renderHosts(hosts) {
         .finally(() => { probe.disabled = false })
     })
 
-    const use = document.createElement('button')
-    use.type = 'button'
-    use.textContent = '使用'
-    use.addEventListener('click', () => {
+    const use = actionButton(current ? '正在使用' : '切换', () => {
+      if (current) return
       use.disabled = true
       post(`/hosts/${encodeURIComponent(host.host_id)}/use`, {})
         .then(() => say(`已切换到「${label}」`, 'ok'))
         .catch((error) => say(`切换失败：${error.message}`, 'error'))
         .finally(() => { use.disabled = false })
-    })
+    }, { disabled: current, className: current ? 'current' : '' })
 
     // Deleting is two clicks in the same button: a confirmation rendered in the page survives a
     // WebView that drops script dialogs, and a second click is the same gesture a dialog would ask
@@ -121,20 +171,20 @@ function renderHosts(hosts) {
         })
     })
 
-    row.append(probe, use, remove)
-    item.append(name, meta, spacer, row)
-    list.appendChild(item)
+    list.appendChild(buildRow(label, parts.join(' · '), [probe, use, remove]))
   }
+
   el('hostsNote').textContent = hosts.length === 0
     ? '还没有添加任何服务器。用下面的表单添加一台，主界面顶部的「服务器」按钮就会出现它。'
-    : `共 ${hosts.length} 台`
+    : `共 ${hosts.length} 台服务器，外加本机`
 }
 
 /** Load the list and paint it. */
 async function refresh() {
   try {
     const result = await get('/hosts')
-    renderHosts(Array.isArray(result.hosts) ? result.hosts : [])
+    const current = typeof result.current_host_id === 'string' ? result.current_host_id : null
+    renderHosts(Array.isArray(result.hosts) ? result.hosts : [], current)
   } catch (error) {
     el('hostsNote').textContent = `读取服务器列表失败：${error.message}`
   }
