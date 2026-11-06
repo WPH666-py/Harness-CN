@@ -89,13 +89,16 @@ export function apply(ctx: ClientContext): void {
   // the seat's 回到对话 pill is the way back. Only a *change* of host moves the
   // frame, so someone who returns to the conversation is not dragged out again by
   // a host that merely stays current.
+  // A server page is the seat layout, not the full-screen one: the header it carries is the
+  // only place the way out lives, and the full-screen stage collapses that header with the
+  // conversation.
   ctx.effect(() => {
     let previous = hosts.getSnapshot().currentHostId
     ctx.layout.setServerMode(previous !== null)
     return hosts.subscribe(() => {
       const current = hosts.getSnapshot().currentHostId
       ctx.layout.setServerMode(current !== null)
-      if (current !== null && current !== previous) ctx.layout.setStage?.('ide')
+      if (current !== null && current !== previous) ctx.layout.setStage?.('workstation')
       previous = current
     })
   }, 'ui-workstation: follow the current host')
@@ -105,7 +108,7 @@ export function apply(ctx: ClientContext): void {
   // already the current one, which the observable above deliberately ignores.
   ctx.effect(() => {
     if (typeof window === 'undefined') return () => {}
-    const open = (): void => { ctx.layout.setStage?.('ide') }
+    const open = (): void => { ctx.layout.setStage?.('workstation') }
     window.addEventListener(HOST_USED_EVENT, open)
     return () => { window.removeEventListener(HOST_USED_EVENT, open) }
   }, 'ui-workstation: open the server page when a host is picked')
