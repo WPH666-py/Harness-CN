@@ -133,6 +133,10 @@ export function apply(ctx: ClientContext): void {
         // header that carries the stage control — away, so the seat owns the
         // way back and lands on the conversation layout in one click.
         leaveIde: () => { ctx.layout.setWorkstation(false) },
+        // The server page's header control is mounted by the Conversation, so a
+        // fresh session — which draws no header — would have no way off the
+        // host; the seat carries the same control.
+        leaveServer: () => { void leaveRemoteHost() },
         ...face(actions),
       }),
     },

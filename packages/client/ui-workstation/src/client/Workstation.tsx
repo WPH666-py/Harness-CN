@@ -33,8 +33,8 @@ export type WorkstationProps =
  */
 export function Workstation(props: WorkstationProps): ReactNode {
   const {
-    t: translate, useStore, useSessions, useSessionId, useRemoteHosts, useIde, leaveIde, actions,
-    openDirectory, toggleDirectory, openFile, focusTab, editTab, saveTab, closeTab, searchFiles,
+    t: translate, useStore, useSessions, useSessionId, useRemoteHosts, useIde, leaveIde, leaveServer,
+    actions, openDirectory, toggleDirectory, openFile, focusTab, editTab, saveTab, closeTab, searchFiles,
   } = props
   const sessionId = useSessionId(state => state)
   // The listing endpoint takes a directory path and has no spelling for "the
@@ -98,6 +98,19 @@ export function Workstation(props: WorkstationProps): ReactNode {
             onClick={() => { leaveIde() }}
           >
             {translate('toggle.exit')}
+          </button>
+        )
+        : null}
+      {remote
+        ? (
+          <button
+            type="button"
+            className={css.leaveStage}
+            data-server-leave
+            title={translate('server.leave')}
+            onClick={() => { leaveServer() }}
+          >
+            {translate('server.leave')}
           </button>
         )
         : null}

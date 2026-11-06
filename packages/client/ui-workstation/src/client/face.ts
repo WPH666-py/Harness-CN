@@ -115,6 +115,14 @@ export interface WorkstationInject extends WorkstationFace {
    * is where the stage control lives, so the seat needs its own way out.
    */
   readonly leaveIde: () => void
+  /**
+   * Stop working on the current host, so the seat shows this machine again.
+   *
+   * A server page keeps its own header control, but that header only exists
+   * while a Conversation with content is open; a fresh session would otherwise
+   * strand the user on the server.
+   */
+  readonly leaveServer: () => void
   /** The Session on screen, as a hook source for the components. */
   readonly hooks: {
     readonly sessionId: {
