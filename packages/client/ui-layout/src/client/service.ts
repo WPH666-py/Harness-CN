@@ -214,11 +214,10 @@ export class LayoutController implements ILayout {
       this.panels.setWorkstation?.(true)
       return
     }
-    if (this.ide.getSnapshot()) {
-      this.panels.setWorkstation?.(false)
-      return
-    }
-    this.panels.setIde?.(true)
+    // The seat has two stages, so the toggle swaps between them. Leaving the
+    // seat altogether is the header corner's gesture: this control's label
+    // never has to describe a destination outside the seat.
+    this.panels.setIde?.(!this.ide.getSnapshot())
   }
 
   /** Publish which machine the seat is showing. */

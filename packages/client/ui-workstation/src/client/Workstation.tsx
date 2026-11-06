@@ -94,10 +94,10 @@ export function Workstation(props: WorkstationProps): ReactNode {
             type="button"
             className={css.leaveStage}
             data-workstation-leave
-            title={translate('toggle.disable')}
+            title={translate('toggle.workbenchAction')}
             onClick={() => { leaveIde() }}
           >
-            {translate('toggle.exit')}
+            {translate('toggle.workbench')}
           </button>
         )
         : null}

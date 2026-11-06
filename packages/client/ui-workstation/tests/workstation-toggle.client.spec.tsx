@@ -28,7 +28,7 @@ function mount(stage: Stage): { cycled: ReturnType<typeof vi.fn>; button: HTMLEl
     useIde: <S,>(select: (state: boolean) => S): S => select(stage === 'ide'),
   } as unknown as WorkstationToggleProps
   const { getByRole } = render(<WorkstationToggle {...props} />)
-  const action = stage === 'ide' ? zh['toggle.disable'] : stage === 'workstation' ? zh['toggle.stage'] : zh['toggle.enable']
+  const action = stage === 'ide' ? zh['toggle.workbenchAction'] : stage === 'workstation' ? zh['toggle.stage'] : zh['toggle.enable']
   return { cycled, button: getByRole('button', { name: action }) }
 }
 
@@ -54,12 +54,19 @@ describe('WorkstationToggle', () => {
     expect(button.getAttribute('data-stage')).toBe('workstation')
   })
 
-  it('offers the way back to the conversation from the full-screen stage', () => {
+  it('offers the workbench again from the full-screen stage', () => {
     const { button } = mount('ide')
-    expect(button.textContent).toBe(zh['toggle.exit'])
-    expect(button.getAttribute('aria-label')).toBe(zh['toggle.disable'])
+    expect(button.textContent).toBe(zh['toggle.workbench'])
+    expect(button.getAttribute('aria-label')).toBe(zh['toggle.workbenchAction'])
     expect(button.getAttribute('aria-pressed')).toBe('true')
     expect(button.getAttribute('data-stage')).toBe('ide')
+  })
+
+  it('swaps the seat between its two stages, one click each', () => {
+    const { cycled, button } = mount('workstation')
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(cycled).toHaveBeenCalledTimes(2)
   })
 
   it('advances one stage per click', () => {

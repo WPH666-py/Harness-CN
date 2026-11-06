@@ -35,11 +35,13 @@ function hookOf<T>(inst: { subscribe: (fn: () => void) => () => void; getSnapsho
 }
 
 /** Mount the button over its real store and an empty shortcut catalog. */
-function mountButton(shortcuts: readonly ShortcutCatalogEntry[] = []) {
+function mountButton(shortcuts: readonly ShortcutCatalogEntry[] = [], inSeat = false) {
   const instance = createSidebarRightStore(() => ({ kind: 'guide', title: 'Start' })).create()
   const props: ExpandButtonProps = {
     ...standard,
     useShortcuts: <T,>(selector: (entries: readonly ShortcutCatalogEntry[]) => T): T => selector(shortcuts),
+    // The seat's own stage hook: a plain selector over a fixed answer.
+    useWorkstation: <S,>(selector: (state: boolean) => S): S => selector(inSeat),
     sessionId: SESSION,
     useStore: hookOf(instance),
     actions: instance.actions,
@@ -80,6 +82,24 @@ describe('ExpandButton', () => {
     expect(control()).toBeNull()
     act(() => { instance.actions.setExpanded(SESSION, false) })
     expect(control()).not.toBeNull()
+    cleanup()
+  })
+
+  it('asks to leave the seat instead of opening a hidden column while the seat is laid out', () => {
+    const asked: string[] = []
+    const listen = (event: Event): void => { asked.push(event.type) }
+    window.addEventListener('dsh-leave-seat', listen)
+    const { instance, view, control } = mountButton([], true)
+    const button = control()
+    if (button === null) throw new Error('expected the corner control inside the seat')
+    expect(button.getAttribute('aria-label')).toBe('chrome.leaveSeatAria')
+    expect(button.hasAttribute('data-leave-seat')).toBe(true)
+    fireEvent.click(button)
+    window.removeEventListener('dsh-leave-seat', listen)
+    expect(asked).toEqual(['dsh-leave-seat'])
+    // The column's own store is untouched: this click was not about the panel.
+    expect(instance.getSnapshot().bySession[SESSION]).toBeUndefined()
+    expect(view.container.querySelector('[data-sidebar-right-expand]')).not.toBeNull()
     cleanup()
   })
 })

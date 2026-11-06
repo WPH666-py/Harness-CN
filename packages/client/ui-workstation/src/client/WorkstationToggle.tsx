@@ -1,12 +1,12 @@
 /**
- * The Conversation-header control that walks the frame through its three
- * presentations: the conversation layout, the workstation layout (tree, editor
- * and the Conversation side by side), and the full-screen IDE stage (the tree
- * and the editor alone).
+ * The Conversation-header control that switches the seat between its two
+ * presentations: the workstation (tree, editor and the Conversation side by
+ * side) and the full-screen IDE stage (the tree and the editor alone).
  *
- * One click advances one stage and the button says where the click goes: the
- * label names the stage it leads to, and the pressed state reports whether the
- * frame has left the conversation at all.
+ * The three-column desk is not one of the stages this button reaches: leaving
+ * the seat entirely is the header corner's own gesture, so that the button's
+ * label never has to describe a third destination. One click swaps the stage
+ * and the label names the one the click leads to.
  */
 import type { ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -15,7 +15,7 @@ import css from './WorkstationToggle.module.css'
 
 /** The one gesture the header control performs. */
 export interface WorkstationToggleInjected {
-  /** Advance the frame one presentation stage. */
+  /** Swap the seat between the workbench and the full-screen stage. */
   readonly cyclePresentation: () => void
 }
 
@@ -41,13 +41,13 @@ export function WorkstationToggle(props: WorkstationToggleProps): ReactNode {
   const active = useMode(state => state)
   const fullscreen = useStage(state => state)
   const onServer = useServer(state => state)
-  // The three stages describe this machine's desktop: on a server the frame is
-  // the server's IDE page, and nothing here would mean anything there.
+  // The two stages describe this machine's desktop: on a server the frame is the
+  // server's IDE page, and nothing here would mean anything there.
   if (onServer) return null
   // The label names the stage the click reaches, so the button never asks the
   // reader to infer what comes next from a mode they cannot see yet.
-  const label = fullscreen ? t('toggle.exit') : active ? t('toggle.fullscreen') : t('toggle.mode')
-  const action = fullscreen ? t('toggle.disable') : active ? t('toggle.stage') : t('toggle.enable')
+  const label = fullscreen ? t('toggle.workbench') : active ? t('toggle.fullscreen') : t('toggle.mode')
+  const action = fullscreen ? t('toggle.workbenchAction') : active ? t('toggle.stage') : t('toggle.enable')
   return (
     <button
       type="button"
