@@ -150,7 +150,7 @@ export function apply(ctx: ClientContext): void {
     name: 'conversation.session.header.utilities',
     id: 'workstation',
     locale: NS,
-    inject: (): WorkstationToggleInjected => ({ cyclePresentation: () => { ctx.layout.cyclePresentation() } }),
+    inject: (): WorkstationToggleInjected => ({ present: (presentation) => { ctx.layout.present?.(presentation) } }),
   }, WorkstationToggle)), 'ui-workstation: header toggle')
 
   // The header's one server-page control. It shares the row with the toggle, and

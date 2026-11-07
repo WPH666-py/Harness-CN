@@ -1,11 +1,10 @@
 /**
- * The workstation toggle: what it says at each of the three stages, whether it
- * reports them, and that one click is one gesture.
+ * The presentation menu: which arrangement it names, what it offers from there,
+ * and that choosing one calls the frame once.
  *
- * The component reads the presentation through the frame's standard
- * `useWorkstation` and `useIde` hooks, so the spec supplies them as plain
- * selectors over fixed values — the same shape the renderer's provideRoot
- * contribution has.
+ * The component reads the frame through the standard `useWorkstation`, `useIde`
+ * and `useDrawer` hooks, so the spec supplies them as plain selectors over fixed
+ * values — the same shape the renderer's provideRoot contribution has.
  */
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -15,72 +14,93 @@ import { zh } from '../src/client/locales.ts'
 import { WorkstationToggle } from '../src/client/WorkstationToggle.tsx'
 import type { WorkstationToggleProps } from '../src/client/WorkstationToggle.tsx'
 
-/** The three presentations the button walks through. */
-type Stage = 'conversation' | 'workstation' | 'ide'
+/** One of the three arrangements the frame can show. */
+type Presentation = 'desk' | 'ide-three' | 'ide-full'
 
-/** Mount the toggle with the stage it should report and the gesture it should call. */
-function mount(stage: Stage): { cycled: ReturnType<typeof vi.fn>; button: HTMLElement } {
-  const cycled = vi.fn()
+/** Mount the menu as if the frame showed `current`, and collect the gesture. */
+function mount(current: Presentation): {
+  present: ReturnType<typeof vi.fn>
+  trigger: HTMLElement
+  container: HTMLElement
+} {
+  const present = vi.fn()
+  const seat = current !== 'desk'
   const props = {
     t: makeTranslate(zh),
-    cyclePresentation: cycled,
-    useWorkstation: <S,>(select: (state: boolean) => S): S => select(stage !== 'conversation'),
-    useIde: <S,>(select: (state: boolean) => S): S => select(stage === 'ide'),
+    present,
+    useWorkstation: <S,>(select: (state: boolean) => S): S => select(seat),
+    useIde: <S,>(select: (state: boolean) => S): S => select(seat),
+    useDrawer: <S,>(select: (state: boolean) => S): S => select(current === 'ide-three'),
   } as unknown as WorkstationToggleProps
-  const { getByRole } = render(<WorkstationToggle {...props} />)
-  const action = stage === 'ide' ? zh['toggle.workbenchAction'] : stage === 'workstation' ? zh['toggle.stage'] : zh['toggle.enable']
-  return { cycled, button: getByRole('button', { name: action }) }
+  const { container } = render(<WorkstationToggle {...props} />)
+  const trigger = container.querySelector<HTMLElement>('[data-workstation-toggle]')
+  if (trigger === null) throw new Error('the presentation menu has no trigger')
+  return { present, trigger, container }
+}
+
+/** The menu items currently offered. */
+function itemsOf(container: HTMLElement): HTMLElement[] {
+  return [...container.querySelectorAll<HTMLElement>('[data-presentation]')]
 }
 
 afterEach(cleanup)
 
 describe('WorkstationToggle', () => {
-  it('leads with the seat layout name from the conversation and names the stage it reaches', () => {
-    const { button } = mount('conversation')
-    expect(button.textContent).toBe(zh['toggle.mode'])
-    expect(zh['toggle.mode']).toBe('IDE/工作站')
-    expect(button.getAttribute('aria-label')).toBe(zh['toggle.enable'])
-    expect(button.getAttribute('aria-pressed')).toBe('false')
-    expect(button.getAttribute('data-stage')).toBe('conversation')
+  it('names the arrangement the frame is in', () => {
+    expect(mount('desk').trigger.textContent).toContain(zh['present.desk'])
+    expect(mount('ide-three').trigger.textContent).toContain(zh['present.ideThree'])
+    expect(mount('ide-full').trigger.textContent).toContain(zh['present.ideFull'])
   })
 
-  it('keeps its own name once the seat is laid out, and names the stage it reaches', () => {
-    const { button } = mount('workstation')
-    expect(button.textContent).toBe(zh['toggle.mode'])
-    expect(button.getAttribute('aria-label')).toBe(zh['toggle.stage'])
-    expect(button.getAttribute('title')).toBe(zh['toggle.stage'])
-    expect(button.getAttribute('aria-pressed')).toBe('true')
-    expect(button.hasAttribute('data-active')).toBe(true)
-    expect(button.getAttribute('data-stage')).toBe('workstation')
+  it('reports the arrangement it names', () => {
+    expect(mount('desk').trigger.getAttribute('data-stage')).toBe('desk')
+    expect(mount('ide-three').trigger.getAttribute('data-stage')).toBe('ide-three')
+    expect(mount('ide-full').trigger.getAttribute('data-stage')).toBe('ide-full')
   })
 
-  it('keeps its own name on the full-screen stage too, and offers the workbench back', () => {
-    const { button } = mount('ide')
-    expect(button.textContent).toBe(zh['toggle.mode'])
-    expect(button.getAttribute('aria-label')).toBe(zh['toggle.workbenchAction'])
-    expect(button.getAttribute('aria-pressed')).toBe('true')
-    expect(button.getAttribute('data-stage')).toBe('ide')
+  it('stays closed until asked', () => {
+    const { container } = mount('desk')
+    expect(itemsOf(container)).toHaveLength(0)
+    expect(container.querySelector('[data-presentation-menu]')).toBeNull()
   })
 
-  it('swaps the seat between its two stages, one click each', () => {
-    const { cycled, button } = mount('workstation')
-    fireEvent.click(button)
-    fireEvent.click(button)
-    expect(cycled).toHaveBeenCalledTimes(2)
+  it('offers the two arrangements it is not showing, from the desk', () => {
+    const { container, trigger } = mount('desk')
+    fireEvent.click(trigger)
+    expect(itemsOf(container).map(item => item.getAttribute('data-presentation')))
+      .toEqual(['ide-three', 'ide-full'])
   })
 
-  it('advances one stage per click', () => {
-    const { cycled, button } = mount('conversation')
-    fireEvent.click(button)
-    expect(cycled).toHaveBeenCalledTimes(1)
+  it('offers the two arrangements it is not showing, from the three-column IDE', () => {
+    const { container, trigger } = mount('ide-three')
+    fireEvent.click(trigger)
+    expect(itemsOf(container).map(item => item.getAttribute('data-presentation')))
+      .toEqual(['desk', 'ide-full'])
   })
 
-  it('steps aside entirely on a server page, where the stages do not apply', () => {
+  it('offers the two arrangements it is not showing, from the full-screen IDE', () => {
+    const { container, trigger } = mount('ide-full')
+    fireEvent.click(trigger)
+    expect(itemsOf(container).map(item => item.getAttribute('data-presentation')))
+      .toEqual(['desk', 'ide-three'])
+  })
+
+  it('goes straight to the chosen arrangement and closes', () => {
+    const { container, trigger, present } = mount('ide-full')
+    fireEvent.click(trigger)
+    fireEvent.click(itemsOf(container)[0] as HTMLElement)
+    expect(present).toHaveBeenCalledTimes(1)
+    expect(present).toHaveBeenCalledWith('desk')
+    expect(itemsOf(container)).toHaveLength(0)
+  })
+
+  it('steps aside entirely on a server page, where the arrangements do not apply', () => {
     const props = {
       t: makeTranslate(zh),
-      cyclePresentation: vi.fn(),
+      present: vi.fn(),
       useWorkstation: <S,>(select: (state: boolean) => S): S => select(true),
-      useIde: <S,>(select: (state: boolean) => S): S => select(false),
+      useIde: <S,>(select: (state: boolean) => S): S => select(true),
+      useDrawer: <S,>(select: (state: boolean) => S): S => select(false),
       useServerMode: <S,>(select: (state: boolean) => S): S => select(true),
     } as unknown as WorkstationToggleProps
     const { container } = render(<WorkstationToggle {...props} />)

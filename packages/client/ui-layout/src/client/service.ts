@@ -16,6 +16,15 @@ import type { createLayoutStore } from './stores.ts'
 /** The three ways the frame can present its columns. */
 export type PresentationStage = 'conversation' | 'workstation' | 'ide'
 
+/**
+ * The three arrangements the header's presentation menu names.
+ *
+ * `desk` is the plain conversation layout; `ide-three` and `ide-full` are the
+ * full-screen stage with the Conversation in a drawer and without it. They are
+ * named after what the user sees rather than after the two flags they set.
+ */
+export type Presentation = 'desk' | 'ide-three' | 'ide-full'
+
 export type MainPanelId = Branded<'MainPanelId'>
 
 /** Root-scoped navigation state exposed to panel-aware components. */
@@ -130,6 +139,13 @@ export interface ILayout {
    * @param stage - the stage to show.
    */
   setStage?(stage: PresentationStage): void
+  /**
+   * Put the frame into one named presentation: the desk, or the IDE stage with
+   * the Conversation inside a drawer or out of it. Optional so a controller
+   * assembled by an older caller still satisfies this face.
+   * @param presentation - the arrangement to show.
+   */
+  present?(presentation: Presentation): void
   /**
    * Saved workstation seat width in px, or null while the ratio default applies.
    *
@@ -254,6 +270,27 @@ export class LayoutController implements ILayout {
     const seat = stage !== 'conversation'
     if (this.workstation.getSnapshot() !== seat) this.panels.setWorkstation?.(seat)
     this.panels.setIde?.(stage === 'ide')
+  }
+
+  /**
+   * Put the frame into one of the three presentations the header's menu offers.
+   *
+   * The desk is the layout without the seat; the two IDE presentations are the
+   * full-screen stage with the Conversation pulled in as a drawer and pushed back
+   * out. Asking for one is therefore a pair of decisions — whether the seat is
+   * on and whether its drawer is — and this is the one place that keeps them
+   * consistent: the seat opens before the IDE flag, because the store refuses the
+   * full-screen stage while the seat is off.
+   * @param presentation - the arrangement to show.
+   */
+  present(presentation: Presentation): void {
+    if (presentation === 'desk') {
+      this.setStage('conversation')
+      return
+    }
+    if (!this.workstation.getSnapshot()) this.panels.setWorkstation?.(true)
+    this.panels.setIde?.(true)
+    this.panels.setDrawer?.(presentation === 'ide-three')
   }
 
   /** Save the workstation seat's drag width. */
