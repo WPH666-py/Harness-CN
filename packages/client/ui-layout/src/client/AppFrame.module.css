@@ -99,11 +99,28 @@
 
 /* The IDE stage: the seat takes the frame and the editor is the whole surface.
    The centre column stays mounted so a conversation keeps its draft, scroll
-   position and in-flight run; it is simply not laid out. The seat's width is
-   no longer pinned either, so dragging is what the splitter between tree and
-   editor still does — the seat's own resize handle goes with the centre. */
+   position and in-flight run; it slides in as a drawer instead of holding a
+   column, so the code keeps every pixel it had and the transcript is one
+   gesture away. The seat's width is no longer pinned either, so dragging is
+   what the splitter between tree and editor still does. */
 .frame[data-workstation-ide] .centerCol {
-  display: none;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  width: min(520px, 46vw);
+  /* A blue-tinted surface separates the drawer from the code underneath without
+     taking the contrast of the text or the composer away. */
+  background: linear-gradient(180deg, #eaf2ff 0%, #f7fafe 100%);
+  border-left: 1px solid var(--dsw-alias-border-l2);
+  box-shadow: -18px 0 40px rgba(15, 23, 42, 0.18);
+  transform: translateX(101%);
+  transition: transform 180ms ease;
+}
+
+.frame[data-workstation-ide][data-ai-drawer] .centerCol {
+  transform: none;
 }
 
 .frame[data-workstation-ide] .handle {

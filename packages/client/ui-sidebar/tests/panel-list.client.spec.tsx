@@ -50,6 +50,8 @@ async function bench(collapsed = false, track?: TrackProductEvent) {
     closeRightbar: vi.fn(),
     workstation: createSnapshotStore(false),
     ide: createSnapshotStore(false),
+    drawer: createSnapshotStore(false),
+    toggleDrawer: vi.fn(),
     setWorkstation: vi.fn(),
     toggleWorkstation: vi.fn(),
     cyclePresentation: vi.fn(),

@@ -43,15 +43,31 @@ export function ExpandButton({ sessionId, useStore, actions, t, useShortcuts, us
   // surface on its own mount, and until then there is nothing expanded.
   const shortcut = useShortcuts(entries => entries.find(entry => entry.id === 'sidebar.right.toggle'))
   const expanded = useStore(state => state.bySession[sessionId]?.layout.expanded ?? false)
-  // The right column belongs to this machine's workspace. On a server page the
-  // header keeps only the way back, and inside the seat the tree and the editor
-  // already carry the reading surface — a panel toggle there would open a column
-  // nobody can see — so this control steps aside in both.
+  // The right column belongs to this machine's workspace, so on a server page
+  // this control steps aside. Inside the seat it keeps its one useful meaning —
+  // the way back to the desk, where every column is visible again — because the
+  // seat carries the tree and the editor and a panel toggle there would open a
+  // column nobody can see.
   const useServer = useServerMode ?? (selector => selector(false))
   const onServer = useServer(state => state)
   const useSeat = useWorkstation ?? (selector => selector(false))
   const inSeat = useSeat(state => state)
-  if (expanded || onServer || inSeat) return null
+  if (expanded || onServer) return null
+  if (inSeat) {
+    return (
+      <Tooltip label={t('chrome.leaveSeat')} side="bottom" delayMs={500}>
+        <Button
+          size="sm"
+          className={css.button}
+          aria-label={t('chrome.leaveSeatAria')}
+          data-leave-seat
+          onClick={() => { window.dispatchEvent(new CustomEvent(LEAVE_SEAT_EVENT)) }}
+        >
+          <IconPanelLeftOutlineRegular className={css.icon} />
+        </Button>
+      </Tooltip>
+    )
+  }
   return (
     <Tooltip label={t('chrome.expand')} shortcutKeys={shortcut?.keys} side="bottom" delayMs={500}>
       <Button

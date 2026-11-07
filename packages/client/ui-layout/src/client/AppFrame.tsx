@@ -291,6 +291,7 @@ export function AppFrame({
       data-sidebar-collapsed={sidebarCollapsed || undefined}
       data-workstation={workstation || undefined}
       data-workstation-ide={ide || undefined}
+      data-ai-drawer={(ide && layoutInfo.drawer) || undefined}
       data-rightbar-collapsed={cols.rightbar === 0 || undefined}
       data-rightbar-fullscreen={layoutInfo.rightbarFullscreen || undefined}
       data-rightbar-instant={layoutInfo.rightbarInstant || undefined}

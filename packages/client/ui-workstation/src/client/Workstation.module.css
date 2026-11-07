@@ -71,6 +71,42 @@
   gap: 6px;
 }
 
+/* The Conversation's drawer handle: a blue tab on the frame's right edge, the way a workbench
+   drawer hangs off the side of the page. It rides just outside the drawer while that is closed and
+   moves with its leading edge once it is open, so one gesture pulls the transcript in and the same
+   tab pushes it back out. */
+.aiHandle {
+  position: absolute;
+  top: 42%;
+  right: 0;
+  z-index: 6;
+  padding: 14px 5px;
+  border: none;
+  border-radius: 8px 0 0 8px;
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  box-shadow: -2px 0 10px rgba(37, 99, 235, 0.35);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  line-height: 1;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  cursor: pointer;
+  opacity: 0.92;
+  transition: right 180ms ease, opacity 120ms ease;
+}
+
+.aiHandle:hover {
+  opacity: 1;
+}
+
+/* Open: the tab sits at the drawer's leading edge rather than under it. The width matches the
+   drawer's own rule in the frame's stylesheet. */
+.root[data-ai-open] .aiHandle {
+  right: min(520px, 46vw);
+}
+
 .seatControls .leaveStage {
   position: static;
 }

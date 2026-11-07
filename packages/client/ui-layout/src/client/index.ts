@@ -64,6 +64,11 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      */
     useIde?: UseWorkstation
     /**
+     * Subscribe to whether the Conversation is pulled over the IDE stage as a
+     * drawer. Optional for the same reason as {@link useIde}.
+     */
+    useDrawer?: UseWorkstation
+    /**
      * Subscribe to whether the seat is showing a remote server. Optional for the
      * same reason as {@link useWorkstation}: a surface that cannot tell reads
      * the local desktop, which is the mode every host has.
@@ -220,9 +225,13 @@ export function apply(ctx: ClientContext): void {
       getSnapshot: () => instance.getSnapshot().layoutInfo.serverMode,
       subscribe: listener => instance.subscribe(listener),
     }
+    const drawer: HostObservable<boolean> = {
+      getSnapshot: () => instance.getSnapshot().layoutInfo.drawer,
+      subscribe: listener => instance.subscribe(listener),
+    }
     const layout = new LayoutController(instance.actions, id =>
-      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo, workstation, workstationWidth, ide, serverMode)
-    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: layout.panelInfo, workstation: layout.workstation, ide: layout.ide, serverMode: layout.serverMode } })
+      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo, workstation, workstationWidth, ide, drawer, serverMode)
+    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: layout.panelInfo, workstation: layout.workstation, ide: layout.ide, drawer: layout.drawer, serverMode: layout.serverMode } })
     const disposeService = ctx.reflect.provide('layout', layout)
     const disposeRegistration = ctx.slots.register({
       name: 'root',

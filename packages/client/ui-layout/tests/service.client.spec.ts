@@ -15,6 +15,7 @@ function fakePanels(): PanelActions {
     closeRightbar: vi.fn(),
     setWorkstation: vi.fn(),
     setIde: vi.fn(),
+    setDrawer: vi.fn(),
     setServerMode: vi.fn(),
     setWorkstationWidth: vi.fn(),
   }

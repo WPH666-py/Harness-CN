@@ -33,10 +33,11 @@ export type PanelActions = BoundActions<ReturnType<typeof createLayoutStore>>
  * in a spec — still constructs a controller; every other transition it exposes
  * is required.
  */
-export type LayoutPanelActions = Omit<PanelActions, 'setWorkstation' | 'setWorkstationWidth' | 'setIde' | 'setServerMode'> & {
+export type LayoutPanelActions = Omit<PanelActions, 'setWorkstation' | 'setWorkstationWidth' | 'setIde' | 'setDrawer' | 'setServerMode'> & {
   setWorkstation?: (on: boolean) => void
   setWorkstationWidth?: (px: number) => void
   setIde?: (on: boolean) => void
+  setDrawer?: (on: boolean) => void
   setServerMode?: (on: boolean) => void
 }
 
@@ -95,6 +96,11 @@ export interface ILayout {
    */
   readonly ide: HostObservable<boolean>
   /**
+   * Whether the Conversation slides over the IDE stage as a drawer. Only ever
+   * true while {@link ide} is, and it goes away with that stage.
+   */
+  readonly drawer: HostObservable<boolean>
+  /**
    * Advance the frame one stage: the conversation layout, then the workstation
    * layout, then the IDE stage, and back to the conversation.
    */
@@ -111,6 +117,11 @@ export interface ILayout {
    *   on this machine.
    */
   setServerMode(on: boolean): void
+  /**
+   * Pull the Conversation in over the IDE stage, or push it back out. Does
+   * nothing outside that stage, where the Conversation has a column of its own.
+   */
+  toggleDrawer(): void
   /**
    * Put the frame into one named stage whatever it is showing now.
    *
@@ -153,6 +164,7 @@ export class LayoutController implements ILayout {
     readonly workstation: HostObservable<boolean> = HIDDEN_WORKSTATION,
     readonly workstationWidth: HostObservable<number | null> = UNSAVED_WORKSTATION_WIDTH,
     readonly ide: HostObservable<boolean> = HIDDEN_WORKSTATION,
+    readonly drawer: HostObservable<boolean> = HIDDEN_WORKSTATION,
     readonly serverMode: HostObservable<boolean> = HIDDEN_WORKSTATION,
   ) {}
 
@@ -223,6 +235,11 @@ export class LayoutController implements ILayout {
   /** Publish which machine the seat is showing. */
   setServerMode(on: boolean): void {
     this.panels.setServerMode?.(on)
+  }
+
+  /** Pull the Conversation over the IDE stage, or push it back out. */
+  toggleDrawer(): void {
+    this.panels.setDrawer?.(!this.drawer.getSnapshot())
   }
 
   /**

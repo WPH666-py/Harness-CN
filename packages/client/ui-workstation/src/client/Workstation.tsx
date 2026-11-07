@@ -33,8 +33,7 @@ export type WorkstationProps =
  */
 export function Workstation(props: WorkstationProps): ReactNode {
   const {
-    t: translate, useStore, useSessions, useSessionId, useRemoteHosts, useIde, leaveSeat, toggleAi,
-    leaveServer,
+    t: translate, useStore, useSessions, useSessionId, useRemoteHosts, useIde, useDrawer, toggleAi,
     actions, openDirectory, toggleDirectory, openFile, focusTab, editTab, saveTab, closeTab, searchFiles,
   } = props
   const sessionId = useSessionId(state => state)
@@ -54,6 +53,9 @@ export function Workstation(props: WorkstationProps): ReactNode {
   // A host without the stage reports a constant false, which is also what the
   // conversation layout means here: no stage control, no floating way back.
   const fullscreen = useIde === undefined ? false : useIde(state => state)
+  // The drawer handle only exists in the full-screen stage, and a host without
+  // the stage reports a constant false — which is exactly "no handle".
+  const drawerOpen = useDrawer === undefined ? false : useDrawer(state => state)
 
   // The poller owns "which host is current"; the store owns the tree that host
   // draws. Handing the answer over here keeps the store's write set the only
@@ -67,7 +69,7 @@ export function Workstation(props: WorkstationProps): ReactNode {
     return <div className={css.status} data-workstation-state="no-session">{translate('session.none')}</div>
   }
   return (
-    <div className={css.root} data-workstation-root data-fullscreen={fullscreen || undefined}>
+    <div className={css.root} data-workstation-root data-fullscreen={fullscreen || undefined} data-ai-open={drawerOpen || undefined}>
       <FileTree
         useStore={useStore}
         translate={translate}
@@ -89,40 +91,22 @@ export function Workstation(props: WorkstationProps): ReactNode {
         saveTab={saveTab}
         closeTab={closeTab}
       />
-      {remote
+      {fullscreen
         ? (
           <button
             type="button"
-            className={css.leaveStage}
-            data-server-leave
-            title={translate('server.leave')}
-            onClick={() => { leaveServer() }}
+            className={css.aiHandle}
+            data-ai-handle
+            data-open={drawerOpen || undefined}
+            title={drawerOpen ? translate('ai.hide') : translate('ai.show')}
+            aria-label={drawerOpen ? translate('ai.hide') : translate('ai.show')}
+            aria-expanded={drawerOpen}
+            onClick={() => { toggleAi() }}
           >
-            {translate('server.leave')}
+            {translate('ai.handle')}
           </button>
         )
-        : (
-          <div className={css.seatControls}>
-            <button
-              type="button"
-              className={css.leaveStage}
-              data-ai-toggle
-              title={fullscreen ? translate('ai.show') : translate('ai.hide')}
-              onClick={() => { toggleAi() }}
-            >
-              {fullscreen ? translate('ai.show') : translate('ai.hide')}
-            </button>
-            <button
-              type="button"
-              className={css.leaveStage}
-              data-leave-seat
-              title={translate('desk.leave')}
-              onClick={() => { leaveSeat() }}
-            >
-              {translate('desk.leave')}
-            </button>
-          </div>
-        )}
+        : null}
     </div>
   )
 }

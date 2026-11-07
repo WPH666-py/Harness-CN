@@ -65,6 +65,15 @@ type LayoutInfo = {
    */
   ide: boolean
   /**
+   * Whether the Conversation slides over the IDE stage as a drawer.
+   *
+   * The IDE stage has no column for the Conversation, so that column becomes an
+   * overlay the reader pulls in from the right edge and pushes back out — the
+   * transcript is one gesture away without costing the editor any width. Only
+   * meaningful while {@link ide} is set.
+   */
+  drawer: boolean
+  /**
    * Whether the seat is showing a remote server rather than this machine. The
    * workstation plugin owns the poll that answers it and publishes the answer
    * here so every other surface can tell the two modes apart: on a server the
@@ -95,6 +104,8 @@ type LayoutActions = {
   closeRightbar: (draft: LayoutState) => void
   setWorkstation: (draft: LayoutState, on: boolean) => void
   setIde: (draft: LayoutState, on: boolean) => void
+  /** Open or close the Conversation drawer over the IDE stage. */
+  setDrawer: (draft: LayoutState, on: boolean) => void
   setServerMode: (draft: LayoutState, on: boolean) => void
   setWorkstationWidth: (draft: LayoutState, px: number) => void
 }
@@ -123,6 +134,7 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         rightbarInstant: false,
         workstation: false,
         ide: false,
+        drawer: false,
         serverMode: false,
         workstationWidth: null,
       },
@@ -197,6 +209,14 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         const next = on && d.layoutInfo.workstation
         if (d.layoutInfo.ide === next) return
         d.layoutInfo.ide = next
+        // The drawer belongs to the IDE stage: leaving that stage puts it away, so the next entry
+        // starts from the code alone rather than half-open.
+        if (!next) d.layoutInfo.drawer = false
+      },
+      setDrawer: (d, on: boolean) => {
+        const next = on && d.layoutInfo.ide
+        if (d.layoutInfo.drawer === next) return
+        d.layoutInfo.drawer = next
       },
       // Which machine the seat is showing. It is a fact about the remote poll,
       // not a preference: nothing restores it, and no track changes with it.

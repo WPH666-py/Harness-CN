@@ -133,10 +133,7 @@ export function apply(ctx: ClientContext): void {
         // stage control lives inside that column: the seat owns both gestures so either stage can
         // reach them. Leaving goes all the way to the desk, where every control is visible again.
         leaveSeat: () => { ctx.layout.setStage?.('conversation') },
-        toggleAi: () => {
-          const shown = ctx.layout.ide?.getSnapshot() === true
-          ctx.layout.setStage?.(shown ? 'workstation' : 'ide')
-        },
+        toggleAi: () => { ctx.layout.toggleDrawer() },
         // The server page's header control is mounted by the Conversation, so a
         // fresh session — which draws no header — would have no way off the
         // host; the seat carries the same control.
