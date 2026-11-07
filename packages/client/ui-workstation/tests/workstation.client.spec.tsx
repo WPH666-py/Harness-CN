@@ -767,4 +767,18 @@ describe('Workstation', () => {
     await waitFor(() => { expect(handle.instance.getSnapshot().tabs[0]?.version).toBe('v2') })
     expect(handle.instance.getSnapshot().tabs[0]?.dirty).toBe(false)
   })
+
+  it('carries its own way off a server page that has no session to hang the header on', async () => {
+    const hosts = { currentHostId: HOST, hosts: [{ hostId: HOST, displayName: HOST_NAME }] }
+    const { container, getByText } = mountSeat(null, { hosts })
+    await waitFor(() => { expect(container.querySelector('[data-server-leave]')).toBeTruthy() })
+    expect(getByText('退出服务器页面')).toBeTruthy()
+  })
+
+  it('leaves the exit to the header while a session is open', async () => {
+    const hosts = { currentHostId: HOST, hosts: [{ hostId: HOST, displayName: HOST_NAME }] }
+    const { container } = mountSeat(ROOT, { hosts })
+    await waitFor(() => { expect(container.querySelector('[data-workstation-tree]')).toBeTruthy() })
+    expect(container.querySelector('[data-server-leave]')).toBeNull()
+  })
 })
