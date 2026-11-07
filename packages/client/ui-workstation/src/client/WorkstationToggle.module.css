@@ -57,7 +57,10 @@
   padding: 4px;
   border: 1px solid var(--dsw-alias-border-l3);
   border-radius: 8px;
-  background: var(--dsw-alias-bg-elevated);
+  /* Opaque on purpose: the popup floats over the conversation, and a translucent
+     surface let its text show through between the items. */
+  background: #ffffff;
+  background: var(--dsw-alias-bg-elevated, #ffffff);
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
 }
 

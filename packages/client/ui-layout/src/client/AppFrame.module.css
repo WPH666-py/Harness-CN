@@ -372,3 +372,14 @@
 .overlayLayer > * {
   pointer-events: auto;
 }
+
+/* A phone does not offer the remote-workbench surfaces: the server manager, its
+   launcher and the plugin's own panel are desktop tools, and on a 390px screen
+   they would cover the conversation. */
+@media (max-width: 640px) {
+  :global([class*='remoteWorkspace__launcherButton']),
+  :global([class*='remoteWorkspace__panel']),
+  :global([class*='remoteWorkspace'][role='dialog']) {
+    display: none !important;
+  }
+}
