@@ -86,3 +86,11 @@
   outline: 2px solid var(--dsw-alias-focus-ring, var(--dsw-alias-label-secondary));
   outline-offset: -2px;
 }
+
+/* A phone keeps the desk: the three arrangements are a desktop idea, and the
+   seat layout has no room for a 390px screen. */
+@media (max-width: 640px) {
+  .root {
+    display: none;
+  }
+}
