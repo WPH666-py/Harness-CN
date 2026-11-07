@@ -34,6 +34,7 @@ export type WorkstationProps =
 export function Workstation(props: WorkstationProps): ReactNode {
   const {
     t: translate, useStore, useSessions, useSessionId, useRemoteHosts, useIde, useDrawer, toggleAi,
+    leaveServer,
     actions, openDirectory, toggleDirectory, openFile, focusTab, editTab, saveTab, closeTab, searchFiles,
   } = props
   const sessionId = useSessionId(state => state)
@@ -65,6 +66,11 @@ export function Workstation(props: WorkstationProps): ReactNode {
   }, [actions, remoteHostId, remoteHostName])
 
   const root = remote ? remoteRoot : sessionRoot
+  // The header carries the way off a server page, but the header belongs to an open session: with
+  // no session — a fresh chat, a plugin page — and in the full-screen stage whose drawer is closed,
+  // nothing on screen would say how to get back. Those are the two cases the seat covers itself; the
+  // rest of the time the header's single control is the only one, which is what the desktop wants.
+  const seatExit = remote && (sessionId === undefined || (fullscreen && !drawerOpen))
   if (sessionId === undefined && !remote) {
     return <div className={css.status} data-workstation-state="no-session">{translate('session.none')}</div>
   }
@@ -104,6 +110,20 @@ export function Workstation(props: WorkstationProps): ReactNode {
             onClick={() => { toggleAi() }}
           >
             {translate('ai.handle')}
+          </button>
+        )
+        : null}
+      {seatExit
+        ? (
+          <button
+            type="button"
+            className={css.leaveStage}
+            data-server-leave
+            title={translate('server.leave')}
+            aria-label={translate('server.leave')}
+            onClick={() => { leaveServer() }}
+          >
+            {translate('server.leave')}
           </button>
         )
         : null}
