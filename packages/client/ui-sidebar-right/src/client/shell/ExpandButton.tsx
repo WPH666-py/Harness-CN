@@ -1,15 +1,11 @@
 /**
- * The way back out of a hidden panel, and out of the seat layout.
+ * The way back out of a hidden panel.
  *
  * One button in the conversation header's corner seat. While the panel is
- * collapsed it opens the panel; while the frame is showing the workstation or
- * the IDE it asks to leave that layout for the three-column desk instead,
- * because the seat carries the tree and the editor already and a panel toggle
- * there would open a column the reader cannot see.
- *
- * The leave gesture travels as a window event rather than an injected callback:
- * the seat belongs to another plugin's package, which this one may not import,
- * and the layout listens for the event at its own root.
+ * collapsed it opens the panel; while the frame is showing the workstation, the
+ * IDE, or a server page it renders nothing, because the seat carries the tree and
+ * the editor already and a panel toggle there would open a column the reader
+ * cannot see.
  *
  * It lives in the conversation's own header rather than in the frame's right
  * column so that a collapsed Sidebar costs the conversation nothing — no rail,
@@ -48,31 +44,14 @@ export function ExpandButton({ sessionId, useStore, actions, t, useShortcuts, us
   const shortcut = useShortcuts(entries => entries.find(entry => entry.id === 'sidebar.right.toggle'))
   const expanded = useStore(state => state.bySession[sessionId]?.layout.expanded ?? false)
   // The right column belongs to this machine's workspace. On a server page the
-  // header keeps only the way back, so this control steps aside.
+  // header keeps only the way back, and inside the seat the tree and the editor
+  // already carry the reading surface — a panel toggle there would open a column
+  // nobody can see — so this control steps aside in both.
   const useServer = useServerMode ?? (selector => selector(false))
   const onServer = useServer(state => state)
-  // Inside the seat the corner keeps its place but changes its job: a reader who
-  // wants their navigation back asks for the three-column desk, which is the one
-  // layout the stage button does not offer.
   const useSeat = useWorkstation ?? (selector => selector(false))
   const inSeat = useSeat(state => state)
-  if (expanded || onServer) return null
-  if (inSeat) {
-    return (
-      <Tooltip label={t('chrome.leaveSeat')} side="bottom" delayMs={500}>
-        <Button
-          size="sm"
-          className={css.button}
-          aria-label={t('chrome.leaveSeatAria')}
-          data-sidebar-right-expand
-          data-leave-seat
-          onClick={() => { window.dispatchEvent(new CustomEvent(LEAVE_SEAT_EVENT)) }}
-        >
-          <IconPanelLeftOutlineRegular className={css.icon} />
-        </Button>
-      </Tooltip>
-    )
-  }
+  if (expanded || onServer || inSeat) return null
   return (
     <Tooltip label={t('chrome.expand')} shortcutKeys={shortcut?.keys} side="bottom" delayMs={500}>
       <Button

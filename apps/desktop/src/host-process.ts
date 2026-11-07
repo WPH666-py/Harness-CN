@@ -96,6 +96,17 @@ export class DesktopHostProcess {
   })
   private exitPromise: Promise<void> | undefined
   private stderr = ''
+  private stopping = false
+
+  /**
+   * Called when the Host exits although nothing asked it to.
+   *
+   * The child is the whole workspace: when it dies, every request answers
+   * `dsh desktop host is unavailable` and the window keeps showing that until a Host runs again. The
+   * shell installs a restart here, so a Host that ends on its own — an uncaught exception inside a
+   * plugin, an out-of-memory kill — costs a few seconds instead of the session.
+   */
+  onUnexpectedExit: (() => void) | undefined
 
   /**
    * @param node - absolute bundled upstream Node.js executable.
@@ -208,6 +219,9 @@ export class DesktopHostProcess {
     this.exitPromise = new Promise<void>((resolve) => {
       child.once('exit', (code) => {
         const suffix = this.stderr.trim() === '' ? '' : `: ${this.stderr.trim()}`
+        // A Host that ends without a stop() request took the workspace with it; the shell is told
+        // before the failure is recorded, because it is the only place that can start another one.
+        if (!this.stopping) this.onUnexpectedExit?.()
         if (code !== 0 && code !== null) this.fail(new Error(`dsh desktop host exited with ${String(code)}${suffix}`))
         else this.fail(new Error(`dsh desktop host stopped${suffix}`))
         resolve()
@@ -263,6 +277,7 @@ export class DesktopHostProcess {
   async stop(): Promise<void> {
     const child = this.child
     if (child === undefined) return
+    this.stopping = true
     this.blockedResponses.clear()
     this.responsePipe?.resume()
     if (child.connected) this.send({ type: 'shutdown' })

@@ -33,7 +33,8 @@ export type WorkstationProps =
  */
 export function Workstation(props: WorkstationProps): ReactNode {
   const {
-    t: translate, useStore, useSessions, useSessionId, useRemoteHosts, useIde, leaveIde, leaveServer,
+    t: translate, useStore, useSessions, useSessionId, useRemoteHosts, useIde, leaveSeat, toggleAi,
+    leaveServer,
     actions, openDirectory, toggleDirectory, openFile, focusTab, editTab, saveTab, closeTab, searchFiles,
   } = props
   const sessionId = useSessionId(state => state)
@@ -88,19 +89,6 @@ export function Workstation(props: WorkstationProps): ReactNode {
         saveTab={saveTab}
         closeTab={closeTab}
       />
-      {fullscreen
-        ? (
-          <button
-            type="button"
-            className={css.leaveStage}
-            data-workstation-leave
-            title={translate('toggle.workbenchAction')}
-            onClick={() => { leaveIde() }}
-          >
-            {translate('toggle.workbench')}
-          </button>
-        )
-        : null}
       {remote
         ? (
           <button
@@ -113,7 +101,28 @@ export function Workstation(props: WorkstationProps): ReactNode {
             {translate('server.leave')}
           </button>
         )
-        : null}
+        : (
+          <div className={css.seatControls}>
+            <button
+              type="button"
+              className={css.leaveStage}
+              data-ai-toggle
+              title={fullscreen ? translate('ai.show') : translate('ai.hide')}
+              onClick={() => { toggleAi() }}
+            >
+              {fullscreen ? translate('ai.show') : translate('ai.hide')}
+            </button>
+            <button
+              type="button"
+              className={css.leaveStage}
+              data-leave-seat
+              title={translate('desk.leave')}
+              onClick={() => { leaveSeat() }}
+            >
+              {translate('desk.leave')}
+            </button>
+          </div>
+        )}
     </div>
   )
 }

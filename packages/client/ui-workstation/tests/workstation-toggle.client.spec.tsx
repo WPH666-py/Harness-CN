@@ -44,9 +44,9 @@ describe('WorkstationToggle', () => {
     expect(button.getAttribute('data-stage')).toBe('conversation')
   })
 
-  it('offers the full-screen stage once the seat is laid out', () => {
+  it('keeps its own name once the seat is laid out, and names the stage it reaches', () => {
     const { button } = mount('workstation')
-    expect(button.textContent).toBe(zh['toggle.fullscreen'])
+    expect(button.textContent).toBe(zh['toggle.mode'])
     expect(button.getAttribute('aria-label')).toBe(zh['toggle.stage'])
     expect(button.getAttribute('title')).toBe(zh['toggle.stage'])
     expect(button.getAttribute('aria-pressed')).toBe('true')
@@ -54,9 +54,9 @@ describe('WorkstationToggle', () => {
     expect(button.getAttribute('data-stage')).toBe('workstation')
   })
 
-  it('offers the workbench again from the full-screen stage', () => {
+  it('keeps its own name on the full-screen stage too, and offers the workbench back', () => {
     const { button } = mount('ide')
-    expect(button.textContent).toBe(zh['toggle.workbench'])
+    expect(button.textContent).toBe(zh['toggle.mode'])
     expect(button.getAttribute('aria-label')).toBe(zh['toggle.workbenchAction'])
     expect(button.getAttribute('aria-pressed')).toBe('true')
     expect(button.getAttribute('data-stage')).toBe('ide')

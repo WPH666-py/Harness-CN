@@ -59,3 +59,18 @@
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
 }
+
+/* The seat's own controls: both stages differ only by the Conversation column, and the header that
+   carries the stage control lives inside that column, so these stay here where both can reach them. */
+.seatControls {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  gap: 6px;
+}
+
+.seatControls .leaveStage {
+  position: static;
+}

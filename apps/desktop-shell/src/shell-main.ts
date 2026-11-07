@@ -111,6 +111,18 @@ const API_KEY_FAILURE_MESSAGES = {
 /** Longest this process waits for the backend to stop before it exits regardless. */
 const HOST_STOP_BUDGET_MS = 18_000
 
+/**
+ * How many Hosts this launch may lose to their own exits before the shell stops replacing them.
+ *
+ * One is the common case — a plugin throws where nobody catches, or the Host is killed for memory —
+ * and replacing it costs a few seconds. Two in quick succession usually mean the Host cannot start
+ * at all, and restarting that forever would only fill the log.
+ */
+const CRASH_RESTART_LIMIT = 2
+
+/** Host exits further apart than this start the count again; a day's work is not one crash. */
+const CRASH_RESTART_WINDOW_MS = 10 * 60_000
+
 /** How long the run log is given to flush after the backend is gone. */
 const LOG_FLUSH_BUDGET_MS = 2_000
 
@@ -415,6 +427,10 @@ async function main(): Promise<void> {
   /** Monolith bridge, present only when this launch runs in mono mode. */
   let mono: MonoHostProcess | undefined
   let stopping = false
+  /** Restarts already spent on Hosts that ended on their own, inside the window below. */
+  let crashRestarts = 0
+  /** When the last unexplained Host exit happened. */
+  let lastCrashAt = 0
   /** Whether the running Host has mounted the plugins its launch deferred. */
   let deferredPluginsReady = false
   /** Periodic release-channel re-check, owned here so the stop that ends this process clears it. */
@@ -434,6 +450,24 @@ async function main(): Promise<void> {
   /** Start the Host from one project directory, sharing this process's run log. */
   const startHost = async (projectDir: string): Promise<DesktopHostProcess> => {
     const next = new DesktopHostProcess(options.node, projectDir, undefined, logs, false, compileCacheDir)
+    // A Host that ends on its own leaves every request answering "host is unavailable" — the file
+    // tree, the history, the server list, all of it — until a Host runs again. Restart it in place:
+    // that keeps this window, its port and its cookie, and the page picks the new Host up because the
+    // shell forwards every request to whichever Host is current. Two crashes in a row are reported
+    // and left alone, so a Host that cannot boot does not spin.
+    next.onUnexpectedExit = () => {
+      if (stopping) return
+      const now = Date.now()
+      if (now - lastCrashAt > CRASH_RESTART_WINDOW_MS) crashRestarts = 0
+      lastCrashAt = now
+      if (crashRestarts >= CRASH_RESTART_LIMIT) {
+        logShell('backend exited again; not restarting it until the next launch')
+        return
+      }
+      crashRestarts += 1
+      logShell(`backend exited on its own; restarting it (attempt ${String(crashRestarts)})`)
+      void restartInPlace()
+    }
     // Registered before the handshake, because the Host announces this within seconds of it: a
     // listener attached afterwards would miss the launch it describes.
     deferredPluginsReady = false

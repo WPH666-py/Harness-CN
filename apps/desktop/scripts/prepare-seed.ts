@@ -246,6 +246,22 @@ function patchInstalledRemoteSshAutoOpen(root: string): Promise<void> {
   })
 }
 
+function patchInstalledRemoteSshErrors(root: string): Promise<void> {
+  // The Host attached its ssh failure handler with once(): the first error settled the call, and any
+  // later one arrived with no listener, which Node escalates into an uncaught exception that ends the
+  // whole desktop Host — every request then answers "dsh desktop host is unavailable", the file tree
+  // included. Patching the installed Host source keeps the listener for the life of the connection.
+  // See scripts/patch-remote-ssh-ssh-errors.mjs.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(NODE, [join(APP_ROOT, 'scripts', 'patch-remote-ssh-ssh-errors.mjs'), root], { stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`desktop seed: remote-ssh error patch exited with ${String(code ?? signal)}`))
+    })
+  })
+}
+
 function patchInstalledRemoteSshSearch(root: string): Promise<void> {
   // The plugin can list a directory on a remote host but cannot answer which files on it match a
   // name; the workstation tree's search box needs that answered where the filesystem is. Patching the
@@ -425,6 +441,15 @@ async function verifyRemoteSshAutoOpen(root: string): Promise<void> {
   }
   module.verifyRemoteSshAutoOpen(root)
 }
+/** Require the lasting ssh error listener in a tree the seed produced. */
+async function verifyRemoteSshErrors(root: string): Promise<void> {
+  const script = join(APP_ROOT, 'scripts', 'patch-remote-ssh-ssh-errors.mjs')
+  const module = await import(pathToFileURL(script).href) as { verifyRemoteSshErrors?: (tree: string) => string[] }
+  if (typeof module.verifyRemoteSshErrors !== 'function') {
+    throw new Error(`desktop seed: ${script} does not export verifyRemoteSshErrors`)
+  }
+  module.verifyRemoteSshErrors(root)
+}
 /** Read the engine's classification table back out of a tree the seed produced. */
 /** Require the WorkBuddy model-selection guard in a tree the seed produced. */
 async function verifyWorkBuddyModelNull(root: string): Promise<void> {
@@ -551,6 +576,7 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     if (installedIn(materialized, 'dsh-workbuddy-connect')) await verifyWorkBuddyUpdateNotice(materialized)
     if (installedIn(materialized, 'dsh-remote-ssh-ops')) await verifyRemoteSshEmptyState(materialized)
     if (installedIn(materialized, 'dsh-remote-ssh-ops')) await verifyRemoteSshAutoOpen(materialized)
+    if (installedIn(materialized, 'dsh-remote-ssh-ops')) await verifyRemoteSshErrors(materialized)
     // A store archive that missed it would log a rejected focus claim on every start.
     if (installedIn(materialized, 'dsh-voice-mode')) await verifyVoiceModeFocus(materialized)
     // A store archive that missed this one would show the dock as two broken fragments.
@@ -658,6 +684,7 @@ async function main(): Promise<void> {
     // Regenerates the same bundle again: this patch also rewrites the source, and the text-editing
     // patches below have to see the final generated file.
     await patchInstalledRemoteSshAutoOpen(installedModules)
+    await patchInstalledRemoteSshErrors(installedModules)
     await patchInstalledRemoteSshSearch(installedModules)
     await patchInstalledRemoteSshLeave(installedModules)
     await patchInstalledRemoteSshEmptyState(installedModules)

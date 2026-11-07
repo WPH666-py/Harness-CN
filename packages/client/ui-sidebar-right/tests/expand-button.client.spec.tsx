@@ -85,21 +85,12 @@ describe('ExpandButton', () => {
     cleanup()
   })
 
-  it('asks to leave the seat instead of opening a hidden column while the seat is laid out', () => {
-    const asked: string[] = []
-    const listen = (event: Event): void => { asked.push(event.type) }
-    window.addEventListener('dsh-leave-seat', listen)
+  it('steps aside inside the seat, where a panel toggle would open a column nobody can see', () => {
     const { instance, view, control } = mountButton([], true)
-    const button = control()
-    if (button === null) throw new Error('expected the corner control inside the seat')
-    expect(button.getAttribute('aria-label')).toBe('chrome.leaveSeatAria')
-    expect(button.hasAttribute('data-leave-seat')).toBe(true)
-    fireEvent.click(button)
-    window.removeEventListener('dsh-leave-seat', listen)
-    expect(asked).toEqual(['dsh-leave-seat'])
-    // The column's own store is untouched: this click was not about the panel.
+    expect(control()).toBeNull()
+    // The column's own store is untouched: the panel is neither opened nor closed here.
     expect(instance.getSnapshot().bySession[SESSION]).toBeUndefined()
-    expect(view.container.querySelector('[data-sidebar-right-expand]')).not.toBeNull()
+    expect(view.container.querySelector('[data-sidebar-right-expand]')).toBeNull()
     cleanup()
   })
 })

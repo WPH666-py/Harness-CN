@@ -109,12 +109,20 @@ export interface WorkstationFace {
 /** What `apply` hands the slot as its inject face. */
 export interface WorkstationInject extends WorkstationFace {
   /**
-   * Leave the workstation layout altogether.
+   * Leave the seat and go back to the three-column desk.
    *
-   * The full-screen stage hides the Conversation, and the Conversation header
-   * is where the stage control lives, so the seat needs its own way out.
+   * The full-screen stage hides the Conversation, and the Conversation header is where the stage
+   * control lives, so the seat needs its own way out; the desk layout is the one place where every
+   * control is visible again.
    */
-  readonly leaveIde: () => void
+  readonly leaveSeat: () => void
+  /**
+   * Show or hide the Conversation column beside the editor.
+   *
+   * The two stages of the seat differ by exactly this column, and the header that carries the stage
+   * control is inside it, so the gesture has to live in the seat to be available in both.
+   */
+  readonly toggleAi: () => void
   /**
    * Stop working on the current host, so the seat shows this machine again.
    *

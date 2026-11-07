@@ -44,9 +44,10 @@ export function WorkstationToggle(props: WorkstationToggleProps): ReactNode {
   // The two stages describe this machine's desktop: on a server the frame is the
   // server's IDE page, and nothing here would mean anything there.
   if (onServer) return null
-  // The label names the stage the click reaches, so the button never asks the
-  // reader to infer what comes next from a mode they cannot see yet.
-  const label = fullscreen ? t('toggle.workbench') : active ? t('toggle.fullscreen') : t('toggle.mode')
+  // The button names the thing it switches between, not the step it happens to
+  // reach next: it is the control for "IDE / workstation", and the stage it is
+  // in is already legible from the frame around it.
+  const label = t('toggle.mode')
   const action = fullscreen ? t('toggle.workbenchAction') : active ? t('toggle.stage') : t('toggle.enable')
   return (
     <button

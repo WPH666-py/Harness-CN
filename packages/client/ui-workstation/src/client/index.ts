@@ -109,15 +109,6 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     if (typeof window === 'undefined') return () => {}
     const open = (): void => { ctx.layout.setStage?.('workstation') }
-    // The header's corner control asks to leave the seat; it belongs to another
-    // package, so the request travels as an event rather than an import.
-    const leaveSeatEvent = 'dsh-leave-seat'
-    ctx.effect(() => {
-      if (typeof window === 'undefined') return () => {}
-      const leave = (): void => { ctx.layout.setStage?.('conversation') }
-      window.addEventListener(leaveSeatEvent, leave)
-      return () => { window.removeEventListener(leaveSeatEvent, leave) }
-    }, 'ui-workstation: leave the seat on request')
     window.addEventListener(HOST_USED_EVENT, open)
     return () => { window.removeEventListener(HOST_USED_EVENT, open) }
   }, 'ui-workstation: open the server page when a host is picked')
@@ -138,11 +129,14 @@ export function apply(ctx: ClientContext): void {
       store,
       inject: (actions): WorkstationInject => ({
         hooks: { sessionId, remoteHosts: hosts },
-        // The full-screen stage folds the Conversation — and with it the
-        // header that carries the stage control — away, so the seat owns the
-        // way back: the full-screen stage retreats to the workbench, which is
-        // where the header's stage control and its way out are both visible.
-        leaveIde: () => { ctx.layout.setStage?.('workstation') },
+        // The seat's two stages differ by the Conversation column, and the header that carries the
+        // stage control lives inside that column: the seat owns both gestures so either stage can
+        // reach them. Leaving goes all the way to the desk, where every control is visible again.
+        leaveSeat: () => { ctx.layout.setStage?.('conversation') },
+        toggleAi: () => {
+          const shown = ctx.layout.ide?.getSnapshot() === true
+          ctx.layout.setStage?.(shown ? 'workstation' : 'ide')
+        },
         // The server page's header control is mounted by the Conversation, so a
         // fresh session — which draws no header — would have no way off the
         // host; the seat carries the same control.
