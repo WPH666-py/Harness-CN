@@ -19,7 +19,7 @@ import type { ReactNode } from 'react'
 import type {
   PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore,
 } from '@deepseek-ai/dsh-client-ui-slots'
-import { CENTER_MIN, clampWidth, computeColumns, RIGHTBAR_DEFAULT_RATIO, RIGHTBAR_MAX_RATIO, RIGHTBAR_MIN, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_COLLAPSED, SIDEBAR_DEFAULT, workstationColumn } from './columns.ts'
+import { CENTER_MIN, clampWidth, computeColumns, PHONE_VIEWPORT, RIGHTBAR_DEFAULT_RATIO, RIGHTBAR_MAX_RATIO, RIGHTBAR_MIN, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_COLLAPSED, SIDEBAR_DEFAULT, workstationColumn } from './columns.ts'
 import { DocumentTitle } from './DocumentTitle.tsx'
 import type { createLayoutStore } from './stores.ts'
 import css from './AppFrame.module.css'
@@ -168,10 +168,14 @@ export function AppFrame({
   const darwin = document.documentElement.dataset.platform === 'darwin'
   const collapsedWidth = darwin
     || document.documentElement.hasAttribute('data-windows-titlebar') ? 0 : SIDEBAR_COLLAPSED
+  // A phone has room for the rail and the Conversation and nothing else: the right
+  // panel is a desktop surface, and a protected 400px centre would push the
+  // conversation off the edge of a 390px screen.
+  const phone = viewport < PHONE_VIEWPORT
   // Opening on a narrow frame collapses the left sidebar. Eligibility must
   // include that space before the occupant's first shown report arrives.
   const normal = computeColumns(viewport, !layoutInfo.rightbarShown && narrow ? 0 : sidebarPreference, rightbarPreference, collapsedWidth)
-  const cols = computeColumns(viewport, sidebarPreference, layoutInfo.rightbarTrack ? rightbarPreference : 0, collapsedWidth)
+  const cols = computeColumns(viewport, sidebarPreference, phone ? 0 : layoutInfo.rightbarTrack ? rightbarPreference : 0, collapsedWidth)
   const colsRef = useRef(cols)
   colsRef.current = cols
   const rightbarWidth = useRef(normal.rightbar)
@@ -268,7 +272,10 @@ export function AppFrame({
   // one the grid lays out: the seat takes column one, the navigation and right
   // columns step aside, and the centre keeps the Conversation it already had —
   // that is what preserves its draft and scroll position across the toggle.
-  const workstation = layoutInfo.workstation
+  // A phone has room for the rail and the Conversation and nothing else: the seat
+  // and the right panel are desktop surfaces, so the frame keeps the desk layout
+  // there however the saved preference reads.
+  const workstation = layoutInfo.workstation && !phone
   // The IDE stage is the same layout with the Conversation folded away: the
   // seat gives up its fixed width and takes the whole frame instead, so the
   // tree and the editor are what the surface is made of.

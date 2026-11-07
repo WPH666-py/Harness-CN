@@ -21,6 +21,9 @@ export const SIDEBAR_COLLAPSED = 56
  * LG breakpoint); a manual toggle below it re-expands over the squeezed center
  * (stores.ts narrowExpanded). */
 export const SIDEBAR_AUTO_COLLAPSE = 1024
+/** Viewport width below which the frame is a phone: one column and the rail, no
+ * seat and no right panel, whatever the saved layout preference says. */
+export const PHONE_VIEWPORT = 640
 /** Right column drag clamp floor. */
 export const RIGHTBAR_MIN = 300
 /** Maximum normal right panel width as a fraction of the frame. */
