@@ -103,7 +103,10 @@ function signingWindows() {
     console.log('[tauri-build] no code-signing certificate; building an unsigned installer');
     return undefined;
   }
-  const timestampUrl = process.env.HARNESS_CN_SIGN_TIMESTAMP_URL ?? DEFAULT_TIMESTAMP_URL;
+  // An empty PowerShell assignment drops the variable, so the documented "empty disables it" only
+  // holds for shells that keep it; `none` is the spelling every shell can pass through.
+  const requested = process.env.HARNESS_CN_SIGN_TIMESTAMP_URL;
+  const timestampUrl = requested === 'none' ? '' : requested ?? DEFAULT_TIMESTAMP_URL;
   const windows = { certificateThumbprint: certificate.thumbprint, digestAlgorithm: 'sha256' };
   if (timestampUrl) windows.timestampUrl = timestampUrl;
   console.log(`[tauri-build] signing with ${certificate.thumbprint} from ${certificate.source}`);
