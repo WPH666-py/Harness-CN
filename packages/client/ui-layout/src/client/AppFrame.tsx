@@ -175,7 +175,10 @@ export function AppFrame({
   // Opening on a narrow frame collapses the left sidebar. Eligibility must
   // include that space before the occupant's first shown report arrives.
   const normal = computeColumns(viewport, !layoutInfo.rightbarShown && narrow ? 0 : sidebarPreference, rightbarPreference, collapsedWidth)
-  const cols = computeColumns(viewport, sidebarPreference, phone ? 0 : layoutInfo.rightbarTrack ? rightbarPreference : 0, collapsedWidth)
+  // A phone keeps the rail and never opens the full sidebar panel: that panel is an
+  // overlay over the conversation, and on a touch screen it swallows the tap that was
+  // meant to switch conversations.
+  const cols = computeColumns(viewport, phone ? 0 : sidebarPreference, phone ? 0 : layoutInfo.rightbarTrack ? rightbarPreference : 0, collapsedWidth)
   const colsRef = useRef(cols)
   colsRef.current = cols
   const rightbarWidth = useRef(normal.rightbar)
