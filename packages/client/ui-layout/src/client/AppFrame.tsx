@@ -158,10 +158,23 @@ export function AppFrame({
   }, [actions])
 
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE
-  const phoneWidth = viewport < PHONE_VIEWPORT
-  // A phone keeps the rail, whatever the desktop preference remembers: the expanded
-  // sidebar is a full-screen overlay there and swallows the tap meant for a conversation.
-  const sidebarCollapsed = phoneWidth ? true : narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0
+  // Navigation is the signal that the narrow panel has done its job. The frame owns no
+  // route, so it watches the one call every in-app navigation goes through and folds
+  // the panel then: on a 390px screen the panel and the conversation cannot share space.
+  useEffect(() => {
+    if (!narrow) return
+    const push = history.pushState
+    history.pushState = function patched(this: History, ...args: Parameters<History['pushState']>) {
+      push.apply(this, args)
+      actions.collapseSidebar()
+    }
+    return () => {
+      history.pushState = push
+    }
+  }, [actions, narrow])
+  // A phone reaches a conversation through the rail: the tap expands the panel, and
+  // the navigation it causes folds the panel away again (see the effect below).
+  const sidebarCollapsed = narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0
   const sidebarPreference = sidebarCollapsed
     ? 0
     : layoutInfo.sidebar === 0 ? SIDEBAR_DEFAULT : layoutInfo.sidebar
