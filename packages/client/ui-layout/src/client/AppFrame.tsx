@@ -158,7 +158,10 @@ export function AppFrame({
   }, [actions])
 
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE
-  const sidebarCollapsed = narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0
+  const phoneWidth = viewport < PHONE_VIEWPORT
+  // A phone keeps the rail, whatever the desktop preference remembers: the expanded
+  // sidebar is a full-screen overlay there and swallows the tap meant for a conversation.
+  const sidebarCollapsed = phoneWidth ? true : narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0
   const sidebarPreference = sidebarCollapsed
     ? 0
     : layoutInfo.sidebar === 0 ? SIDEBAR_DEFAULT : layoutInfo.sidebar
@@ -178,7 +181,7 @@ export function AppFrame({
   // A phone keeps the rail and never opens the full sidebar panel: that panel is an
   // overlay over the conversation, and on a touch screen it swallows the tap that was
   // meant to switch conversations.
-  const cols = computeColumns(viewport, phone ? 0 : sidebarPreference, phone ? 0 : layoutInfo.rightbarTrack ? rightbarPreference : 0, collapsedWidth)
+  const cols = computeColumns(viewport, sidebarPreference, phone ? 0 : layoutInfo.rightbarTrack ? rightbarPreference : 0, collapsedWidth)
   const colsRef = useRef(cols)
   colsRef.current = cols
   const rightbarWidth = useRef(normal.rightbar)
