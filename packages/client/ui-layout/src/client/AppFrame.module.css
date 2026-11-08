@@ -394,3 +394,14 @@
     display: none !important;
   }
 }
+
+/* The desk pet draws as a sprited background inside a CSS-module class; the
+   sprite suffix is the one stable handle on it, and a phone has no room for a
+   pet standing in the middle of the conversation. */
+@media (max-width: 640px) {
+  :global([class*='_sprite']),
+  :global([class*='_stage']),
+  :global([class*='_petDock']) {
+    display: none !important;
+  }
+}
