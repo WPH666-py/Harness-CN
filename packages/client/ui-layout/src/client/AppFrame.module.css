@@ -383,3 +383,14 @@
     display: none !important;
   }
 }
+
+/* The desktop pet is a fixed overlay in the middle of the window; on a phone it
+   sits on top of the conversation, so the phone keeps the words. */
+@media (max-width: 640px) {
+  :global([data-pet-dock]),
+  :global([data-pet-dock] *),
+  :global([class*='petStage']),
+  :global([class*='petAvatar']) {
+    display: none !important;
+  }
+}
