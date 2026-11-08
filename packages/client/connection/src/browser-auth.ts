@@ -386,10 +386,13 @@ export class BrowserAuth {
   private writeUnauthorized(req: ConnectionIndexRequest, res: ConnectionIndexResponse): void {
     res.writeHead(401, {
       'cache-control': 'no-store',
-      'content-type': 'text/plain; charset=utf-8',
+      'content-type': 'text/html; charset=utf-8',
     })
     res.end(req.method === 'HEAD'
       ? undefined
-      : 'dsh web authentication required; reopen the URL printed by dsh web.\n')
+      : UNAUTHORIZED_PAGE)
   }
 }
+
+/** The page a browser gets when it arrives without this workspace launch cookie. */
+const UNAUTHORIZED_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>需要一个启动令牌</title><body style="font:16px/1.7 system-ui,sans-serif;padding:8vh 6vw;color:#1f2328"><h2 style="font-size:20px;margin:0 0 12px">这个页面需要一个启动令牌</h2><p>你现在打开的是工作区的局域网地址，浏览器还没有它的令牌。</p><p>请用应用菜单里的「移动访问」打开它给出的地址：那个地址带着令牌，打开一次就好。</p><p style="color:#6b7280;font-size:14px">也可以自己在地址后面补 <code style="background:#f2f4f7;padding:1px 6px;border-radius:4px">?token=…</code>；令牌每次启动都会变，可在「运行日志」里找到。</p></body>`
