@@ -39,7 +39,10 @@ const APP_ROOT = resolve(import.meta.dirname, '..')
 const BUILD_PATHS = resolveDesktopTargetBuildPaths()
 const SEED_OUTPUT_ROOT = BUILD_PATHS.seed
 const SEED_ROOT = mkdtempSync(join(tmpdir(), 'dsh-desktop-seed-'))
-const STORE_ROOT = join(SEED_ROOT, 'store')
+// A persistent store lets a retry reuse every tarball the previous attempt already fetched: the
+// mirror drops a few large files under a burst of parallel requests, and re-downloading the whole
+// seed each time never converges.
+const STORE_ROOT = process.env.DSH_SEED_STORE ?? join(SEED_ROOT, 'store')
 const RUNTIME_ROOT = BUILD_PATHS.runtime
 const PNPM_BUILD_STATE = BUILD_PATHS.seedPnpm
 const PACKAGE_SET_ROOT = BUILD_PATHS.packageSet
@@ -75,12 +78,27 @@ function runPnpm(args: readonly string[]): Promise<void> {
     const config = join(PNPM_BUILD_STATE, 'config')
     const userConfig = join(config, 'npmrc')
     mkdirSync(config, { recursive: true })
-    writeFileSync(userConfig, '')
+    // Numbers have to arrive through the config file, not through `--config.x=...`: the CLI form is
+    // typed as string, and pnpm hands `network-concurrency` straight to PQueue, which then dies with
+    // "Expected `concurrency` to be a number from 1 and up, got `4` (string)".
+    writeFileSync(userConfig, [
+      // The mirror aborts (error 23) on a burst of the largest tarballs, and a single aborted
+      // request fails the whole seed, so two at a time trades a few minutes for a green build.
+      'network-concurrency=2',
+      'fetch-retries=10',
+      '',
+    ].join('\n'))
     const child = spawn(NODE, [
       PNPM,
       '--config.registry=https://registry.npmjs.org/',
       `--config.store-dir=${STORE_ROOT}`,
       '--config.enable-global-virtual-store=false',
+      // The store already holds almost every tarball a release needs; without this a flaky
+      // mirror turns a rebuild into 40 minutes of retries (error 23) and then a timeout.
+      // Never pass --config.fetch-timeout here: pnpm reads that value as seconds, so a large
+      // number turns one slow request into an hours-long wait that looks exactly like a deadlock
+      // (no CPU, no sockets, no error, no lockfile).
+      '--config.prefer-offline=true',
       `--config.userconfig=${userConfig}`,
       command,
       ...commandArgs,

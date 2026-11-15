@@ -740,7 +740,8 @@ describe('connection lifecycle', () => {
     }, FAST)
 
     controller.start()
-    await vi.waitFor(() => { expect(states).toEqual(['connected']) })
+    // A stopped loop publishes its last state once and never claims an attempt is still running.
+    await vi.waitFor(() => { expect(states).toEqual(['connected', 'disconnected']) })
     await vi.waitFor(() => { expect(source.activeCount).toBe(0) })
     expect(connected).toBe(0)
   })
