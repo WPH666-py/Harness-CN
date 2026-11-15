@@ -1,0 +1,14 @@
+{"kind":"header","id":"session-ffdcf2e2-f276-4723-9e9c-5491dc55f312","title":"tiny","cwd":"D:\\projects-py\\Harness-CN\\mono","createdAt":"2026-10-20T03:26:16.804Z","mode":"auto","model":"","effort":"default"}
+{"kind":"message","message":{"role":"user","content":"第一轮：看一下目录"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）先看一下目录。","tool_calls":[{"id":"call_1792466776825","type":"function","function":{"name":"list_dir","arguments":"{\"path\":\"\"}"}}]}}
+{"kind":"approval","at":"2026-10-20T03:26:16.826Z","name":"list_dir","decision":"allow","reason":"read-only tool"}
+{"kind":"tool","message":{"role":"tool","tool_call_id":"call_1792466776825","content":"dir            0  data\ndir            0  public\nfile        4463  README.md\ndir            0  src\ndir            0  test"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）工具已返回，循环正常。"}}
+{"kind":"turn-end","at":"2026-10-20T03:26:16.857Z"}
+{"kind":"message","message":{"role":"user","content":"第二轮：再看一次目录"}}
+{"kind":"summary","at":"2026-10-20T03:26:16.895Z","foldedMessages":3,"tokensBefore":183,"text":"（模拟）历史摘要：用户查看了工作目录，并尝试写入一个探针文件。"}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）先看一下目录。","tool_calls":[{"id":"call_1792466776897","type":"function","function":{"name":"list_dir","arguments":"{\"path\":\"\"}"}}]}}
+{"kind":"approval","at":"2026-10-20T03:26:16.898Z","name":"list_dir","decision":"allow","reason":"read-only tool"}
+{"kind":"tool","message":{"role":"tool","tool_call_id":"call_1792466776897","content":"dir            0  data\ndir            0  public\nfile        4463  README.md\ndir            0  src\ndir            0  test"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）工具已返回，循环正常。"}}
+{"kind":"turn-end","at":"2026-10-20T03:26:16.901Z"}

@@ -1,0 +1,13 @@
+{"kind":"header","id":"session-ebb7d44d-5e49-4bb5-a8eb-3b7e2d5ee601","title":"tiny","cwd":"D:\\projects-py\\Harness-CN\\mono","createdAt":"2026-10-20T03:14:55.707Z","mode":"auto","model":"","effort":"default"}
+{"kind":"message","message":{"role":"user","content":"第一轮：看一下目录"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）先看一下目录。","tool_calls":[{"id":"call_1792466095729","type":"function","function":{"name":"list_dir","arguments":"{\"path\":\"\"}"}}]}}
+{"kind":"approval","at":"2026-10-20T03:14:55.730Z","name":"list_dir","decision":"allow","reason":"read-only tool"}
+{"kind":"tool","message":{"role":"tool","tool_call_id":"call_1792466095729","content":"dir            0  data\ndir            0  public\nfile        3105  README.md\ndir            0  src\ndir            0  test"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）工具已返回，循环正常。"}}
+{"kind":"turn-end","at":"2026-10-20T03:14:55.736Z"}
+{"kind":"message","message":{"role":"user","content":"第二轮：再看一次目录"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）先看一下目录。","tool_calls":[{"id":"call_1792466095750","type":"function","function":{"name":"list_dir","arguments":"{\"path\":\"\"}"}}]}}
+{"kind":"approval","at":"2026-10-20T03:14:55.751Z","name":"list_dir","decision":"allow","reason":"read-only tool"}
+{"kind":"tool","message":{"role":"tool","tool_call_id":"call_1792466095750","content":"dir            0  data\ndir            0  public\nfile        3105  README.md\ndir            0  src\ndir            0  test"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）工具已返回，循环正常。"}}
+{"kind":"turn-end","at":"2026-10-20T03:14:55.755Z"}

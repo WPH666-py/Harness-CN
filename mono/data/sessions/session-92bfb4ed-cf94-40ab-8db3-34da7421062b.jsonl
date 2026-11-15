@@ -1,0 +1,7 @@
+{"kind":"header","id":"session-92bfb4ed-cf94-40ab-8db3-34da7421062b","title":"smoke","cwd":"D:\\projects-py\\Harness-CN\\mono","createdAt":"2026-10-20T03:13:37.433Z","mode":"ask","model":"","effort":"default"}
+{"kind":"message","message":{"role":"user","content":"看一下目录"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）先看一下目录。","tool_calls":[{"id":"call_1792466017449","type":"function","function":{"name":"list_dir","arguments":"{\"path\":\"\"}"}}]}}
+{"kind":"approval","at":"2026-10-20T03:13:37.450Z","name":"list_dir","decision":"allow","reason":"read-only tool"}
+{"kind":"tool","message":{"role":"tool","tool_call_id":"call_1792466017449","content":"dir            0  data\ndir            0  public\nfile        2669  README.md\ndir            0  src\ndir            0  test"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）工具已返回，循环正常。"}}
+{"kind":"turn-end","at":"2026-10-20T03:13:37.482Z"}

@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Harness-CN Mono</title>
+<style>
+:root{color-scheme:light dark;--bg:#fff;--fg:#1f2328;--muted:#59636e;--line:#e6e8eb;--chip:#f2f4f7;--accent:#4d6bfe;--warn:#b45309;--bad:#b91c1c}
+@media (prefers-color-scheme:dark){:root{--bg:#16181d;--fg:#e6e8eb;--muted:#9aa4b2;--line:#2a2e37;--chip:#22262e;--accent:#7c93ff;--warn:#f59e0b;--bad:#f87171}}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.65 system-ui,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg);display:flex;height:100vh}
+aside{width:230px;border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+aside header{padding:12px;border-bottom:1px solid var(--line);font-weight:600;display:flex;gap:8px;align-items:center}
+aside .list{flex:1;overflow:auto;padding:8px}
+aside .row{padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+aside .row:hover{background:var(--chip)}
+aside .row.active{background:var(--chip);font-weight:600}
+aside footer{padding:10px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+main{flex:1;display:flex;flex-direction:column;min-width:0}
+#bar{display:flex;gap:10px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted);flex-wrap:wrap}
+select{background:var(--chip);color:inherit;border:1px solid var(--line);border-radius:8px;padding:3px 6px;font:inherit}
+#log{flex:1;overflow:auto;padding:20px 24px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:min(780px,94%);white-space:pre-wrap;word-break:break-word}
+.msg.user{align-self:flex-end;background:var(--accent);color:#fff;padding:10px 14px;border-radius:14px}
+.msg.assistant{align-self:flex-start}
+details.tool{align-self:stretch;background:var(--chip);border:1px solid var(--line);border-radius:8px;font:12px/1.55 ui-monospace,Consolas,monospace}
+details.tool summary{padding:7px 10px;cursor:pointer;color:var(--muted);list-style:none;display:flex;gap:8px;align-items:center}
+details.tool summary::-webkit-details-marker{display:none}
+details.tool pre{margin:0;padding:0 10px 10px;white-space:pre-wrap;max-height:320px;overflow:auto;color:var(--fg)}
+.tag{border-radius:999px;padding:1px 8px;font-size:11px;background:var(--bg);border:1px solid var(--line)}
+.tag.ask{color:var(--warn);border-color:var(--warn)}
+.tag.deny{color:var(--bad);border-color:var(--bad)}
+.approval{align-self:stretch;border:1px solid var(--warn);border-radius:10px;padding:12px 14px;background:color-mix(in srgb,var(--warn) 8%,transparent)}
+.approval h4{margin:0 0 6px;font-size:14px;color:var(--warn)}
+.approval pre{margin:6px 0 10px;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;max-height:160px;overflow:auto}
+.approval .actions{display:flex;gap:8px}
+.approval button{padding:5px 14px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:inherit;font:inherit;cursor:pointer}
+.approval button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+form{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
+textarea{flex:1;resize:none;height:58px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:transparent;color:inherit;font:inherit}
+form button{padding:0 18px;border:0;border-radius:10px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
+form button:disabled{opacity:.5;cursor:default}
+.attach{display:flex;align-items:center;justify-content:center;width:38px;height:38px;align-self:flex-end;border:1px solid var(--line);border-radius:10px;cursor:pointer;color:var(--muted);font-size:18px}
+#chips{display:flex;gap:8px;flex-wrap:wrap;padding:0 16px}
+#chips:empty{display:none}
+.chip{display:flex;gap:6px;align-items:center;background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px}
+.chip b{font-weight:600}
+.chip button{border:0;background:transparent;color:var(--muted);cursor:pointer;font:inherit;padding:0}
+#thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.thumb{max-width:140px;max-height:140px;border-radius:8px;border:1px solid var(--line)}
+.hint{padding:6px 16px;font-size:12px;color:var(--muted);border-top:1px solid var(--line);display:flex;gap:14px}
+</style>
+</head>
+<body>
+<aside>
+  <header>Harness-CN <span class="tag">mono</span></header>
+  <div class="list" id="sessions"></div>
+  <footer id="health">检查中…</footer>
+</aside>
+<main>
+  <div id="bar">
+    <label>权限 <select id="mode"></select></label>
+    <label>模型 <select id="model"></select></label>
+    <label>强度 <select id="effort"></select></label>
+    <span id="usage"></span>
+  </div>
+  <div id="log"></div>
+  <div id="chips"></div>
+  <form id="composer">
+    <label class="attach" title="添加图片"><input type="file" id="file" accept="image/*" multiple hidden>＋</label>
+    <textarea id="input" placeholder="发消息…（Ctrl+Enter 发送）"></textarea>
+    <button id="send" type="submit">发送</button>
+  </form>
+  <div class="hint"><span id="cwd"></span></div>
+</main>
+<script>
+'use strict'
+/** Whole client state: no store, no slots, no plugin coordination. */
+const state = { sessions: [], current: null, busy: false, catalog: { models: [], efforts: [], modes: [] }, attachments: [] }
+const el = (id) => document.getElementById(id)
+const log = el('log')
+
+/** Append one block to the transcript. */
+function add(role, text) {
+  const node = document.createElement('div')
+  node.className = `msg ${role}`
+  node.textContent = text
+  log.appendChild(node)
+  return node
+}
+
+/** Append a collapsible tool card. */
+function addTool(name, args, outcome) {
+  const details = document.createElement('details')
+  details.className = 'tool'
+  const summary = document.createElement('summary')
+  const label = document.createElement('span')
+  label.textContent = `→ ${name}`
+  summary.appendChild(label)
+  if (outcome !== undefined && outcome !== 'allow') {
+    const tag = document.createElement('span')
+    tag.className = `tag ${outcome === 'deny' ? 'deny' : 'ask'}`
+    tag.textContent = outcome === 'deny' ? '已拒绝' : '待确认'
+    summary.appendChild(tag)
+  }
+  details.appendChild(summary)
+  const body = document.createElement('pre')
+  body.textContent = args
+  details.appendChild(body)
+  log.appendChild(details)
+  return body
+}
+
+/** Ask the user to decide one call, and answer the waiting turn. */
+function addApproval(payload) {
+  const card = document.createElement('div')
+  card.className = 'approval'
+  const title = document.createElement('h4')
+  title.textContent = `需要确认：${payload.name}`
+  const reason = document.createElement('div')
+  reason.textContent = payload.reason
+  const args = document.createElement('pre')
+  args.textContent = payload.arguments
+  const actions = document.createElement('div')
+  actions.className = 'actions'
+  const answer = async (decision) => {
+    for (const button of actions.querySelectorAll('button')) button.disabled = true
+    card.style.opacity = '0.6'
+    await fetch(`/api/approvals/${encodeURIComponent(payload.id)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision }),
+    })
+  }
+  const allow = document.createElement('button')
+  allow.className = 'primary'
+  allow.textContent = '允许'
+  allow.onclick = () => void answer('allow')
+  const deny = document.createElement('button')
+  deny.textContent = '拒绝'
+  deny.onclick = () => void answer('deny')
+  actions.append(allow, deny)
+  card.append(title, reason, args, actions)
+  log.appendChild(card)
+  log.scrollTop = log.scrollHeight
+}
+
+/** Paint the pending attachment chips. */
+function renderChips() {
+  const box = el('chips')
+  box.textContent = ''
+  for (const record of state.attachments) {
+    const chip = document.createElement('span')
+    chip.className = 'chip'
+    const name = document.createElement('b')
+    name.textContent = record.name
+    const remove = document.createElement('button')
+    remove.textContent = '×'
+    remove.onclick = () => {
+      state.attachments = state.attachments.filter(entry => entry.id !== record.id)
+      renderChips()
+    }
+    chip.append(name, remove)
+    box.appendChild(chip)
+  }
+}
+
+/** Upload one picked file and keep its record. */
+async function upload(file) {
+  const response = await fetch('/api/attachments', {
+    method: 'POST',
+    headers: { 'content-type': file.type, 'x-file-name': encodeURIComponent(file.name) },
+    body: file,
+  })
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}))
+    el('usage').textContent = `上传失败：${detail.error ?? response.status}`
+    return
+  }
+  state.attachments.push(await response.json())
+  renderChips()
+}
+
+/** Render the session list. */
+function renderSessions() {
+  const list = el('sessions')
+  list.textContent = ''
+  for (const session of state.sessions) {
+    const row = document.createElement('div')
+    row.className = 'row' + (state.current?.id === session.id ? ' active' : '')
+    row.textContent = session.title || session.id
+    row.onclick = () => { void open(session.id) }
+    list.appendChild(row)
+  }
+}
+
+/** Paint the three selectors from the current session and the catalog. */
+function renderSelectors() {
+  const catalog = state.catalog
+  el('mode').innerHTML = catalog.modes.map(mode => `<option value="${mode}">${mode}</option>`).join('')
+  el('model').innerHTML = catalog.models.map(model => `<option value="${model.id}">${model.label}</option>`).join('')
+  const current = catalog.models.find(model => model.id === el('model').value)
+  el('effort').innerHTML = (current?.efforts ?? catalog.efforts)
+    .map(effort => `<option value="${effort}">${effort}</option>`).join('')
+  if (state.current) {
+    el('mode').value = state.current.mode ?? 'ask'
+    el('model').value = state.current.model || catalog.models[0]?.id || ''
+    const efforts = catalog.models.find(model => model.id === el('model').value)?.efforts ?? ['default']
+    if (efforts.includes(state.current.effort)) el('effort').value = state.current.effort
+  }
+}
+
+/** Persist one selector change on the session. */
+async function patchSettings(patch) {
+  if (!state.current) return
+  const response = await fetch(`/api/sessions/${encodeURIComponent(state.current.id)}/settings`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  if (response.ok) state.current = await response.json()
+}
+
+/** Load one session and paint its history. */
+async function open(id) {
+  const body = await (await fetch(`/api/sessions/${encodeURIComponent(id)}`)).json()
+  state.current = body.header
+  el('cwd').textContent = `工作目录：${body.header.cwd}`
+  log.textContent = ''
+  for (const message of body.messages) {
+    if (message.role === 'user') {
+      const bubble = add('user', message.content || '')
+      if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+        const thumbs = document.createElement('div')
+        thumbs.className = 'thumbs'
+        for (const record of message.attachments) {
+          const img = document.createElement('img')
+          img.className = 'thumb'
+          img.src = `/api/attachments/${encodeURIComponent(record.id)}`
+          img.alt = record.name ?? record.id
+          thumbs.appendChild(img)
+        }
+        bubble.appendChild(thumbs)
+      }
+    }
+    else if (message.role === 'assistant') {
+      if (message.content) add('assistant', message.content)
+      for (const call of message.tool_calls ?? []) addTool(call.function.name, call.function.arguments)
+    } else if (message.role === 'tool') addTool('结果', String(message.content).slice(0, 2000))
+  }
+  renderSelectors()
+  renderSessions()
+}
+
+/** Create a session on first use. */
+async function ensureSession() {
+  if (state.current) return state.current
+  const response = await fetch('/api/sessions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ cwd: '.', title: '新会话', mode: 'ask' }),
+  })
+  state.current = await response.json()
+  state.sessions.unshift(state.current)
+  renderSessions()
+  renderSelectors()
+  return state.current
+}
+
+/** Consume one SSE response from the turn endpoint. */
+async function send(text) {
+  const session = await ensureSession()
+  state.busy = true
+  el('send').disabled = true
+  if (state.attachments.length > 0) {
+    const bubble = add('user', text)
+    const thumbs = document.createElement('div')
+    thumbs.className = 'thumbs'
+    for (const record of state.attachments) {
+      const img = document.createElement('img')
+      img.className = 'thumb'
+      img.src = /api/attachments/
+      thumbs.appendChild(img)
+    }
+    bubble.appendChild(thumbs)
+  } else add('user', text)
+  const assistant = add('assistant', '')
+  state.attachments = []
+  renderChips()
+  const response = await fetch(`/api/sessions/${encodeURIComponent(session.id)}/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text, attachments: state.attachments.map(record => record.id) }),
+  })
+  if (!response.ok || response.body === null) {
+    assistant.textContent = `请求失败：HTTP ${response.status}`
+    state.busy = false
+    el('send').disabled = false
+    return
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let toolBody = null
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let split = buffer.indexOf('\n\n')
+    while (split >= 0) {
+      const frame = buffer.slice(0, split)
+      buffer = buffer.slice(split + 2)
+      split = buffer.indexOf('\n\n')
+      const event = /^event: (.+)$/mu.exec(frame)?.[1]
+      const raw = /^data: (.+)$/mu.exec(frame)?.[1]
+      if (event === undefined || raw === undefined) continue
+      const payload = JSON.parse(raw)
+      if (event === 'delta') assistant.textContent += payload.text
+      else if (event === 'mode') {
+        el('mode').value = payload.mode
+        el('model').value = payload.model
+        if (payload.effort) el('effort').value = payload.effort
+      } else if (event === 'tool') toolBody = addTool(payload.name, payload.arguments, payload.outcome)
+      else if (event === 'approval') addApproval(payload)
+      else if (event === 'tool_result') {
+        if (toolBody !== null) toolBody.textContent += `\n\n${String(payload.result).slice(0, 4000)}`
+      } else if (event === 'denied') {
+        if (toolBody !== null) toolBody.textContent += `\n\n[拒绝] ${payload.reason}`
+      } else if (event === 'usage') {
+        el('usage').textContent = `tokens 入 ${payload.prompt_tokens ?? '?'} 出 ${payload.completion_tokens ?? '?'}`
+      } else if (event === 'error') assistant.textContent += `\n[错误] ${payload.message}`
+      log.scrollTop = log.scrollHeight
+    }
+  }
+  state.busy = false
+  el('send').disabled = false
+}
+
+el('file').onchange = () => {
+  for (const file of el('file').files ?? []) void upload(file)
+  el('file').value = ''
+}
+
+el('mode').onchange = () => void patchSettings({ mode: el('mode').value })
+el('model').onchange = () => {
+  const current = state.catalog.models.find(model => model.id === el('model').value)
+  el('effort').innerHTML = (current?.efforts ?? ['default']).map(effort => `<option value="${effort}">${effort}</option>`).join('')
+  void patchSettings({ model: el('model').value, effort: el('effort').value })
+}
+el('effort').onchange = () => void patchSettings({ effort: el('effort').value })
+
+el('composer').addEventListener('submit', (event) => {
+  event.preventDefault()
+  if (state.busy) return
+  const input = el('input')
+  const text = input.value.trim()
+  if (text === '' && state.attachments.length === 0) return
+  input.value = ''
+  void send(text)
+})
+el('input').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) el('composer').requestSubmit()
+})
+
+/** Boot: catalog, health, and the session list — three small requests. */
+void (async () => {
+  const [health, catalog, sessions] = await Promise.all([
+    (await fetch('/api/health')).json(),
+    (await fetch('/api/models')).json(),
+    (await fetch('/api/sessions')).json(),
+  ])
+  state.catalog = catalog
+  state.sessions = sessions
+  el('health').textContent = `${health.model} · ${health.available ? '可用' : '缺少 API key'}`
+  renderSelectors()
+  renderSessions()
+  if (sessions.length > 0) await open(sessions[0].id)
+})()
+</script>
+</body>
+</html>

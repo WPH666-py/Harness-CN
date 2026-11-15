@@ -1,0 +1,7 @@
+{"kind":"header","id":"session-996b15d8-14f2-4cf1-87fe-a6ef3f50657a","title":"vision","cwd":"D:\\projects-py\\Harness-CN\\mono","createdAt":"2026-10-20T03:19:24.645Z","mode":"auto","model":"","effort":"default"}
+{"kind":"message","message":{"role":"user","content":"","attachments":[{"id":"att-60aacaf2-0f31-451d-9795-76a5c9f398f4","name":"att-60aacaf2-0f31-451d-9795-76a5c9f398f4","mime":"image/png","bytes":70}]}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）先看一下目录。","tool_calls":[{"id":"call_1792466364663","type":"function","function":{"name":"list_dir","arguments":"{\"path\":\"\"}"}}]}}
+{"kind":"approval","at":"2026-10-20T03:19:24.664Z","name":"list_dir","decision":"allow","reason":"read-only tool"}
+{"kind":"tool","message":{"role":"tool","tool_call_id":"call_1792466364663","content":"dir            0  data\ndir            0  public\nfile        3105  README.md\ndir            0  src\ndir            0  test"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）工具已返回，循环正常。"}}
+{"kind":"turn-end","at":"2026-10-20T03:19:24.670Z"}

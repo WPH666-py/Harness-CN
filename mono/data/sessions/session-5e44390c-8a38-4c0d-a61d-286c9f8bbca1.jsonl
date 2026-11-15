@@ -1,0 +1,6 @@
+{"kind":"header","id":"session-5e44390c-8a38-4c0d-a61d-286c9f8bbca1","title":"ask","cwd":"D:\\projects-py\\Harness-CN\\mono","createdAt":"2026-10-20T03:16:31.204Z","mode":"ask","model":"","effort":"default"}
+{"kind":"message","message":{"role":"user","content":"写一个探针文件"}}
+{"kind":"settings","at":"2026-10-20T03:16:31.262Z","mode":"read-only"}
+{"kind":"message","message":{"role":"user","content":"写一个探针文件"}}
+{"kind":"settings","at":"2026-10-20T03:16:31.290Z","model":"deepseek-reasoner","effort":"high"}
+{"kind":"settings","at":"2026-10-20T03:16:31.308Z","model":"deepseek-chat"}

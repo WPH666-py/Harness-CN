@@ -67,3 +67,6 @@ build-tauri.log
 # Local session logs and per-machine state that must never be published.
 data/sessions/
 data/*.json
+
+# Local release artifacts (installers, seeds, notes) kept beside the checkout.
+releases/

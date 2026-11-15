@@ -1,0 +1,15 @@
+{"kind":"header","id":"session-ba8a2e39-8743-4e10-ae2e-b530448afbc3","title":"ask","cwd":"D:\\projects-py\\Harness-CN\\mono","createdAt":"2026-10-20T03:14:55.427Z","mode":"ask","model":"","effort":"default"}
+{"kind":"message","message":{"role":"user","content":"写一个探针文件"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）写一个文件。","tool_calls":[{"id":"call_1792466095441","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"mono-write-probe.txt\",\"content\":\"probe\\n\"}"}}]}}
+{"kind":"approval","at":"2026-10-20T03:14:55.445Z","name":"write_file","decision":"deny","reason":"写入文件需要确认"}
+{"kind":"tool","message":{"role":"tool","tool_call_id":"call_1792466095441","content":"refused by the user"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）工具已返回，循环正常。"}}
+{"kind":"turn-end","at":"2026-10-20T03:14:55.449Z"}
+{"kind":"settings","at":"2026-10-20T03:14:55.463Z","mode":"read-only"}
+{"kind":"message","message":{"role":"user","content":"写一个探针文件"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）写一个文件。","tool_calls":[{"id":"call_1792466095477","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"mono-write-probe.txt\",\"content\":\"probe\\n\"}"}}]}}
+{"kind":"tool","message":{"role":"tool","tool_call_id":"call_1792466095477","content":"refused by policy: 会话处于只读模式，写入与命令都被拒绝。请在设置里切换模式。"}}
+{"kind":"message","message":{"role":"assistant","content":"（模拟）工具已返回，循环正常。"}}
+{"kind":"turn-end","at":"2026-10-20T03:14:55.479Z"}
+{"kind":"settings","at":"2026-10-20T03:14:55.499Z","model":"deepseek-reasoner","effort":"high"}
+{"kind":"settings","at":"2026-10-20T03:14:55.514Z","model":"deepseek-chat"}
