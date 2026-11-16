@@ -17,6 +17,7 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { spawn } from 'node:child_process'
+import { recordFirstLaunch } from '../../desktop/src/first-launch.ts'
 import { DesktopHostProcess } from '../../desktop/src/host-process.ts'
 import { DesktopLogBuffer, type DesktopLogSnapshot } from '../../desktop/src/log-buffer.ts'
 import { resolveDesktopLocale, type DesktopMessages } from '../../desktop/src/locale.ts'
@@ -348,6 +349,7 @@ async function main(): Promise<void> {
   const logs = new DesktopLogBuffer(join(options.logDirectory, 'harness.log'))
   const logShell = (text: string): void => { logs.line('shell', text) }
   const paths = resolveDesktopPaths(adoptHome(logShell, options.resourceDir))
+  const firstLaunch = recordFirstLaunch(paths.root, options.version, logShell)
 
   // Node's own on-disk compile cache is what makes the backend's second start cheaper than its
   // first: every module it loads is compiled once and the bytecode is reused afterwards. It must
@@ -676,89 +678,89 @@ async function main(): Promise<void> {
     // The offline package is obtained before anything can be installed from it. A first launch on
     // a normal installation fetches it once; every later launch finds it where it was left, and an
     // offline installer ships it beside the runtime so nothing is fetched at all.
-    const seed = await ensureSeedPackage({
-      version: options.version,
-      resourceDir: options.resourceDir,
-      cacheRoot: join(paths.root, 'seed'),
-      onProgress: (note, fraction, step) => {
+      const seed = await ensureSeedPackage({
+        version: options.version,
+        resourceDir: options.resourceDir,
+        cacheRoot: join(paths.root, 'seed'),
+        onProgress: (note, fraction, step) => {
         // The status type keeps `step` and `stepProgress` absent rather than undefined, so a
         // message that has no step to name carries no step key at all.
-        publishStatus({
-          phase: 'starting',
-          // The fetch owns the first tenth of the bar; the install that follows owns the rest.
-          progress: fraction === undefined ? status.progress : 0.05 + fraction * 0.09,
-          version: options.version,
-          note,
-          ...(step === undefined ? {} : { step }),
-          ...(fraction === undefined ? {} : { stepProgress: fraction }),
-        })
-      },
-    })
-    logShell(`offline package: ${seed.origin} at ${seed.directory}`)
-    publishStatus({ phase: 'starting', progress: 0.15, version: options.version })
-    logShell('checking the desktop runtime against the bundled release')
-    const activated = await manager.applyRelease(seed.directory, options.version, {
-      ...hooks,
-      // A tree built from a verified seed is checked for completeness rather than booted: the boot
-      // would cost about fifty seconds of every first launch and every upgrade, and the only thing
-      // it adds over this is proof that a composition applies — which cannot have changed, because
-      // no package in this tree is new. Plugin changes still take the boot.
-      healthCheck: async (projectDir) => {
-        const report = await verifyStagedRuntime({
-          projectDir,
-          node: options.node,
-          onProgress: (fraction) => {
-            publishStatus({ ...status, step: '检查运行时完整性', stepProgress: fraction })
-          },
-        })
-        logShell(
-          `staged runtime verified: ${String(report.files)} files,`
-          + ` native modules [${report.nativeModules.join(', ')}]`,
-        )
-      },
-      beforeActivate: async () => {},
-      afterActivate: async () => {},
-    })
-    logShell(activated
-      ? 'desktop runtime installed from the bundled seed'
-      : 'desktop runtime already matches the bundled release')
-    // Starting the Host is the one step with no denominator: dsh reports that it is ready, and
-    // nothing in between counts anything, so this shows how long it has been running instead of a
-    // percentage that would have to be invented. Silence is what a stuck launch looks like.
-    publishStatus({
-      phase: 'starting',
-      progress: 0.95,
-      version: options.version,
-      step: '启动工作区',
-      note: '正在启动工作区…',
-    })
-    const hostStartedAt = Date.now()
-    const hostTicker = setInterval(() => {
-      publishStatus({
-        ...status,
-        note: `正在启动工作区… 已等待 ${String(Math.round((Date.now() - hostStartedAt) / 1000))} 秒`,
+          publishStatus({
+            phase: 'starting',
+            // The fetch owns the first tenth of the bar; the install that follows owns the rest.
+            progress: fraction === undefined ? status.progress : 0.05 + fraction * 0.09,
+            version: options.version,
+            note,
+            ...(step === undefined ? {} : { step }),
+            ...(fraction === undefined ? {} : { stepProgress: fraction }),
+          })
+        },
       })
-    }, 1000)
-    try {
-      host = await startHost(paths.profile)
-    } finally {
-      clearInterval(hostTicker)
-    }
-    publishStatus({ phase: 'ready', progress: 1, version: options.version })
+      logShell(`offline package: ${seed.origin} at ${seed.directory}`)
+      publishStatus({ phase: 'starting', progress: 0.15, version: options.version })
+      logShell('checking the desktop runtime against the bundled release')
+      const activated = await manager.applyRelease(seed.directory, options.version, {
+        ...hooks,
+        // A tree built from a verified seed is checked for completeness rather than booted: the boot
+        // would cost about fifty seconds of every first launch and every upgrade, and the only thing
+        // it adds over this is proof that a composition applies — which cannot have changed, because
+        // no package in this tree is new. Plugin changes still take the boot.
+        healthCheck: async (projectDir) => {
+          const report = await verifyStagedRuntime({
+            projectDir,
+            node: options.node,
+            onProgress: (fraction) => {
+              publishStatus({ ...status, step: '检查运行时完整性', stepProgress: fraction })
+            },
+          })
+          logShell(
+            `staged runtime verified: ${String(report.files)} files,`
+          + ` native modules [${report.nativeModules.join(', ')}]`,
+          )
+        },
+        beforeActivate: async () => {},
+        afterActivate: async () => {},
+      })
+      logShell(activated
+        ? 'desktop runtime installed from the bundled seed'
+        : 'desktop runtime already matches the bundled release')
+      // Starting the Host is the one step with no denominator: dsh reports that it is ready, and
+      // nothing in between counts anything, so this shows how long it has been running instead of a
+      // percentage that would have to be invented. Silence is what a stuck launch looks like.
+      publishStatus({
+        phase: 'starting',
+        progress: 0.95,
+        version: options.version,
+        step: '启动工作区',
+        note: '正在启动工作区…',
+      })
+      const hostStartedAt = Date.now()
+      const hostTicker = setInterval(() => {
+        publishStatus({
+          ...status,
+          note: `正在启动工作区… 已等待 ${String(Math.round((Date.now() - hostStartedAt) / 1000))} 秒`,
+        })
+      }, 1000)
+      try {
+        host = await startHost(paths.profile)
+      } finally {
+        clearInterval(hostTicker)
+      }
+      publishStatus({ phase: 'ready', progress: 1, version: options.version })
 
-    let needsApiKey = false
-    try {
-      const keyStatus = await describeApiKey(host)
-      needsApiKey = !keyStatus.configured
-      logShell(keyStatus.configured
-        ? `DeepSeek API key is configured${keyStatus.source === undefined ? '' : ` from ${keyStatus.source}`}`
-        : 'DeepSeek API key is not configured; offering the binding window')
-    } catch (error) {
+      let needsApiKey = false
+      try {
+        const keyStatus = await describeApiKey(host)
+        needsApiKey = !keyStatus.configured
+        logShell(keyStatus.configured
+          ? `DeepSeek API key is configured${keyStatus.source === undefined ? '' : ` from ${keyStatus.source}`}`
+          : 'DeepSeek API key is not configured; offering the binding window')
+      } catch (error) {
       // A credential service this shell cannot reach must not decide whether the application
       // opens: the user keeps a working shell and can bind the key from the menu.
-      logShell(`credential check failed; skipping the binding gate: ${errorOf(error, 'credential check failed').message}`)
-    }
-    handshake({ type: 'ready', port: running.port, shellPort: running.shellPort, needsApiKey })
+        logShell(`credential check failed; skipping the binding gate: ${errorOf(error, 'credential check failed').message}`)
+      }
+      handshake({ type: 'ready', port: running.port, shellPort: running.shellPort, needsApiKey })
     }
 
     /**
@@ -789,14 +791,19 @@ async function main(): Promise<void> {
     if (process.env.HARNESS_CN_MONO === '1') await bootMono()
     else await bootDsh()
 
-    const timer = setTimeout(() => { void updates.check(false) }, AUTOMATIC_UPDATE_CHECK_MS)
-    timer.unref()
-    // A window that stays open for days outlives the release channel it checked at launch, so the
-    // check repeats. A skipped version stays skipped here as it does on the first check; only the
-    // menu's own check overrides that, because only that one is the user asking.
-    const recheckPeriod = setInterval(() => { void updates.check(false) }, UPDATE_RECHECK_MS)
-    recheckPeriod.unref()
-    recheck = recheckPeriod
+    // A first launch has no installation to update yet and every window it opens is the one the
+    // person just asked for, so it never runs the automatic path; the menu's own check below is
+    // the only thing that reaches the release channel. Later launches keep both timers.
+    if (!firstLaunch) {
+      const timer = setTimeout(() => { void updates.check(false) }, AUTOMATIC_UPDATE_CHECK_MS)
+      timer.unref()
+      // A window that stays open for days outlives the release channel it checked at launch, so
+      // the check repeats. A skipped version stays skipped here as it does on the first check; only
+      // the menu's own check overrides that, because only that one is the user asking.
+      const recheckPeriod = setInterval(() => { void updates.check(false) }, UPDATE_RECHECK_MS)
+      recheckPeriod.unref()
+      recheck = recheckPeriod
+    }
 
     // The Rust shell's menu bar has no other way to reach an operation that only this process
     // can perform, so the commands it raises arrive here, where the release channel lives. A

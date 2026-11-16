@@ -62,7 +62,9 @@ describe('desktop macOS release signature', () => {
       }],
     })
     expect(typeof config.artifactBuildCompleted).toBe('function')
-  })
+    // Importing the Electron builder config pulls in electron-builder itself; under a full parallel
+    // run that import alone can outlast the default budget, which made this test flake.
+  }, 20_000)
 
   it('validates Windows signing without requiring macOS identifiers for a Windows target', async () => {
     const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')

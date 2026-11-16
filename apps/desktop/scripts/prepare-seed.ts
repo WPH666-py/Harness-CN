@@ -6,6 +6,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { BUNDLED_PLUGIN_ARCHIVE_DIR, bundledPluginArchives } from '../src/bundled-plugins.ts'
 import { createSeedMetadata } from '../src/project-manager.ts'
 import { DESKTOP_HOST_PROTOCOL_VERSION } from '../src/host-protocol.ts'
 import { parseDesktopRelease, type DesktopRelease } from '../src/release.ts'
@@ -313,9 +314,30 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     await verifyWeChatIdentityPatch(materialized)
     // A store archive that missed the guard would crash the conversation input on first render.
     await verifyWorkBuddyModelNull(materialized)
-await verifyRemoteSshEmptyState(materialized)
+    await verifyRemoteSshEmptyState(materialized)
   } finally {
     rmSync(materialized, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Copy the archives a `file:` spec resolves against into the seed root.
+ *
+ * The plugins published on no registry are installed from archives that ship beside the
+ * application, and the seed's own install has to see them at the relative path its manifest
+ * records. A missing archive fails here rather than on a user's first launch.
+ * @param seedRoot - the profile directory the seed is assembled in.
+ */
+function copyPluginArchives(seedRoot: string): void {
+  const archives = bundledPluginArchives()
+  if (archives.length === 0) return
+  const source = resolve(APP_ROOT, '..', 'desktop-shell', 'src-tauri', 'resources', BUNDLED_PLUGIN_ARCHIVE_DIR)
+  const target = join(seedRoot, BUNDLED_PLUGIN_ARCHIVE_DIR)
+  mkdirSync(target, { recursive: true })
+  for (const name of archives) {
+    const from = join(source, name)
+    if (!existsSync(from)) throw new Error(`desktop seed: bundled plugin archive ${name} is missing from ${source}`)
+    copyFileSync(from, join(target, name))
   }
 }
 
@@ -328,6 +350,7 @@ async function main(): Promise<void> {
     copyFileSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGE_SET_FILE), join(SEED_ROOT, DESKTOP_PACKAGE_SET_FILE))
     cpSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGES_DIR), join(SEED_ROOT, DESKTOP_PACKAGES_DIR), { recursive: true })
     createSeedMetadata(SEED_ROOT, release)
+    copyPluginArchives(SEED_ROOT)
     await runPnpm(['install', '--lockfile-only'])
     verifyDesktopCoreLockfile(
       readFileSync(join(SEED_ROOT, 'pnpm-lock.yaml'), 'utf8'),
@@ -346,22 +369,22 @@ async function main(): Promise<void> {
  * live profile is undone by the next runtime install. See scripts/patch-seed-plugins.mjs for why the
  * change is made with the package manager and not by editing manifests.
  */
-async function applySeedPluginPatches(seedRoot: string): Promise<void> {
-  const script = join(APP_ROOT, 'scripts', 'patch-seed-plugins.mjs')
-  const module = await import(pathToFileURL(script).href) as { patchSeedPlugins?: (root: string) => { removed: string[]; added: string[] } }
-  if (typeof module.patchSeedPlugins !== 'function') {
-    throw new Error(`desktop seed: ${script} does not export patchSeedPlugins`)
-  }
-  const result = module.patchSeedPlugins(seedRoot)
-  console.log(`desktop seed: plugins removed [${result.removed.join(', ')}], added [${result.added.join(', ')}]`)
-}
-await patchInstalledRuleEngine(join(SEED_ROOT, 'node_modules'))
+    async function applySeedPluginPatches(seedRoot: string): Promise<void> {
+      const script = join(APP_ROOT, 'scripts', 'patch-seed-plugins.mjs')
+      const module = await import(pathToFileURL(script).href) as { patchSeedPlugins?: (root: string) => { removed: string[]; added: string[] } }
+      if (typeof module.patchSeedPlugins !== 'function') {
+        throw new Error(`desktop seed: ${script} does not export patchSeedPlugins`)
+      }
+      const result = module.patchSeedPlugins(seedRoot)
+      console.log(`desktop seed: plugins removed [${result.removed.join(', ')}], added [${result.added.join(', ')}]`)
+    }
+    await patchInstalledRuleEngine(join(SEED_ROOT, 'node_modules'))
     await patchInstalledWeChatSessions(join(SEED_ROOT, 'node_modules'))
     await patchInstalledWeChatIdentity(join(SEED_ROOT, 'node_modules'))
-  await patchInstalledWorkBuddyModelNull(join(SEED_ROOT, 'node_modules'))
-await patchInstalledRemoteSshEmptyState(join(SEED_ROOT, 'node_modules'))
-await patchInstalledQqbotConsole(join(SEED_ROOT, 'node_modules'))
-await applySeedPluginPatches(SEED_ROOT)
+    await patchInstalledWorkBuddyModelNull(join(SEED_ROOT, 'node_modules'))
+    await patchInstalledRemoteSshEmptyState(join(SEED_ROOT, 'node_modules'))
+    await patchInstalledQqbotConsole(join(SEED_ROOT, 'node_modules'))
+    await applySeedPluginPatches(SEED_ROOT)
     rmSync(PNPM_BUILD_STATE, { recursive: true, force: true })
     const targetPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform
     let signedMachOFiles: number | undefined

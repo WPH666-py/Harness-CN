@@ -21,7 +21,12 @@ import {
 } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { bundledPluginDependencies, bundledPluginNames, bundledPluginPackageNames } from './bundled-plugins.ts'
+import {
+  BUNDLED_PLUGIN_ARCHIVE_DIR,
+  bundledPluginDependencies,
+  bundledPluginNames,
+  bundledPluginPackageNames,
+} from './bundled-plugins.ts'
 import {
   DESKTOP_PACKAGES_DIR,
   DESKTOP_PACKAGE_SET_FILE,
@@ -480,6 +485,16 @@ function copyMetadata(source: string, target: string): void {
     force: false,
     errorOnExist: true,
   })
+  // The archives a `file:` plugin spec resolves against: the profile installs from exactly the
+  // relative path the manifest records, so they have to sit beside the manifest.
+  const plugins = join(source, BUNDLED_PLUGIN_ARCHIVE_DIR)
+  if (existsSync(plugins)) {
+    cpSync(plugins, join(target, BUNDLED_PLUGIN_ARCHIVE_DIR), {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+    })
+  }
 }
 
 /**

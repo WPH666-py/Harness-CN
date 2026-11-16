@@ -5,6 +5,16 @@ export interface BundledPlugin {
   readonly name: string
   readonly version: string
   /**
+   * Install spec used instead of `version`, for a plugin published nowhere.
+   *
+   * A repository-only plugin has no registry entry, so pnpm cannot resolve a bare version for it.
+   * The release ships a packed archive under `resources/plugins/` and names it here; the seed and
+   * the profile both copy those archives into their root, which makes `file:plugins/<archive>.tgz`
+   * resolve the same way on every machine. `version` still states the version the archive contains,
+   * because the seed store and the profile manifest both key on it.
+   */
+  readonly spec?: string
+  /**
    * Whether a fresh profile lists the plugin in `dsh.profile.bundles`.
    *
    * Every bundled plugin is installed either way. Four kinds are installed but not listed:
@@ -291,9 +301,11 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
   // The ten community plugins the 0.1.5-rc.33 distribution ships. Every one of them declares
   // `dsh.bundle.patch` plus a `dsh.client` half, so each is listed and mounted on a fresh profile.
   //
-  // `dsh-remote-ssh-ops` is the exception to the pinned-tarball rule: it is published nowhere, so
-  // its spec is the GitHub repository itself. pnpm resolves a `github:` spec to a commit, which is
-  // as exact as a version, and the installed version still comes from the repository's manifest.
+  // `dsh-remote-ssh-ops` is published on no registry, so it ships as a local archive beside the
+  // application and is pinned by the version that archive contains -- the same treatment as the
+  // other repository-only plugins. Its spec used to name the GitHub repository, which made every
+  // seed build depend on that repository staying reachable and on git being able to reach it
+  // without a key.
   {
     name: 'dsh-mermaid-smooth',
     version: '0.2.1',
@@ -306,7 +318,8 @@ export const BUNDLED_PLUGINS: readonly BundledPlugin[] = [
   },
   {
     name: 'dsh-remote-ssh-ops',
-    version: 'github:weisiren000/dsh-remote-ssh-ops#main',
+    version: '0.1.0',
+    spec: 'file:plugins/dsh-remote-ssh-ops-0.1.0.tgz',
     active: true,
   },
   {
@@ -399,9 +412,30 @@ export const BUNDLED_PLUGIN_DEPENDENCIES: readonly BundledPluginDependency[] = [
  */
 export function bundledPluginDependencies(): Record<string, string> {
   return {
-    ...Object.fromEntries(BUNDLED_PLUGINS.map(plugin => [plugin.name, plugin.version])),
+    ...Object.fromEntries(BUNDLED_PLUGINS.map(plugin => [plugin.name, plugin.spec ?? plugin.version])),
     ...Object.fromEntries(BUNDLED_PLUGIN_DEPENDENCIES.map(dependency => [dependency.name, dependency.version])),
   }
+}
+
+/**
+ * Directory a `file:` spec resolves against, relative to the project that names it.
+ *
+ * The archives ship beside the application and are copied into the seed and the profile, so both
+ * read them at this one relative path.
+ */
+export const BUNDLED_PLUGIN_ARCHIVE_DIR = 'plugins'
+
+/**
+ * Archives the release must copy into a profile before installing.
+ * @returns File names under `resources/plugins/` that a spec here refers to.
+ */
+export function bundledPluginArchives(): readonly string[] {
+  const prefix = `file:${BUNDLED_PLUGIN_ARCHIVE_DIR}/`
+  return BUNDLED_PLUGINS.flatMap((plugin) => {
+    const spec = plugin.spec
+    if (spec === undefined || !spec.startsWith(prefix)) return []
+    return [spec.slice(prefix.length)]
+  })
 }
 
 /**

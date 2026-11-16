@@ -53,7 +53,11 @@ native/system/test/bin/
 # outputs of the shared payload pipeline: the runtime and seed are staged from
 # `apps/desktop/.desktop-build`, the icon is copied from `apps/desktop/build`, and the
 # sidecar bundle is produced by esbuild. None of them is a source file.
-apps/desktop-shell/src-tauri/resources/
+# The shell stages the runtime, seed, and sidecar here, and they are build output. The plugin
+# archives are the exception: they are the source of the repository-only plugin specs and exist on
+# no registry, so they are checked in and a clone can rebuild the seed without reaching a host.
+apps/desktop-shell/src-tauri/resources/*
+!apps/desktop-shell/src-tauri/resources/plugins/
 apps/desktop-shell/src-tauri/icons/
 apps/desktop-shell/src-tauri/target/
 apps/desktop-shell/src-tauri/gen/

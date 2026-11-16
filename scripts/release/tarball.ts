@@ -6,9 +6,23 @@
  * currently says.
  */
 
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { capture } from './process.ts'
+
+/**
+ * Archive tool these readers run.
+ *
+ * On Windows the `tar` a shell often puts on PATH first is GNU tar from Git for Windows, which
+ * reads a drive-letter path as a remote host (`rsh`) and fails on `D:...`. The archive tool
+ * Windows ships in System32 is bsdtar and takes those paths, so resolve it explicitly: the release
+ * steps then behave the same whichever tar the caller's PATH names first.
+ */
+const WINDOWS_TAR = process.platform === 'win32'
+  ? resolve(process.env.SystemRoot ?? '', 'System32', 'tar.exe')
+  : undefined
+/** Resolved archive tool: the Windows bsdtar when it exists, otherwise `tar` from PATH. */
+export const TAR = WINDOWS_TAR !== undefined && existsSync(WINDOWS_TAR) ? WINDOWS_TAR : 'tar'
 
 /** Name of the file recording the order in which a packed family uploads. */
 export const PUBLISH_ORDER_FILE = 'publish-order.txt'
@@ -27,7 +41,7 @@ export interface PackedIdentity {
  * @returns Every path inside the archive.
  */
 export function tarballFiles(tarball: string): string[] {
-  return capture('tar', ['-tzf', tarball]).split(/\r?\n/u).filter(line => line !== '')
+  return capture(TAR, ['-tzf', tarball]).split(/\r?\n/u).filter(line => line !== '')
 }
 
 /**
@@ -36,7 +50,7 @@ export function tarballFiles(tarball: string): string[] {
  * @returns The name and version the tarball declares.
  */
 export function packedIdentity(tarball: string): PackedIdentity {
-  const manifest: unknown = JSON.parse(capture('tar', ['-xOzf', tarball, 'package/package.json']))
+  const manifest: unknown = JSON.parse(capture(TAR, ['-xOzf', tarball, 'package/package.json']))
   if (manifest === null || typeof manifest !== 'object') throw new Error(`${tarball} has no manifest`)
   const { name, version } = manifest as Record<string, unknown>
   if (typeof name !== 'string' || typeof version !== 'string') throw new Error(`${tarball} manifest lacks name/version`)
