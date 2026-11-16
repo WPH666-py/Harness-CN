@@ -2,6 +2,9 @@ CLAUDE.local.md
 .env
 node_modules/
 lib/
+# `lib/` is build output everywhere except the source helpers the seed patch scripts import.
+!apps/desktop/scripts/lib/
+!apps/desktop/scripts/lib/patch-check.mjs
 *.tsbuildinfo
 pnpm-debug.log
 .pnpm-store/
