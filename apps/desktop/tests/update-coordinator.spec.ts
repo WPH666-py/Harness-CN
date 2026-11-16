@@ -305,10 +305,12 @@ describe('desktop update skip state', () => {
     await store.remember('1.1.0')
 
     await expect(skipping.check()).resolves.toEqual({ phase: 'idle', current: '' })
+    // The state carries the reason, not the sentence: the presentation layer localizes it
+    // (`updateNothingToInstall`), so a caller can act on `nothing-to-install` without parsing copy.
     await expect(skipping.install()).resolves.toEqual({
       phase: 'error',
       current: '',
-      message: '没有可安装的更新，请先检查更新。',
+      reason: 'nothing-to-install',
     })
   })
 

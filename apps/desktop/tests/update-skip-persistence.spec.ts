@@ -121,7 +121,7 @@ describe('desktop update skip wiring', () => {
     await expect(coordinator.install()).resolves.toEqual({
       phase: 'error',
       current: '',
-      message: '没有可安装的更新，请先检查更新。',
+      reason: 'nothing-to-install',
     })
     expect(backend.download).not.toHaveBeenCalled()
   })
