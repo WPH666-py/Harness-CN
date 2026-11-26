@@ -25,6 +25,19 @@ import { DesktopUpdateIndicator } from './DesktopUpdateIndicator.tsx'
 
 const RECOVERY_CONFIRMATION_MS = 2_000
 
+/**
+ * Section requested by the page address, `?settings=<id>`.
+ *
+ * The desktop shell opens a dedicated window on this address so it lands on one section without a
+ * click through the navigation. A missing or blank parameter leaves the dialog closed, which is the
+ * ordinary workspace mount.
+ * @returns the requested section id, or undefined when the address names none.
+ */
+function requestedSection(): string | undefined {
+  const id = new URLSearchParams(window.location.search).get('settings')
+  return id === null || id === '' ? undefined : id
+}
+
 /** Minimum visible time for the connecting pill; shorter attempts read as flicker. */
 const CONNECTING_MIN_VISIBLE_MS = 800
 
@@ -117,6 +130,13 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
   const { open, activeId } = useStore(state => state)
   const shortcut = useShortcuts(rows => rows.find(row => row.id === 'settings.open'))
   const { close, openSection } = actions
+  const [requested] = useState(requestedSection)
+
+  // The shell window opens the workspace on `?settings=<id>`; honouring the address here keeps the
+  // store's initial state free of browser globals.
+  useEffect(() => {
+    if (requested !== undefined) openSection(requested)
+  }, [openSection, requested])
   const [requestedOnboarding, setRequestedOnboarding] = useState<string | undefined>()
   const [completedOnboarding, setCompletedOnboarding] = useState<ReadonlySet<string>>(() => new Set())
   const [showRecovery, setShowRecovery] = useState(false)

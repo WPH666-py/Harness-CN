@@ -549,7 +549,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
     "plugins" => window(PLUGINS, "/shell/plugin-manager.html", "内置插件", 900.0, 620.0),
         "qq-console" => app_window(QQ_CONSOLE, "/?panel=qq-console", "QQ 群管理", 1024.0, 720.0),
         "logs" => window(LOGS, "/shell/log-viewer.html", "运行日志", 1000.0, 700.0),
-        "lan" => window(LAN, "/shell/lan.html", "移动访问", 760.0, 620.0),
+        "lan" => app_window(LAN, "/?settings=wechat", "移动访问", 1120.0, 820.0),
 
         "api-key" => window(API_KEY, "/shell/api-key.html", "绑定 DeepSeek 密钥", 560.0, 520.0),
         "author" => window(AUTHOR, "/shell/author.html", "作者信息", 640.0, 660.0),

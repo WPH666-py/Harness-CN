@@ -1,6 +1,25 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-10-17-lan-door-serves-the-gui-itself.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-10-17-lan-door-serves-the-gui-itself.md
-2026-10-17-lan-door-serves-the-gui-itself.md: 403fc54dab6642e02de2a8e2ffa7bd49dd73f689
-2026-10-17-lan-door-serves-the-gui-itself.zh.md: 420336eedcaf6f7149326567c222ce91b1738f72
+/agent-note-the-shell-serves-the-gui-itself-to-a-phone:
+  en: 142bd6fd07203b23
+  zh: afe6e70305bf016f
+/agent-note-the-shell-serves-the-gui-itself-to-a-phone/problem:
+  en: 3d9049dd30fe3d45
+  zh: 78fb8f782123e91d
+/agent-note-the-shell-serves-the-gui-itself-to-a-phone/cause:
+  en: 51b90055a8e54045
+  zh: 5a1b33311679257f
+/agent-note-the-shell-serves-the-gui-itself-to-a-phone/evidence:
+  en: ddc17539b96e6e1a
+  zh: 9815e8330a80dcd4
+/agent-note-the-shell-serves-the-gui-itself-to-a-phone/decision:
+  en: 009bd110d16b7dd8
+  zh: bb5caaf1b42f7167
+/agent-note-the-shell-serves-the-gui-itself-to-a-phone/alternatives-considered:
+  en: 8459cd1daf4de3a6
+  zh: 5b4138f53eab7cc9
+/agent-note-the-shell-serves-the-gui-itself-to-a-phone/consequences:
+  en: b429e3ea752c9348
+  zh: a382cebd6fea469e

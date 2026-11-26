@@ -29,7 +29,7 @@ Status: implemented
 - 非回环对端就是手机：永远拿不到控制接口（`403`）；只有门开着且 cookie 匹配时才拿到界面。
 - 门是 `LanAccess`（`apps/desktop-shell/src/lan-access.ts`）：`state/lan-access.json` 里一枚 32 字节密钥，对应 `/__lan?key=<密钥>`；密钥匹配时回 `302 /` 并写入 `hcn_lan` —— `HttpOnly`、`SameSite=Lax`、有效期一年。重新生成密钥会让所有手机同时失效；关闭开关则拒绝所有手机，但保留密钥供下次开启。
 - 没有有效 cookie 的手机会收到一个很小的提示页，写明当前状态（`off` 或 `locked`）以及链接从哪里来。这个页面不含界面代码也不含凭据，扫到端口的扫描器没法从中得到可重放的东西。
-- 二维码由壳层进程绘制（`qrcode`，`GET /shell-api/lan/qr`），窗口本身不需要编码器；新增的**移动访问**窗口（`apps/desktop-shell/src-tauri/resources/shell/lan.html`）只有一个开关、一张码、一条链接。
+- 二维码由壳层进程绘制（`qrcode`，`GET /shell-api/lan/qr`）；**移动访问**窗口打开的是工作区的微信连接设置（`/?settings=wechat`），不再渲染 `rsc/lan.html`，因此链接和二维码只通过控制接口提供（[窗口改动](../feature/2026-11-26-mobile-access-window-opens-wechat-connection.zh.md)）。
 
 ## 考虑过的其它做法
 
@@ -41,6 +41,6 @@ Status: implemented
 
 ## 后果
 
-手机访问不再需要装证书、也不需要配对码：链接本身就是凭据。局域网流量是明文 HTTP —— 这正是 `D:\Claudecode-CN` 为同一个理由（没有安装步骤，手机不会信任自签证书）记录下的取舍；这里把它写在窗口里，而不是让用户在浏览器警告前自己猜。
+手机访问不再需要装证书、也不需要配对码：链接本身就是凭据。局域网流量是明文 HTTP —— 这正是 `D:\Claudecode-CN` 为同一个理由（没有安装步骤，手机不会信任自签证书）记录下的取舍。
 
 控制接口仍然只对本机开放，所以已配对的手机可以使用界面，但不能装插件或更新。关闭开关或重新生成链接后，所有手机在下一次请求时失效。

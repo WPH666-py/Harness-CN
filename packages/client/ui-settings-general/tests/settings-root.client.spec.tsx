@@ -274,6 +274,32 @@ describe('SettingsRoot trigger', () => {
   })
 })
 
+describe('SettingsRoot address deep link', () => {
+  const address = (search: string) => {
+    window.history.replaceState({}, '', search === '' ? '/' : `/?${search}`)
+  }
+
+  afterEach(() => { window.history.replaceState({}, '', '/') })
+
+  it('opens the section named by the settings parameter', () => {
+    address('settings=wechat')
+    mount({
+      rows: [
+        { id: 'general', order: 0, label: 'General' },
+        { id: 'wechat', order: 40, label: 'WeChat' },
+      ],
+    })
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'WeChat' }).getAttribute('aria-current')).toBe('true')
+  })
+
+  it('stays closed when the settings parameter names no section', () => {
+    address('settings=')
+    mount()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+})
+
 describe('SettingsPanel chrome seats', () => {
   it('names the dialog via aria-labelledby pointing at the header seat node', () => {
     mount()

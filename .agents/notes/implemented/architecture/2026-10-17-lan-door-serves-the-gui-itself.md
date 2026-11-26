@@ -29,7 +29,7 @@ That model has one origin, one cookie, and nothing to rewrite. It is also what t
 - A non-loopback peer is a phone. It gets the control surface never (`403`), and the GUI only when the door is on and its cookie matches.
 - The door is `LanAccess` (`apps/desktop-shell/src/lan-access.ts`): a 32-byte secret in `state/lan-access.json`, offered as `/__lan?key=<secret>`; a matching key answers `302 /` with `hcn_lan`, an `HttpOnly`, `SameSite=Lax` cookie good for a year. Rotating the secret invalidates every phone at once; disabling the door refuses every phone while leaving the secret intact for the next enable.
 - A phone with no valid cookie receives a small notice page that names the state (`off` or `locked`) and says where the link comes from. The page carries no GUI code and no credential, so a scanner that finds the port learns nothing it can replay.
-- The QR is drawn by the shell process (`qrcode`, `GET /shell-api/lan/qr`), so the window needs no encoder of its own; the new **移动访问** window (`apps/desktop-shell/src-tauri/resources/shell/lan.html`) is one switch, one code, one link.
+- The QR is drawn by the shell process (`qrcode`, `GET /shell-api/lan/qr`); the **移动访问** window opens the workspace's WeChat connection settings (`/?settings=wechat`) instead of `rsc/lan.html`, so the link and QR are served only through the control API ([window change](../feature/2026-11-26-mobile-access-window-opens-wechat-connection.md)).
 
 ## Alternatives considered
 
@@ -41,6 +41,6 @@ That model has one origin, one cookie, and nothing to rewrite. It is also what t
 
 ## Consequences
 
-Phone access needs no certificate install and no pairing code: the link is the credential. Traffic on the LAN is plain HTTP, which is the tradeoff `D:\Claudecode-CN` records for the same reason — a phone will not trust a self-signed certificate without an install step — and it is stated in the window rather than discovered by a user who cannot get past a browser warning.
+Phone access needs no certificate install and no pairing code: the link is the credential. Traffic on the LAN is plain HTTP, which is the tradeoff `D:\Claudecode-CN` records for the same reason: a phone will not trust a self-signed certificate without an install step.
 
 The control surface stays loopback-only, so a paired phone can use the GUI but cannot install plugins or updates. Turning the door off, or rotating the link, ends every phone session on the next request.
