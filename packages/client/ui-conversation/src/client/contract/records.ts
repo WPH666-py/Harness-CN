@@ -140,6 +140,21 @@ export interface TurnErrorNode {
   code?: string
 }
 
+/**
+ * Durable notice for a turn whose proposed step a pre-step listener rejected.
+ * The claimed input never reached the model, so the notice is the only visible
+ * explanation of why the turn produced no answer.
+ */
+export interface TurnBlockedNode {
+  kind: 'turn-blocked'
+  /** Seq of the owning turn/end event. */
+  seq: number
+  /** Unix epoch ms from the turn/end event. */
+  time: number
+  turn: number
+  step: number
+}
+
 /** Durable notice for a turn ended by the per-request output-token cap. */
 export interface TurnMaxTokensNode {
   kind: 'turn-max-tokens'
@@ -255,6 +270,7 @@ export type ConversationNode =
   | ContextMessageNode
   | ModelRetryNode
   | TurnErrorNode
+  | TurnBlockedNode
   | TurnMaxTokensNode
   | ToolResultNode
   | CommandNode

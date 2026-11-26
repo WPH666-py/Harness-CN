@@ -27,6 +27,7 @@ import { requestPromptDefinition, systemMessageDefinition } from '../src/client/
 import { retryDefinition } from '../src/client/conversation-nodes/retry.ts'
 import { toolDefinition } from '../src/client/conversation-nodes/tool.ts'
 import { turnErrorDefinition } from '../src/client/conversation-nodes/turn-error.ts'
+import { turnBlockedDefinition } from '../src/client/conversation-nodes/turn-blocked.ts'
 import { turnMaxTokensDefinition } from '../src/client/conversation-nodes/turn-max-tokens.ts'
 import { turnTailDefinition } from '../src/client/conversation-nodes/turn-tail.ts'
 import { turnProcessDefinition } from '../src/client/conversation-nodes/turn-process.ts'
@@ -46,6 +47,7 @@ const DEFINITIONS: readonly ConversationNodeDefinition[] = [
   compactionDefinition,
   retryDefinition,
   turnErrorDefinition,
+  turnBlockedDefinition,
   turnMaxTokensDefinition,
   turnTailDefinition,
 ]
@@ -2412,6 +2414,55 @@ describe('built-in conversation node Definitions', () => {
       match(6, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
     )).toBe(state)
     expect(turnMaxTokensDefinition.buildViewNode?.(context(undefined))).toBeNull()
+  })
+
+  it('materializes a blocked-turn notice ahead of the empty turn-tail', () => {
+    const value = assembler([
+      at(1, 'turn/start', { turn: 1 }),
+      at(2, 'step/start', { turn: 1, step: 1 }),
+      at(3, 'step/end', { turn: 1, step: 1 }),
+      at(4, 'turn/end', { turn: 1, reason: { kind: 'blocked' } }),
+    ])
+    const notice = node(snapshot(value), 'turn-blocked')
+    expect(notice?.data).toMatchObject({ kind: 'turn-blocked', seq: 4, turn: 1, step: 1 })
+    expect(node(snapshot(value), 'turn-max-tokens')).toBeUndefined()
+    expect(node(snapshot(value), 'turn-error')).toBeUndefined()
+    expect(notice?.anchorSeq).toBeLessThan(node(snapshot(value), 'turn-tail')?.anchorSeq ?? Number.NEGATIVE_INFINITY)
+
+    const completed = assembler([
+      at(1, 'turn/start', { turn: 1 }),
+      at(2, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ])
+    expect(node(snapshot(completed), 'turn-blocked')).toBeUndefined()
+  })
+
+  it('keeps the blocked notice when the window starts after the owning turn/start', () => {
+    const value = assembler([
+      at(9, 'turn/end', { turn: 3, reason: { kind: 'blocked' } }),
+    ], true)
+    const notice = node(snapshot(value), 'turn-blocked')
+    expect(notice?.data).toMatchObject({ kind: 'turn-blocked', seq: 9, turn: 3, step: 0 })
+  })
+
+  it('pins the blocked-turn Definition edges the engine cannot reach', () => {
+    const match = (seq: number, type: string, data: unknown) => ({
+      event: { seq, time: seq * 1_000, type, data },
+      role: 'start',
+      location: undefined,
+    }) as unknown as Parameters<typeof turnBlockedDefinition.start>[1]
+    const context = (state: unknown) => ({
+      key: 'k', kind: 'turn-blocked', id: '1', matches: [], start: undefined, state, current: new Map(),
+    }) as unknown as Parameters<NonNullable<typeof turnBlockedDefinition.buildViewNode>>[0]
+    const reader = { previous: () => undefined }
+
+    expect(() => turnBlockedDefinition.start(context(undefined), match(1, 'turn/end', { turn: 1, reason: { kind: 'completed' } }), reader))
+      .toThrow('turn-blocked start requires a blocked turn/end')
+    const state = { turn: 1, seq: 5, time: 5_000 }
+    expect(turnBlockedDefinition.update(
+      context(state) as Parameters<typeof turnBlockedDefinition.update>[0],
+      match(6, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    )).toBe(state)
+    expect(turnBlockedDefinition.buildViewNode?.(context(undefined))).toBeNull()
   })
 
   it('preserves nested Tools and manual compaction evidence when their start events are outside the window', () => {

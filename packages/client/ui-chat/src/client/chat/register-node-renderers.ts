@@ -3,8 +3,8 @@ import { NS } from '../locale.ts'
 import { AssistantNodeView } from './AssistantNodeView.tsx'
 import { CommandNodeView, ManualCompactionNodeView } from './CommandNodeView.tsx'
 import {
-  CompactionNodeView, ContextMessageNodeView, RetryNodeView, TurnErrorNodeView,
-  TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
+  CompactionNodeView, ContextMessageNodeView, RetryNodeView, TurnBlockedNodeView,
+  TurnErrorNodeView, TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
 } from './MessageItem.tsx'
 import { SystemPromptNodeView } from './SystemPromptRow.tsx'
 import { TurnProcessNodeView } from './TurnProcessNodeView.tsx'
@@ -39,6 +39,8 @@ export function registerChatNodeRenderers(ctx: Context): void {
     { name: 'conversation.chat.node', key: 'model-retry', locale: NS }, RetryNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
     { name: 'conversation.chat.node', key: 'turn-error', locale: NS }, TurnErrorNodeView))
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+    { name: 'conversation.chat.node', key: 'turn-blocked', locale: NS }, TurnBlockedNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
     { name: 'conversation.chat.node', key: 'turn-max-tokens', locale: NS }, TurnMaxTokensNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(

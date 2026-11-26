@@ -23,6 +23,7 @@ const TURN_PROCESS_INDEPENDENT_KIND_LIST = [
   'steering',
   'turn-process',
   'turn-error',
+  'turn-blocked',
   'turn-max-tokens',
   'turn-tail',
 ] as const satisfies readonly ChatNode['kind'][]

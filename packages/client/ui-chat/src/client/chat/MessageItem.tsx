@@ -138,6 +138,21 @@ function TurnErrorItem({ node, t }: {
   )
 }
 
+/** Persistent, turn-positioned notice for a turn a pre-step listener blocked. */
+function TurnBlockedItem({ t }: {
+  t: ChatViewSlotProps['t']
+}) {
+  return (
+    <div className={css.turnErrorRow} role="status">
+      <StateDot state="warning" className={css.turnErrorDot} />
+      <div className={css.turnErrorCopy}>
+        <span className={css.maxTokensTitle}>{t('message.blocked')}</span>
+        <span className={css.turnErrorMessage}>{t('message.blocked.hint')}</span>
+      </div>
+    </div>
+  )
+}
+
 /** Persistent, turn-positioned notice for a turn ended at the output-token cap. */
 function TurnMaxTokensItem({ t }: {
   t: ChatViewSlotProps['t']
@@ -368,6 +383,11 @@ export const TurnErrorNodeView = memo(function TurnErrorNodeView({ node, t }: Ch
 /** Max-tokens turn-end notice keyed Chat renderer. */
 export const TurnMaxTokensNodeView = memo(function TurnMaxTokensNodeView({ t }: ChatNodeViewProps<'turn-max-tokens'>) {
   return <TurnMaxTokensItem t={t} />
+})
+
+/** Blocked turn-end notice keyed Chat renderer. */
+export const TurnBlockedNodeView = memo(function TurnBlockedNodeView({ t }: ChatNodeViewProps<'turn-blocked'>) {
+  return <TurnBlockedItem t={t} />
 })
 
 /** Explicit unknown-surface keyed Chat renderer. */

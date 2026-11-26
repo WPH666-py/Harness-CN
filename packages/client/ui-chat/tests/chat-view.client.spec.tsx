@@ -8,7 +8,7 @@ import type {
   AssistantMessageNode, ChatNode, ChatNodeOwnerProps, ChatNodeViewProps, ChatSnapshot,
   ChatViewSlotProps, CommandNode, CompactionSummaryNode, ContextMessageNode, ConversationNode,
   LegacyConversationSlice, ModelRetryNode, RunningToolCall, SteeringMessageNode,
-  ToolCallBlock, ToolResultNode, TurnErrorNode, TurnMaxTokensNode, UseChatNodeTurnData,
+  ToolCallBlock, ToolResultNode, TurnBlockedNode, TurnErrorNode, TurnMaxTokensNode, UseChatNodeTurnData,
   TranscriptViewMode, UserMessageNode,
 } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {
@@ -33,8 +33,8 @@ import { zh } from '../src/client/locale.ts'
 import { AssistantNodeView } from '../src/client/chat/AssistantNodeView.tsx'
 import { CommandNodeView, ManualCompactionNodeView } from '../src/client/chat/CommandNodeView.tsx'
 import {
-  CompactionNodeView, ContextMessageNodeView, RetryNodeView, TurnErrorNodeView,
-  TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
+  CompactionNodeView, ContextMessageNodeView, RetryNodeView, TurnBlockedNodeView,
+  TurnErrorNodeView, TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
 } from '../src/client/chat/MessageItem.tsx'
 import { TurnTailNodeView } from '../src/client/chat/TurnTailNodeView.tsx'
 import { TurnProcessNodeView } from '../src/client/chat/TurnProcessNodeView.tsx'
@@ -171,6 +171,9 @@ const turnError = (seq: number, code?: string): TurnErrorNode => ({
 })
 const turnMaxTokens = (seq: number): TurnMaxTokensNode => ({
   kind: 'turn-max-tokens', seq, time: seq * 1_000, turn: 1, step: 0,
+})
+const turnBlocked = (seq: number): TurnBlockedNode => ({
+  kind: 'turn-blocked', seq, time: seq * 1_000, turn: 1, step: 0,
 })
 const toolResult = (seq: number, callId: string, name = 'bash'): ToolResultNode => ({
   kind: 'tool-result', seq, time: seq * 1_000, callId,
@@ -317,6 +320,8 @@ function makeHarness(
         return <RetryNodeView {...nodeProps<'model-retry'>()} />
       case 'turn-error':
         return <TurnErrorNodeView {...nodeProps<'turn-error'>()} />
+      case 'turn-blocked':
+        return <TurnBlockedNodeView {...nodeProps<'turn-blocked'>()} />
       case 'turn-max-tokens':
         return <TurnMaxTokensNodeView {...nodeProps<'turn-max-tokens'>()} />
       case 'turn-process':
@@ -1294,6 +1299,16 @@ describe('ChatView', () => {
       '已达到输出 token 上限回答被截断，已有输出保留在对话中。发送“继续”可让模型接着输出。',
     ])
     expect(view.queryByText('本轮运行失败')).toBeNull()
+  })
+
+  it('explains a blocked turn instead of silently finishing it', () => {
+    const h = makeHarness({ nodes: [user(1, 'ghp_…'), turnBlocked(2)] })
+    const view = render(<h.ChatView {...h.props} />)
+    const statuses = view.getAllByRole('status')
+    expect(statuses.map(status => status.textContent)).toEqual([
+      '本轮输入被拦截消息在发送给模型前被拦截，模型没有收到它。常见原因是消息中含密钥或访问令牌；请移除后重试。',
+    ])
+    expect(view.queryByText('已达到输出 token 上限')).toBeNull()
   })
 
   it('hands the trajectory callback to the Tool seat', () => {

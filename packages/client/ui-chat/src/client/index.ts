@@ -9,6 +9,7 @@ export type {} from './conversation-nodes/request-prompt.ts'
 export type {} from './conversation-nodes/retry.ts'
 export type {} from './conversation-nodes/tool.ts'
 export type {} from './conversation-nodes/turn-error.ts'
+export type {} from './conversation-nodes/turn-blocked.ts'
 export type {} from './conversation-nodes/turn-max-tokens.ts'
 export type {} from './conversation-nodes/turn-process.ts'
 export type {} from './conversation-nodes/turn-tail.ts'
@@ -19,7 +20,7 @@ export type {
   ChatSnapshot, ChatTurnNavigationIndex, ChatTurnProcessPresentation,
   CommandNode, CompactionSummaryNode, ContextMessageNode, ConversationNode,
   LegacyConversationSlice, ModelRetryNode, PartialAssistant, RunningToolCall,
-  SteeringMessageNode, ToolCallBlock, ToolResultNode, TurnErrorNode, TurnMaxTokensNode,
+  SteeringMessageNode, ToolCallBlock, ToolResultNode, TurnBlockedNode, TurnErrorNode, TurnMaxTokensNode,
   TurnNavigationItem, UnknownSurfaceNode, UserMessageNode,
 } from './contract/snapshot.ts'
 export type {
