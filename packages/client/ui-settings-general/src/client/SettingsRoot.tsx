@@ -23,6 +23,19 @@ import css from './SettingsRoot.module.css'
 
 const RECOVERY_CONFIRMATION_MS = 2_000
 
+/**
+ * Section requested by the page address, `?settings=<id>`.
+ *
+ * The desktop shell opens a dedicated window on this address so it lands on one section without a
+ * click through the navigation. A missing or blank parameter leaves the dialog closed, which is the
+ * ordinary workspace mount.
+ * @returns the requested section id, or undefined when the address names none.
+ */
+function requestedSection(): string | undefined {
+  const id = new URLSearchParams(window.location.search).get('settings')
+  return id === null || id === '' ? undefined : id
+}
+
 /** Nav glyph by section id; unknown ids fall back to the settings gear. */
 function navIcon(id: string) {
   if (id === 'models') return <IconDataOutline16 className={css.navIcon} size={16} />
@@ -109,8 +122,9 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
   const {
     wide, reconnect, useConnectionState, useSections, useOnboardingSteps, useSessions, renderSlot, t,
   } = props
-  const [open, setOpen] = useState(false)
-  const [activeId, setActiveId] = useState<string | undefined>(undefined)
+  const [requested] = useState(requestedSection)
+  const [open, setOpen] = useState(requested !== undefined)
+  const [activeId, setActiveId] = useState<string | undefined>(requested)
   const [completedOnboarding, setCompletedOnboarding] = useState<ReadonlySet<string>>(() => new Set())
   const [showRecovery, setShowRecovery] = useState(false)
   const triggerButton = useRef<HTMLButtonElement | null>(null)
