@@ -19,8 +19,9 @@
 import { cpSync, createReadStream, createWriteStream, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pipeline } from 'node:stream/promises'
+import { Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { createZstdCompress, constants as zlibConstants } from 'node:zlib'
+import { createZstdCompress, createZstdDecompress, constants as zlibConstants } from 'node:zlib'
 import { create as createTar } from 'tar'
 
 /** zstd's own id for "the compression level", which Node's zlib passes straight through. */
@@ -167,6 +168,26 @@ await pipeline(
   createZstdCompress({ params: { [ZSTD_COMPRESSION_LEVEL]: level } }),
   createWriteStream(archive),
 )
+// A build killed mid-compression leaves a file that looks like a package and only fails on the user's
+// first launch, so the archive has to restore the whole tar here or the build stops.
+const tarBytes = statSync(tarPath).size
+let restoredBytes = 0
+await pipeline(
+  createReadStream(archive),
+  createZstdDecompress(),
+  new Writable({
+    write(chunk, _encoding, done) {
+      restoredBytes += chunk.length
+      done()
+    },
+  }),
+)
+if (restoredBytes !== tarBytes) {
+  throw new Error(
+    `prepare-shell: ${archive} restores ${String(restoredBytes)} of ${String(tarBytes)} bytes;`
+    + ' the archive is truncated, so this build would fail on the first launch',
+  )
+}
 rmSync(tarPath, { force: true })
 const archiveBytes = statSync(archive).size
 const megabytes = (archiveBytes / 1024 / 1024).toFixed(1)
